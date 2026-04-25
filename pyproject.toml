@@ -33,6 +33,10 @@ packages = ["mimicanno"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "mimicanno/configs/labels/manipulation.yaml" = "mimicanno/configs/labels/manipulation.yaml"
+"mimicanno/jsonschemas/manifest.schema.json" = "mimicanno/jsonschemas/manifest.schema.json"
+"mimicanno/jsonschemas/annotation.schema.json" = "mimicanno/jsonschemas/annotation.schema.json"
+"mimicanno/jsonschemas/boundaries.schema.json" = "mimicanno/jsonschemas/boundaries.schema.json"
+"mimicanno/jsonschemas/signals.schema.json" = "mimicanno/jsonschemas/signals.schema.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

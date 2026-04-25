@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mimicanno/signals",
+  "type": "object",
+  "required": ["schema_version", "episode_id", "duration_sec", "channels"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "episode_id": {"type": "string"},
+    "duration_sec": {"type": "number"},
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "unit", "t0_sec", "dt_sec", "values"],
+        "properties": {
+          "name": {"type": "string"},
+          "unit": {"type": "string"},
+          "t0_sec": {"type": "number"},
+          "dt_sec": {"type": "number"},
+          "values": {
+            "type": "array",
+            "items": {"type": "number"}
+          }
+        }
+      }
+    }
+  }
+}
