@@ -33,6 +33,24 @@ class TestKoch:
         assert a.eef_pose(_joint_only_table()) is None
         assert a.eef_velocity(_joint_only_table()) is None
 
+    def test_gripper_signal_clips_out_of_range(self):
+        # Synthesize a table with joint-5 values outside [0,1] to confirm np.clip fires.
+        n = 5
+        state = np.zeros((n, 6), dtype=np.float32)
+        state[:, 5] = np.array([-0.5, 0.0, 0.5, 1.5, 2.0])
+        action = np.zeros((n, 6), dtype=np.float32)
+        ts = np.arange(n, dtype=np.float64) / 30.0
+        table = pa.table({
+            "observation.state": pa.array(state.tolist()),
+            "action": pa.array(action.tolist()),
+            "timestamp": pa.array(ts.tolist()),
+        })
+        g = KochAdapter().gripper_signal(table)
+        assert (g >= 0.0).all()
+        assert (g <= 1.0).all()
+        assert g[0] == 0.0   # -0.5 clipped to 0
+        assert g[-1] == 1.0  # 2.0 clipped to 1
+
 
 class TestSo100:
     def test_name(self):
@@ -41,3 +59,8 @@ class TestSo100:
     def test_gripper_signal(self):
         g = SO100Adapter().gripper_signal(_joint_only_table())
         assert g.shape == (30,)
+
+    def test_no_eef(self):
+        a = SO100Adapter()
+        assert a.eef_pose(_joint_only_table()) is None
+        assert a.eef_velocity(_joint_only_table()) is None
