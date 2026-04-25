@@ -48,7 +48,24 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
 
-## Status (2026-04-25, autonomous mode — spec ready for user review)
+## Status (2026-04-25, after user review round 1 — spec re-ready)
+
+User review round 1 (the human reviewer) flagged 10 concrete issues (6 必須 + 4 推奨):
+1. canonical_name was config_hash-only → input/task collisions. Fixed by introducing `run_hash = sha256(config_hash + input_hash)` and using `run_hash[:8]` as the directory suffix; `config_hash` and `input_hash` are recorded separately in manifest/index for filtering.
+2. Phase 1 unlabeled segments could end up with `overall_confidence=1.0`. Fixed: §6.4 returns 0.0 for reserved phases.
+3. §6.6 conflated producer-internal compat with consumer-capability check. Fixed: explicit two-check rule.
+4. "Phase 1 hard rules" misnomer (no labeling = nothing to enforce). Fixed: forbidden transitions only apply in Phase 4.
+5. `action` column required vs optional contradiction. Fixed: optional in Phase 1, required for Phase 5 export.
+6. signals.json off-by-one. Fixed.
+7. Vite serve approach was hand-waved. Fixed: §4.2 has a concrete sirv-middleware vite.config.ts.
+8. Lock scope too narrow. Fixed: `runs/index.json.lock` is now a publish-transaction lock spanning run-dir replacement + index upsert + scavenger.
+9. score_threshold intent unstated. Fixed: §5.3 spells out the precision-favoring (gripper-anchored) policy.
+10. Label count "11" was stale. Fixed: 10.
+11. (added beyond the 10) `pipeline_status` block on manifest top-level so degrade is observable run-level, not just per-segment.
+
+Codex round 8-10 reviews pass: verdict "ready for user review".
+
+## Status (2026-04-25, before user review round 1 — historical)
 
 - Q3 answered: **B-1''** (CLI writes self-contained run directory at `<repo>/runs/<canonical_name>/` where `canonical_name = <episode_id>__<config_hash[:8]>`; React/Vite reads `manifest.json`; Vite dev server mounts `../runs/` at `/runs/*`; no backend in Phase 1).
 - Codex `gpt-5.4` reviews completed across **7 rounds**:

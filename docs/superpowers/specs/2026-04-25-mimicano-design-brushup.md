@@ -11,21 +11,23 @@
 | Phase order | Implicit; UI was Step 6 | Explicit 5-phase plan (B'); read-only viewer is **Phase 1**, edit UI is **Phase 5** |
 | Boundary detection | "Step1 signals, Step2 SAM3 refines" | **Single integrated weighted score**; Step1 (signals) and Step2 (object) are sources, not stages |
 | `failure_recovery` | One of the labels | **Removed as a phase**; replaced with `failure_flags: list[str]` on segments whose `phase` is the underlying activity |
-| Schema | Minimal `SubtaskSegment` | Versioned schema with `episode_id`, `segment_id`, `label_source`, `reviewed`, `reviewer_id`, `label_version`, `config_hash`, `model_versions`, `boundary_source: list[str]`, `failure_flags: list[str]`, `object_track_ids` |
+| Schema | Minimal `SubtaskSegment` | Versioned schema with `episode_id`, `segment_id`, `label_source`, `reviewed`, `reviewer_id`, `label_version`, `config_hash` / `input_hash` / `run_hash`, `model_versions`, per-edge `BoundaryRef`, `failure_flags: list[str]`, `object_track_ids` |
 | SAM3 prompt input | Task name only | **Task name + initial frame** (text-only fails on "it" / "the object") |
 | SAM3 failure | Unspecified | **Documented degrade path** to robot-state-only with `object_state_unavailable=true` |
 | Confidence | `confidence: float` (single) | **Three levels**: `vlm_confidence`, `boundary_confidence`, `overall_confidence` |
-| Forbidden transitions | Hard rules | **Phase 1**: hard rules. **Phase 4**: promoted to Viterbi/penalty |
+| Forbidden transitions | Hard rules | **Phases 1–3**: not applied (Phase 1 emits only `unlabeled` segments; Phases 2/3 produce labels but do not yet enforce inter-segment rules). **Phase 4**: introduced as penalty terms in Viterbi decoding. |
 | Viewer | "Phase 6 review UI" all-in-one | **Phase 1** read-only viewer (verify boundary candidates) → **Phase 5** edit UI |
 | Output format | Implied parquet | **Sidecar JSON in a "run directory"** with versioned `manifest.json` contract |
 | Boundary references | `boundary_source: list[str]` flat | **Per-edge `BoundaryRef`** (`start_boundary` / `end_boundary`) with candidate ID and score; `boundary_confidence = min(start, end)` |
 | Schema versioning | Implicit | **Per-artifact independent semver**; `manifest.json` declares `compat` block (§6.6) |
 | Reserved phases | Not specified | **`unlabeled` / `unknown`** are reserved phase strings, never in label YAMLs (§8.4) |
 | Run dir replacement | Not specified | **POSIX two-rename atomic protocol** (§6.5); Windows acknowledged non-atomic |
-| Index update | Not specified | **`runs/index.json` advisory file lock** + atomic write (§4.4) |
+| Run-directory key | Not specified | **`canonical_name = <episode_id>__<run_hash[:8]>`** where `run_hash = sha256(config_hash + input_hash)`. Distinguishes runs that differ only in `task_text`, video/parquet content, robot adapter, or labels YAML (§4.1) |
+| Publish protocol | Not specified | **`runs/index.json.lock` is a publish-transaction lock** spanning run-dir replacement + index upsert + scavenger (§4.4 / §6.5) |
+| Run-level status | Not specified | **`manifest.pipeline_status`** records `object_state_available`, `degraded_from_phase`, `degrade_reason` so the viewer does not need to scan all segments to detect a degrade (§4.3) |
 | EEF on joint-only robots | Not specified | Adapters return `None` from `eef_pose` / `eef_velocity`; **EEF-based detectors auto-disabled**; FK out of Phase 1 scope (§7.2) |
 | Performance target | Single number, includes I/O | **Compute path vs I/O path split**; Phase 1 compute target ≤ 5 s, video copy reported separately (§13) |
-| Labels (extended) | Larger list discussed in GPT review | **Defer expansion**; `manipulation.yaml` default of 11 labels remains until real datasets justify more |
+| Labels (extended) | Larger list discussed in GPT review | **Defer expansion**; `manipulation.yaml` default of 10 labels (the original list minus `failure_recovery`, which became `failure_flags`) remains until real datasets justify more |
 
 ---
 
@@ -94,29 +96,37 @@ The Phase 1 viewer is a static React/Vite app reading a self-contained, versione
 
 ### 4.1 Run directory layout
 
-CLI writes to `<repo>/runs/<canonical_name>/` (NOT under `frontend/public/`), where the **canonical name** is the deterministic key:
+CLI writes to `<repo>/runs/<canonical_name>/` (NOT under `frontend/public/`), where the **canonical name** is the deterministic key derived from a composite `run_hash`:
 
-```
-canonical_name := f"{episode_id}__{config_hash[:8]}"
+```python
+config_hash = sha256(canonical_json(AnnotationConfig))
+input_hash  = sha256(
+    video_sha256 + parquet_sha256 + task_text +
+    robot_adapter_name + labels_yaml_sha256
+)
+run_hash       = sha256(config_hash + input_hash)
+canonical_name = f"{episode_id}__{run_hash[:8]}"
 ```
 
-Two runs with different `(episode_id, config_hash)` always have distinct canonical names; re-running with the same `(episode_id, config_hash)` reuses the same canonical name and therefore the same directory (per §6.5). All other paths in this spec — the rename protocol, the index entries, the routing rules — assume this canonical name.
+`config_hash` and `input_hash` are recorded separately in `manifest.json` so the viewer (and humans) can reason about which inputs vs which params drove a given run. The directory key uses `run_hash` (the composition) so that two runs differing only in `task_text` or in input file content end up in distinct directories — even when their `AnnotationConfig` objects are byte-identical.
+
+Two runs with different `(episode_id, run_hash)` always have distinct canonical names; re-running with the same `(episode_id, config_hash, input_hash)` reuses the same canonical name and therefore the same directory (per §6.5). All other paths in this spec — the rename protocol, the index entries, the routing rules — assume this canonical name.
 
 ```
 <repo>/
   runs/                              # gitignored; CLI output root
-    episode_000__abc12345/           # canonical name
+    episode_000__9f31a2bc/           # canonical name (run_hash[:8])
       manifest.json
       annotation.json
       boundaries.json
       signals.json
       video.mp4                      # default: copied. Symlink only with --link-video.
-    episode_000__def67890/           # different config_hash → distinct directory
+    episode_000__7e0a8fd1/           # same episode, different config OR input → distinct dir
       ...
-    episode_001__abc12345/
+    episode_001__9f31a2bc/
       ...
     index.json                       # run discovery (auto-maintained by CLI)
-    index.json.lock                  # advisory file lock (§4.4)
+    index.json.lock                  # publish-transaction lock (§4.4 / §6.5)
   frontend/
     vite.config.ts                   # mounts ../runs at /runs/* during `pnpm dev`
     src/
@@ -125,11 +135,39 @@ Two runs with different `(episode_id, config_hash)` always have distinct canonic
 
 `<repo>/runs/` is ignored by git via `.gitignore`. A `runs/.gitkeep` marker keeps the directory present.
 
-**Why not `frontend/public/runs/`** (the obvious alternative): generated artifacts in the source tree → accidental commits, polluted diffs, CI bloat, and the conceptually-wrong implication that runs are app assets. Vite's dev server can serve an external directory cleanly; the cost of doing this right from day one is a 5-line `vite.config.ts` change.
+**Why not `frontend/public/runs/`** (the obvious alternative): generated artifacts in the source tree → accidental commits, polluted diffs, CI bloat, and the conceptually-wrong implication that runs are app assets. Vite's dev server can serve an external directory cleanly via a small middleware (§4.2), so we do not need to put the artifacts under `public/`.
 
 ### 4.2 Vite dev-server configuration
 
-`frontend/vite.config.ts` mounts the external `runs/` root at `/runs/*` for the dev server only. Production build (Phase 5) routes `/runs/*` through the backend.
+`frontend/vite.config.ts` mounts the external `runs/` root at `/runs/*` for the dev server only via a small middleware. `server.fs.allow` alone does NOT expose external paths under `/runs/*` — it only relaxes `/@fs/...` access — so a connect-style middleware is required:
+
+```ts
+// frontend/vite.config.ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "node:path";
+import sirv from "sirv";
+
+const repoRoot = path.resolve(__dirname, "..");
+const runsDir = path.resolve(repoRoot, "runs");
+
+export default defineConfig({
+  plugins: [
+    react(),
+    {
+      name: "serve-runs",
+      configureServer(server) {
+        server.middlewares.use("/runs", sirv(runsDir, { dev: true, etag: true }));
+      },
+    },
+  ],
+  server: {
+    fs: { allow: [repoRoot] },
+  },
+});
+```
+
+Production build (Phase 5) does NOT use this middleware; the backend serves `/api/runs/*` and the viewer's relative-URL resolution rule (§4.4) picks the right base automatically.
 
 ### 4.3 `manifest.json` schema (`schema_version: "0.1.0"`)
 
@@ -148,6 +186,8 @@ Two runs with different `(episode_id, config_hash)` always have distinct canonic
     "pipeline_phase": 1
   },
   "config_hash": "sha256:abc123...",
+  "input_hash":  "sha256:def456...",
+  "run_hash":    "sha256:9f31a2bc...",
   "model_versions": {
     "sam3": null,
     "vlm": null
@@ -168,6 +208,11 @@ Two runs with different `(episode_id, config_hash)` always have distinct canonic
   "time_base": "video_pts_seconds",
   "fps": 30,
   "duration_sec": 42.5,
+  "pipeline_status": {
+    "object_state_available": false,
+    "degraded_from_phase": null,
+    "degrade_reason": null
+  },
   "compat": {
     "manifest":   1,
     "annotation": 1,
@@ -186,7 +231,12 @@ Two runs with different `(episode_id, config_hash)` always have distinct canonic
 Notes:
 - **`artifacts[]` is a typed list with `url` fields.** UI code MUST go through `manifest.artifact("video").url` rather than hard-coding `/runs/<id>/video.mp4`. This makes Phase 5 backend migration a swap-out.
 - `time_base` is explicit so future signal sources (object tracks at different rates) can be aligned.
-- `config_hash` is `sha256` of canonical JSON of the `AnnotationConfig`. Two runs with different params on the same episode produce different hashes and live in separate directories (or `<episode_id>__<config_hash[:8]>`).
+- **`pipeline_status`** is the run-level summary of what actually executed end-to-end:
+  - `object_state_available`: `true` only if SAM3 produced usable tracks. Phase 1 always emits `false` (no SAM3 yet); Phase 3 emits `true` on success and `false` on degrade.
+  - `degraded_from_phase`: if a higher phase was attempted but fell back, the originally-targeted phase number. Otherwise `null`.
+  - `degrade_reason`: short machine-readable string when `degraded_from_phase != null` (e.g. `"sam3_no_initial_detection"`, `"vlm_invalid_json_after_retries"`). Otherwise `null`.
+  - The viewer surfaces this as a banner so the user does not need to scan all `SubtaskSegment`s' `object_state_unavailable` flags to understand the run.
+- The hashes are sha256 of canonical JSON. `config_hash` covers `AnnotationConfig` only; `input_hash` covers the input bundle (video sha, parquet sha, task text, robot adapter name, labels YAML sha); `run_hash` is `sha256(config_hash + input_hash)` and is the directory key (§4.1).
 
 ### 4.4 `runs/index.json`
 
@@ -198,8 +248,10 @@ Auto-maintained by the CLI on every successful run:
   "runs": [
     {
       "episode_id": "episode_000",
+      "run_hash_short": "9f31a2bc",
       "config_hash_short": "abc12345",
-      "manifest_url": "episode_000__abc12345/manifest.json",
+      "input_hash_short": "def67890",
+      "manifest_url": "episode_000__9f31a2bc/manifest.json",
       "task_text": "pick red block",
       "pipeline_phase": 1,
       "generated_at": "2026-04-25T12:00:00Z"
@@ -208,9 +260,11 @@ Auto-maintained by the CLI on every successful run:
 }
 ```
 
+Index rows are keyed by `(episode_id, run_hash_short)`. `config_hash_short` and `input_hash_short` are surfaced for humans and for filtering ("show me all runs that share a config but differ in inputs") but they do NOT participate in upsert key.
+
 **URL resolution rule.** All `manifest_url` and `artifact.url` fields are **relative to the directory containing the file that emitted them**:
 
-- `runs/index.json` → its `manifest_url` resolves against `runs/`. In Phase 1 the viewer fetches `/runs/<manifest_url>` (e.g. `/runs/episode_000__abc12345/manifest.json`).
+- `runs/index.json` → its `manifest_url` resolves against `runs/`. In Phase 1 the viewer fetches `/runs/<manifest_url>` (e.g. `/runs/episode_000__9f31a2bc/manifest.json`).
 - `<canonical_name>/manifest.json` → its `artifacts[].url` resolves against `runs/<canonical_name>/`. The viewer fetches `/runs/<canonical_name>/<artifact.url>`.
 - In Phase 5, the backend serves the same JSON shapes from `/api/runs/index.json` and `/api/runs/<canonical_name>/manifest.json`. The same relative-resolution rule applies — the viewer picks up `/api/runs/...` automatically because it resolves against the URL it just fetched.
 
@@ -221,25 +275,29 @@ Viewer routing rules:
 | URL | Behavior |
 |---|---|
 | no params | Fetch `runs/index.json`, render the run list (one row per index entry, newest `generated_at` first), user picks one. |
-| `?run=<id>` | Filter index entries by `episode_id == <id>`. **0 matches** → error page "no such run" with a back link to the list. **1 match** → resolve `manifest_url` against the index URL and fetch. **>1 matches** → load the entry with the most recent `generated_at` AND show a non-modal banner "N config variants exist for this episode" with a chooser of `(config_hash_short, generated_at, task_text)`. |
-| `?run=<id>&hash=<config_hash_short>` | Look up the exact `(episode_id, config_hash_short)` row. Match → load. No match → error page. |
+| `?run=<id>` | Filter index entries by `episode_id == <id>`. **0 matches** → error page "no such run" with a back link to the list. **1 match** → resolve `manifest_url` against the index URL and fetch. **>1 matches** → load the entry with the most recent `generated_at` AND show a non-modal banner "N runs exist for this episode" with a chooser of `(run_hash_short, config_hash_short, input_hash_short, generated_at, task_text)`. |
+| `?run=<id>&hash=<run_hash_short>` | Look up the exact `(episode_id, run_hash_short)` row. Match → load. No match → error page. |
 
 The viewer never enumerates the `runs/` directory itself; it relies on `index.json`. This keeps the static-vs-backend story symmetric (Phase 5 just swaps `index.json` for `GET /api/runs/index.json` with the same shape).
 
-**Concurrency on update.** The CLI updates `index.json` via:
-1. Acquire `runs/index.json.lock` (POSIX `fcntl.flock`, exclusive; on Windows `msvcrt.locking`).
-2. Read current `index.json` (or empty if absent).
-3. Upsert by `(episode_id, config_hash_short)` key; remove any prior entry with the same key.
-4. Atomic write: write to `index.json.tmp.<pid>`, fsync, rename.
-5. Release lock.
+**Publish transaction.** The CLI uses `runs/index.json.lock` as a **publish-transaction lock**, not just an index-update lock. A successful publish is an all-or-nothing transaction over (a) run-directory replacement and (b) index upsert. The full sequence:
 
-Phase 1 use is single-CLI / single-developer, but the lock is mandatory because a future "annotate many in parallel" loop is foreseeable. Without it, last-writer-wins silently drops entries — Codex flagged this concretely.
+1. Compute `config_hash`, `input_hash`, `run_hash`. Derive `canonical_name`.
+2. Write all artifacts to `runs/<canonical_name>.tmp.<pid>/` (no lock; the heavy compute happens here).
+3. Acquire `runs/index.json.lock` (POSIX `fcntl.flock` exclusive; Windows `msvcrt.locking`).
+4. Run startup scavenger for stale `*.tmp.<pid>/` and `*.bak.<pid>/` whose `<pid>` is no longer the current lock holder (§6.5).
+5. Run-directory replacement per §6.5 steps 2–4 (rename old → bak, rename tmp → final).
+6. Read `index.json` (or empty if absent), upsert by `(episode_id, run_hash_short)` key, atomic write of `index.json.tmp.<pid>` then rename.
+7. `rm -rf runs/<canonical_name>.bak.<pid>/` (§6.5 step 5).
+8. Release lock.
+
+Phase 1 use is single-CLI / single-developer, but the lock is mandatory because a future "annotate many in parallel" loop is foreseeable. Without lock-scoped publish, two concurrent CLIs targeting the same `canonical_name` could see torn `.tmp` / `.bak` paths or last-writer-wins index drops. Different `canonical_name`s never collide on temp paths but still serialize on `index.json`.
 
 ### 4.5 Operation
 
 ```bash
-# 1) Generate. The CLI computes config_hash and writes to
-#    runs/<episode_id>__<config_hash[:8]>/, then upserts runs/index.json.
+# 1) Generate. The CLI computes config_hash, input_hash, run_hash and writes
+#    to runs/<episode_id>__<run_hash[:8]>/, then upserts runs/index.json.
 mimicanno annotate \
   --video   data/episode_000.mp4 \
   --parquet data/episode_000.parquet \
@@ -253,8 +311,8 @@ cd frontend && pnpm dev
 ```
 
 Notes:
-- `--out` is reserved for advanced override of the run-root path; the default is `<repo>/runs/`. Users SHOULD NOT pass `--out runs/episode_000` directly because the directory name is derived from `(episode_id, config_hash)` to enforce one-run-per-config-hash.
-- `?run=<id>` and `?run=<id>&hash=<config_hash_short>` are defined in §4.4. `?run=<id>` alone with multiple config variants picks the most recent and shows a chooser banner.
+- `--out` is reserved for advanced override of the run-root path; the default is `<repo>/runs/`. Users SHOULD NOT pass `--out runs/episode_000` directly because the directory name is derived from `(episode_id, run_hash)` to enforce one-run-per-(config+input).
+- `?run=<id>` and `?run=<id>&hash=<run_hash_short>` are defined in §4.4. `?run=<id>` alone with multiple variants picks the most recent and shows a chooser banner.
 
 ### 4.6 Video materialization policy
 
@@ -326,6 +384,8 @@ Default Phase 1 weights:
 
 Candidates with `score < score_threshold` (default 0.30) are dropped.
 
+**Default-policy intent (precision over recall).** With these weights, no single non-gripper source can promote a candidate by itself: `eef_velocity_valley` alone caps at 0.25, `eef_acceleration_peak` at 0.15, `action_norm_change` at 0.10 — all below `score_threshold = 0.30`. Boundaries are therefore **gripper-anchored by default**: kinematic dips on their own are not enough; they reinforce a gripper-driven event. This is intentional — Phase 1 is a verification viewer where false positives clutter the timeline more than false negatives hide signal. Operators who want recall-favoring behavior (e.g., research on non-grasping tasks) tune `weights` and/or `score_threshold` via `AnnotationConfig`; the choice changes `config_hash` and therefore `canonical_name`, so different policies live in different run directories.
+
 Phase 3 will add `gripper_object_distance_threshold_crossing` and `object_motion_start_stop` to `sources` and rebalance `weights`. The shape is unchanged — Phase 3 does not introduce a new contract.
 
 ### 5.4 `boundaries.json` schema
@@ -379,9 +439,9 @@ Per-channel downsampled signals for viewer waveform rendering. Full-rate signals
 
 Per-channel timing rules:
 - `t0_sec`: time (relative to video PTS 0) of `values[0]`. Always 0.0 in Phase 1.
-- `dt_sec`: uniform inter-sample interval. The viewer plots `values[i]` at time `t0_sec + i * dt_sec`.
+- `dt_sec`: uniform inter-sample interval. The viewer plots `values[i]` at time `t0_sec + i * dt_sec`. The last sample is at `t0_sec + (len(values) - 1) * dt_sec`.
 - Channels MAY have different `dt_sec`. The viewer must not assume a shared timebase.
-- `len(values) * dt_sec` SHOULD equal `duration_sec` ± one sample. Mismatch beyond one sample is a producer bug.
+- The producer SHOULD ensure `(len(values) - 1) * dt_sec ≤ duration_sec` and `duration_sec - last_sample_time ≤ dt_sec`. In other words, the channel covers the episode within one sample interval. Larger gaps are a producer bug.
 - The default `dt_sec` for Phase 1 is `1.0 / 30.0` (≈30 Hz). Higher-rate channels (e.g., raw gripper at the full episode FPS) MAY be emitted; the viewer downsamples on render.
 
 ### 5.6 Phase 1 clip bracketing algorithm
@@ -472,8 +532,11 @@ class AnnotationResult:
     generated_at: str
     generator: GeneratorInfo
     config_hash: str
+    input_hash: str
+    run_hash: str
     model_versions: dict[str, str | None]
     pipeline_phase: int
+    pipeline_status: PipelineStatus      # mirrors manifest.pipeline_status (§4.3)
 
     segments: list[SubtaskSegment]
 
@@ -500,35 +563,46 @@ Default flag vocabulary is intentionally **empty** at this milestone. It will be
 
 ### 6.4 Confidence aggregation
 
+`overall_confidence` is "this segment, with the label currently attached, is trustworthy." Reserved phases (`unlabeled`, `unknown`) by definition have no trustworthy label, so their `overall_confidence` is fixed at 0.0 regardless of how strong the boundary edges are.
+
 ```
-overall_confidence = sqrt(boundary_confidence * vlm_confidence)
-                     if vlm_confidence is not None
-                     else boundary_confidence
+def compute_overall_confidence(segment):
+    if segment.phase in {"unlabeled", "unknown"}:
+        return 0.0
+    if segment.vlm_confidence is None:
+        # Phase 1 placeholder — reserved phases handle the unlabeled case above.
+        # In practice this branch is never hit in Phase 1 because phase is "unlabeled" there.
+        return segment.boundary_confidence
+    return sqrt(segment.boundary_confidence * segment.vlm_confidence)
 ```
 
-Geometric mean penalizes asymmetry (high VLM confidence over a flaky boundary stays moderate). The formula is exposed and configurable.
+Properties:
+- Geometric mean penalizes asymmetry (high VLM confidence over a flaky boundary stays moderate).
+- `boundary_confidence` (= `min(start_boundary.score, end_boundary.score)`) remains a separate field so the viewer can rank/filter on edge confidence even when the segment is unlabeled.
+- The formula is exposed and configurable through `AnnotationConfig.confidence_aggregator`.
 
 ### 6.5 On-disk format and atomicity
 
 - **JSON sidecar inside the run directory.** Source video and parquet are never modified.
-- One run per `(episode_id, config_hash)` pair. Phase 1 supports **POSIX filesystems**; Windows behaves correctly but with weaker atomicity guarantees (see below).
-- Re-running with a different config produces a different canonical name (different `config_hash`) and therefore a distinct directory. `index.json` lists both.
+- One run per `(episode_id, run_hash)` pair, where `run_hash = sha256(config_hash + input_hash)` (§4.1). Phase 1 supports **POSIX filesystems**; Windows behaves correctly but with weaker atomicity guarantees (see below).
+- Re-running with a different config OR a different input bundle produces a different canonical name (different `run_hash`) and therefore a distinct directory. `index.json` lists both.
 
 **POSIX run-directory replacement (atomic from a reader's perspective):**
 
-Let `name = f"{episode_id}__{config_hash[:8]}"` be the canonical name (§4.1). All paths below use this exact `name`.
+Let `name` be the canonical name (§4.1). All paths below use this exact `name`. The replacement is a sub-step of the **publish transaction** described in §4.4 — it runs **under** `runs/index.json.lock`, not on its own:
 
-1. Write all artifacts to `runs/<name>.tmp.<pid>/`.
-2. If `runs/<name>/` already exists (same-config re-run), rename it to `runs/<name>.bak.<pid>/` (atomic).
-3. Rename `runs/<name>.tmp.<pid>/` → `runs/<name>/` (atomic).
-4. `rm -rf runs/<name>.bak.<pid>/`.
+1. (Outside the lock) write all artifacts to `runs/<name>.tmp.<pid>/`.
+2. (Inside the lock) if `runs/<name>/` already exists (same `run_hash` re-run), rename it to `runs/<name>.bak.<pid>/` (atomic).
+3. (Inside the lock) rename `runs/<name>.tmp.<pid>/` → `runs/<name>/` (atomic).
+4. (Inside the lock) upsert `runs/index.json` per §4.4.
+5. (Inside the lock) `rm -rf runs/<name>.bak.<pid>/`.
 
-Steps 2 and 3 are each atomic on POSIX. A reader holding a path obtained from `runs/index.json` either sees the old run or the new run at `runs/<name>/`, never a mix. Because the canonical name is fully qualified, two simultaneously-running CLIs targeting different `config_hash`es never collide on the same temp/backup paths.
+Steps 2 and 3 are each atomic on POSIX. A reader holding a path obtained from `runs/index.json` either sees the old run or the new run at `runs/<name>/`, never a mix. Because the canonical name is fully qualified and the lock spans the whole publish, two simultaneously-running CLIs targeting the same `canonical_name` serialize on the lock and produce a single coherent end state. CLIs targeting different `canonical_name`s do not collide on temp/backup paths and only contend on the lock during the brief inside-lock window.
 
-**Crash recovery / startup scavenger.** Because steps 1, 2, and 4 are not transactional, a CLI crash may leave `runs/<name>.tmp.<pid>/` and/or `runs/<name>.bak.<pid>/` directories on disk. On startup, the CLI scavenges:
+**Crash recovery / startup scavenger.** Because steps 1, 2, and 5 are not transactional, a CLI crash may leave `runs/<name>.tmp.<pid>/` and/or `runs/<name>.bak.<pid>/` directories on disk. The scavenger runs as step 4 of the publish transaction (§4.4):
 
-- For every directory matching `runs/*.tmp.<pid>/` or `runs/*.bak.<pid>/`, check whether `<pid>` is a live process holding the index lock (§4.4). If not, `rm -rf` it.
-- The scavenger runs after acquiring `runs/index.json.lock` so it does not race with another CLI's mid-write state.
+- For every directory matching `runs/*.tmp.<pid>/` or `runs/*.bak.<pid>/`, check whether `<pid>` is a live process currently holding the lock. If not, `rm -rf` it.
+- Because the scavenger runs inside the lock it cannot race another CLI's mid-write state.
 - Scavenger actions are logged with the canonical name and reason.
 
 `runs/index.json` is updated only after step 3 succeeds, so a stale `.bak` never causes index drift.
@@ -539,7 +613,21 @@ Steps 2 and 3 are each atomic on POSIX. A reader holding a path obtained from `r
 
 Each schema carries its own `schema_version` (semver `"MAJOR.MINOR.PATCH"`). Versions are **independent** — bumping `signals.json` does not require bumping `manifest.json` or any other schema.
 
-**Compatibility check:** the viewer (and any consumer) parses each artifact and asserts `consumer_max_major >= artifact_major`. Mismatch → fail loudly with both versions in the error message. MINOR/PATCH differences are ignored at parse time; consumers ignore unknown fields and tolerate missing optional fields within the same MAJOR.
+**Two distinct compatibility checks** must both pass before a consumer trusts an artifact. Conflating them is the trap §6.6 used to encourage; do not do that.
+
+1. **Producer-internal consistency** (`compat` block):
+   ```
+   manifest.compat[role] == artifact_at_that_role.schema_version.major
+   ```
+   The CLI populates `compat` based on what it actually emitted; the viewer asserts this on load. A mismatch means the run directory is internally corrupt — the producer claimed one major and emitted another.
+
+2. **Consumer capability** (the viewer's own knowledge):
+   ```
+   viewer_supported.<role>_major >= artifact_at_that_role.schema_version.major
+   ```
+   The viewer knows which majors it understands. A mismatch means the run is from a future producer the viewer can't read; surface a clear "viewer too old for this run" error.
+
+Both checks must pass. `compat` does NOT replace the consumer-capability check — it only certifies what's inside this particular run. MINOR/PATCH differences are ignored at parse time; consumers ignore unknown fields and tolerate missing optional fields within the same MAJOR.
 
 `manifest.json` carries a `compat` block whose scope is **only the in-run artifacts** (the things rooted under this manifest's directory). It declares the MAJOR version that the producer actually emitted for each:
 
@@ -552,9 +640,7 @@ Each schema carries its own `schema_version` (semver `"MAJOR.MINOR.PATCH"`). Ver
 }
 ```
 
-External schemas — `runs/index.json` (run-root) and label YAMLs (`mimicanno/configs/labels/*.yaml`, package-level) — are **not** in `compat`. They each carry their own `schema_version` and consumers that load them perform an independent MAJOR compare at the point of load. This keeps `compat` from leaking package-level concerns into a run-level contract.
-
-The CLI populates `compat` based on the artifacts it just emitted. The viewer compares each artifact's MAJOR against the corresponding `compat` entry, not its own hardcoded value, so a viewer two versions ahead of an old run can still display it correctly if `compat` matches what that viewer supports.
+External schemas — `runs/index.json` (run-root) and label YAMLs (`mimicanno/configs/labels/*.yaml`, package-level) — are **not** in `compat`. They each carry their own `schema_version` and consumers that load them perform both checks (consistency-vs-self and consumer-capability) independently at the point of load.
 
 Parquet export is a Phase 5 concern (`mimicanno export` command).
 
@@ -569,7 +655,7 @@ LeRobot v2/v3 episodes have known column conventions but per-robot variations.
 | Column | Required | Notes |
 |---|---|---|
 | `observation.state` | yes | float vector per frame; gripper extraction is robot-specific |
-| `action` | yes | float vector per frame |
+| `action` | **optional in Phase 1**, **required in Phase 5 export** | Only the `action_norm_change` detector needs it. If absent or degenerate (≥95% zeros), that detector is dropped and the run continues. Phase 5 export to imitation-learning parquet requires `action`. |
 | `timestamp` | yes-ish | preferred FPS source; falls back to metadata |
 | `frame_index` | optional | sanity check |
 | `episode_index` | optional | informational |
@@ -736,9 +822,10 @@ class TrackingPlan:
 - Skip Phase 3's object-state pipeline entirely for this episode.
 - Re-run Phase 2 labeling instead.
 - Set `object_state_unavailable=true` on all segments.
-- Record a `notes` entry: `"sam3_degraded: <reason>"`.
+- Set `manifest.pipeline_status` (§4.3): `object_state_available=false`, `degraded_from_phase=3`, `degrade_reason="sam3_no_initial_detection"` (or `"gemma_no_object_prompts"` if Step A returned empty).
+- Record a `notes` entry mirroring the same string for round-tripping with consumers that already parse `notes`.
 
-This keeps a single failure mode (no object tracks) from blowing up the whole pipeline.
+This keeps a single failure mode (no object tracks) from blowing up the whole pipeline. The viewer reads `pipeline_status` and surfaces a banner; segment-level flags remain the authoritative per-segment truth.
 
 ### 9.5 Object track ID contract
 
@@ -756,7 +843,7 @@ Examples: `obj:object:red_block:0`, `obj:target:bin_a:0`, `obj:tool:gripper:0`.
 
 The ID is assigned by the tracker wrapper at plan time and is **stable** for the lifetime of the run. If SAM3 loses then re-acquires a track within the same episode, it MUST keep the same ID (the wrapper handles re-association by IoU on the bbox; a track lost beyond a configurable gap becomes a new ID, and that gap is recorded in the run notes).
 
-`SubtaskSegment.object_track_ids` (§6.1) is the set of track IDs whose mask/bbox is non-empty for at least one frame in `[start_frame, end_frame]`. In Phase 1 (no SAM3) this list is always `[]`. In Phase 3 the list is populated and stable across re-runs that produce the same `config_hash`.
+`SubtaskSegment.object_track_ids` (§6.1) is the set of track IDs whose mask/bbox is non-empty for at least one frame in `[start_frame, end_frame]`. In Phase 1 (no SAM3) this list is always `[]`. In Phase 3 the list is populated and stable across re-runs that produce the same `run_hash`.
 
 Tracks themselves (per-frame bbox/mask, derived signals) are written to a Phase 3-only artifact `tracks.json` whose schema is deferred to the Phase 3 spec; the segment-level `object_track_ids` list is the only Phase 1/2 contact point.
 
@@ -766,7 +853,7 @@ Tracks themselves (per-frame bbox/mask, derived signals) are written to a Phase 
 
 Phase 4 adds the smoother that the original design.md sketched. Two changes from the original sketch:
 
-1. **Forbidden transitions are penalties, not hard rules.** Phase 1 keeps hard rules as a debugging aid; Phase 4 promotes them into a Viterbi/penalty term so a confidently-labeled segment can override.
+1. **Forbidden transitions are introduced as Viterbi penalty terms in Phase 4.** Earlier phases do not apply transition rules: Phase 1 emits only `unlabeled` segments, and Phases 2–3 emit per-segment labels without inter-segment enforcement. Phase 4 is the first place transitions are evaluated, and it does so as soft penalties so a confidently-labeled segment can override an apparent rule violation.
 2. **`min_segment_duration_sec`** is enforced via merge-with-neighbor (highest-confidence neighbor wins), not deletion.
 
 Default config (overridable via `AnnotationConfig`):
@@ -801,7 +888,7 @@ viterbi_enabled: bool = True   # Phase 4 default
 | SAM3 init failure (Phase 3) | constructor exception | Degrade to Phase 2 mode for the whole run |
 | SAM3 no detection on initial frame | empty masks | Degrade to Phase 2 mode for the whole run |
 | Gemma bad JSON (Phase 2/3) | schema validation fails | Up to 3 retries with stricter prompt; final fallback `phase="unknown"`, `vlm_confidence=0` |
-| `runs/<canonical_name>/` already exists | pre-write check | Replace per §6.5 (POSIX atomic via two renames; non-atomic on Windows). Canonical name = `<episode_id>__<config_hash[:8]>`. |
+| `runs/<canonical_name>/` already exists | pre-write check | Replace per §6.5 (POSIX atomic via two renames; non-atomic on Windows). Canonical name = `<episode_id>__<run_hash[:8]>` (§4.1). |
 | `runs/index.json` lock contention | another CLI process holds the lock | Wait up to 30 s with exponential backoff; if still held, abort with the holder's PID if discoverable |
 
 Every abort writes a structured error JSON to stderr (`{"error_code": "...", "message": "...", "context": {...}}`) and exits non-zero.
@@ -897,7 +984,7 @@ Editing endpoints are added in Phase 5 and are out of scope here. The viewer cod
 
 ### Phase 1
 1. `mimicanno annotate --video X --parquet Y --task "pick red block" --robot aloha` succeeds on at least one real LeRobot episode.
-2. `runs/<episode_id>__<config_hash[:8]>/manifest.json` validates against the §4.3 schema.
+2. `runs/<episode_id>__<run_hash[:8]>/manifest.json` validates against the §4.3 schema.
 3. `boundaries.json` contains ≥ 1 candidate when the episode contains a gripper transition.
 4. `runs/index.json` is updated under file lock (§4.4); a deliberate concurrent CLI invocation does not lose entries.
 5. `cd frontend && pnpm dev` then `?run=<episode_id>` renders video + timeline + waveforms + markers without console errors.
