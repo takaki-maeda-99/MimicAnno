@@ -19,6 +19,21 @@ def bracket_phase1_segments(
     2. Cut list = [0.0] + candidate.times + [duration_sec].
     3. Half-open intervals [t_i, t_{i+1}); end_frame is inclusive.
     4. Drop sub-frame segments (length < 1/fps).
+
+    Edge cases (all produce dropped degenerate segments, by design):
+    - A candidate at ``time == 0.0`` produces a zero-width interval with
+      the start sentinel and is dropped. The episode-start sentinel's
+      coverage subsumes it.
+    - A candidate within ``1/fps`` of ``duration_sec`` produces a sub-frame
+      trailing segment and is dropped; the episode tail is NOT covered by
+      any segment in this case. Upstream callers can avoid this by
+      filtering candidates whose time is outside ``[1/fps, duration_sec - 1/fps]``.
+    - Empty candidate list → exactly one segment spanning ``[0.0, duration_sec)``.
+
+    Segment IDs (``s_NNN``) are assigned sequentially within ONE invocation
+    starting at ``s_001``. They are NOT episode-globally unique across calls;
+    callers re-running the bracketer must understand that IDs may collide
+    with a prior result for the same episode.
     """
     sorted_cands = sorted(candidates, key=lambda c: c.time)
     epsilon_sec = 1.0 / fps

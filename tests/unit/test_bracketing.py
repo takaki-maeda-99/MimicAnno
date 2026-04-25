@@ -66,3 +66,31 @@ class TestBracket:
         cands = [_cand("b_001", 0.5), _cand("b_002", 1.0)]
         segs = bracket_phase1_segments("ep0", cands, fps=30.0, duration_sec=1.5)
         assert [s.segment_id for s in segs] == ["s_001", "s_002", "s_003"]
+
+    def test_candidate_at_episode_start_dropped(self):
+        """A candidate exactly at time=0.0 produces a zero-width interval with
+        the start sentinel and is dropped per the sub-frame guard."""
+        cands = [_cand("b_001", 0.0)]
+        segs = bracket_phase1_segments("ep0", cands, fps=30.0, duration_sec=2.0)
+        # Only one segment from cand@0.0 to duration_sec; the (start, cand) pair
+        # was sub-frame and dropped.
+        assert len(segs) == 1
+        assert segs[0].start_boundary.candidate_id == "b_001"
+        assert segs[0].end_boundary.sources == ["episode_end"]
+
+    def test_candidate_within_one_frame_of_duration_dropped(self):
+        """A candidate within 1/fps of duration_sec produces a sub-frame
+        trailing segment that is dropped."""
+        cands = [_cand("b_001", 1.99)]  # < 1/30 = 0.0333 from duration=2.0
+        segs = bracket_phase1_segments("ep0", cands, fps=30.0, duration_sec=2.0)
+        # Only one segment from start to b_001; tail (b_001, end_sentinel) dropped.
+        assert len(segs) == 1
+        assert segs[0].start_boundary.sources == ["episode_start"]
+        assert segs[0].end_boundary.candidate_id == "b_001"
+
+    def test_50hz_episode(self):
+        """fps != 30 to confirm epsilon_sec uses fps correctly."""
+        cands = [_cand("b_001", 1.0)]
+        segs = bracket_phase1_segments("ep0", cands, fps=50.0, duration_sec=2.0)
+        assert len(segs) == 2
+        # epsilon_sec = 0.02; both segments are well above that threshold.
