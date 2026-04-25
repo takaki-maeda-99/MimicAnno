@@ -74,12 +74,12 @@ def test_scavenge_keeps_dir_with_dead_pid_under_age(tmp_path: Path):
 def test_scavenge_handles_unparseable_metadata(tmp_path: Path):
     """Unparseable .writer.json + age threshold passed → deleted (the dir name
     has a PID we cannot trust without metadata, so the stale_age_sec gate is
-    what protects live writers in this branch). With stale_age_sec=1 and no
-    parseable claimed_at, age is treated as exceeded → delete."""
+    what protects live writers in this branch). With stale_age_sec=0 any age
+    is treated as old → delete."""
     d = tmp_path / "ep0__abc.tmp.42"
     d.mkdir()
     (d / ".writer.json").write_text("{not json")
-    scavenge_stale_dirs(tmp_path, stale_age_sec=1)
+    scavenge_stale_dirs(tmp_path, stale_age_sec=0)
     assert not d.exists()
 
 
