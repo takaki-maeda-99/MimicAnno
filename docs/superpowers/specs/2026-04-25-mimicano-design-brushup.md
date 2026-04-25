@@ -141,7 +141,7 @@ Two runs with different `run_hash` produce different `canonical_name`s **assumin
       boundaries.json
       signals.json
       video.mp4                      # default: copied. Symlink only with --link-video.
-      .writer.json                   # writer metadata while .tmp; finalized into the run dir on success
+      # NOTE: .writer.json lives only in *.tmp.<pid>/ and *.bak.<pid>/ — it is removed before the dir becomes the final canonical run dir.
     episode_000__7e0a8fd1c5b2/       # same episode, different config OR input → distinct dir
       ...
     episode_001__9f31a2bc4a77/
@@ -305,14 +305,15 @@ The viewer never enumerates the `runs/` directory itself; it relies on `index.js
 **Publish transaction.** The CLI uses `runs/index.json.lock` as a **publish-transaction lock**, not just an index-update lock. A successful publish is an all-or-nothing transaction over (a) run-directory replacement and (b) index upsert. The full sequence:
 
 1. Compute `config_hash`, `input_hash`, `run_hash`. Derive `canonical_name`.
-2. **Reuse short-circuit (default).** If `runs/<canonical_name>/manifest.json` already exists and parses, and its `run_hash` matches the freshly-computed `run_hash` exactly, the CLI exits success **without rewriting anything**. The existing run is treated as immutable. `--force` skips this check and proceeds to step 3. (`--force` is also necessary if the user wants to refresh a run after upgrading their `cli_version` even though `run_hash` is unchanged.)
+2. **Reuse short-circuit (lock-free, default).** If `runs/<canonical_name>/manifest.json` already exists and parses, and its `run_hash` matches the freshly-computed `run_hash` exactly, the CLI exits success **without rewriting anything**. The existing run is treated as immutable. `--force` skips this check and proceeds to step 3. (`--force` is also necessary if the user wants to refresh a run after upgrading their `cli_version` even though `run_hash` is unchanged.)
 3. Write a `.writer.json` metadata file to `runs/<canonical_name>.tmp.<pid>/` (see scavenger contract below), then write all artifacts there. **No lock during this heavy-compute step.**
 4. Acquire `runs/index.json.lock` (POSIX `fcntl.flock` exclusive; Windows `msvcrt.locking`).
 5. Run scavenger over stale `*.tmp.<pid>/` and `*.bak.<pid>/` directories. **Scavenger judgement is based on `.writer.json`, not on lock holdership** (see contract below).
-6. Run-directory replacement per §6.5 (rename existing → bak, rename tmp → final).
-7. Read `index.json` (or empty if absent), upsert by **full `run_hash`** (the truncated `run_hash_short` is just for display), atomic write of `index.json.tmp.<pid>` then rename.
-8. `rm -rf runs/<canonical_name>.bak.<pid>/`.
-9. Release lock.
+6. **Locked reuse re-check.** Re-evaluate the step-2 condition now that the lock is held: if `runs/<canonical_name>/manifest.json` exists with matching `run_hash` AND `--force` is false, **`rm -rf` the local `*.tmp.<pid>/`, ensure `runs/index.json` has a matching row (insert if missing as a self-heal), release the lock, and exit success**. This handles the race where two CLIs both passed the lock-free check in step 2 and proceeded in parallel — only the first publisher writes; the second reuses the first's output. With `--force`, this re-check is skipped.
+7. Run-directory replacement per §6.5 (rename existing → bak, rename tmp → final). The published `runs/<canonical_name>/` does NOT contain `.writer.json` — it is removed (or never copied) so the final run is clean of writer-only metadata.
+8. Read `index.json` (or empty if absent), upsert by **full `run_hash`** (the truncated `run_hash_short` is just for display), atomic write of `index.json.tmp.<pid>` then rename.
+9. `rm -rf runs/<canonical_name>.bak.<pid>/`.
+10. Release lock.
 
 **Why the lock is mandatory.** Phase 1 use is single-CLI / single-developer, but the lock is mandatory because a future "annotate many in parallel" loop is foreseeable. Without lock-scoped publish, two concurrent CLIs targeting the same `canonical_name` could see torn `.tmp` / `.bak` paths or last-writer-wins index drops. Different `canonical_name`s never collide on temp paths but still serialize on `index.json`.
 
@@ -638,21 +639,22 @@ Properties:
 
 **Reuse-by-default.** The default behavior on re-run is **no-op** when `manifest.json.run_hash` matches the freshly-computed `run_hash` (§4.4 step 2). Run artifacts are immutable for a given `run_hash`; replacement is opt-in via `--force`. This means most "re-running the same command" cases never enter the rename protocol below at all.
 
-**POSIX run-directory replacement** (only triggered when `--force` is set, or a prefix-collision row is being installed):
+**POSIX run-directory replacement** (only triggered when §4.4 step 6 reuse re-check did NOT short-circuit — i.e., either `--force` was set, the existing run had a different `run_hash` (prefix collision), or no existing run was present):
 
 Let `name` be the canonical name (§4.1). All paths below use this exact `name`. The replacement is a sub-step of the **publish transaction** described in §4.4 — it runs **under** `runs/index.json.lock`, not on its own:
 
-1. (Outside the lock) write all artifacts to `runs/<name>.tmp.<pid>/`, including `.writer.json` (§4.4 scavenger contract).
-2. (Inside the lock) if `runs/<name>/` already exists, rename it to `runs/<name>.bak.<pid>/` (atomic). Drop a `.writer.json` into the new bak dir as well.
-3. (Inside the lock) rename `runs/<name>.tmp.<pid>/` → `runs/<name>/` (atomic).
-4. (Inside the lock) upsert `runs/index.json` per §4.4.
-5. (Inside the lock) `rm -rf runs/<name>.bak.<pid>/`.
+1. (Outside the lock, §4.4 step 3) write all artifacts to `runs/<name>.tmp.<pid>/`, including `.writer.json` (§4.4 scavenger contract).
+2. (Inside the lock, §4.4 step 7) **remove `.writer.json` from `runs/<name>.tmp.<pid>/`** so the soon-to-be-final dir does not carry writer-only metadata. (`.writer.json` was the scavenger handle; once we are committing under the lock, we no longer need it on the surviving copy.)
+3. (Inside the lock) if `runs/<name>/` already exists, rename it to `runs/<name>.bak.<pid>/` (atomic). Write a `.writer.json` into the new bak dir so that, if step 4 crashes, the bak dir is reachable to a future scavenger.
+4. (Inside the lock) rename `runs/<name>.tmp.<pid>/` → `runs/<name>/` (atomic).
+5. (Inside the lock, §4.4 step 8) upsert `runs/index.json` per §4.4.
+6. (Inside the lock, §4.4 step 9) `rm -rf runs/<name>.bak.<pid>/`.
 
-Steps 2 and 3 are each atomic on POSIX, but **the pair is not jointly atomic**: between the two renames there is a short window during which `runs/<name>/` does not exist on disk. Concurrent readers MUST be prepared to retry on transient missing-directory errors. The viewer (Phase 1) handles this by retrying the manifest fetch up to 3 times with 100 ms backoff before surfacing an error. `runs/index.json` is updated only after step 3, so a reader that resolved a path via the index and then encountered the gap is racing against an in-progress publish, not seeing a torn state.
+Steps 3 and 4 are each atomic on POSIX, but **the pair is not jointly atomic**: between the two renames there is a short window during which `runs/<name>/` does not exist on disk. Concurrent readers MUST be prepared to retry on transient missing-directory errors. The viewer (Phase 1) handles this by retrying the manifest fetch up to 3 times with 100 ms backoff before surfacing an error. `runs/index.json` is updated only after step 4, so a reader that resolved a path via the index and then encountered the gap is racing against an in-progress publish, not seeing a torn state.
 
-**Crash recovery.** Steps 1, 2, and 5 are not transactional. The scavenger (§4.4 step 5) handles crash debris using the `.writer.json` contract — PID + start-time + age threshold, never lock-holdership. Scavenger actions are logged with the canonical name and reason.
+**Crash recovery.** Steps 1, 3, and 6 (the writes outside `os.rename` itself) are not transactional. The scavenger (§4.4 step 5) handles crash debris using the `.writer.json` contract — PID + start-time + age threshold, never lock-holdership. Scavenger actions are logged with the canonical name and reason.
 
-`runs/index.json` is never updated until step 3 succeeds, so a stale `.bak` never causes index drift.
+`runs/index.json` is never updated until step 4 succeeds, so a stale `.bak` never causes index drift.
 
 **Windows behavior:** `os.replace` is used for files but **non-empty directory replacement is not atomic** on Windows. A reader could observe a transient state. This is acknowledged and accepted for Phase 1 (single-developer, single-CLI workflows). Phase 5's backend will own this concern.
 
@@ -936,12 +938,12 @@ viterbi_enabled: bool = True   # Phase 4 default
 | Robot-state NaN spans ≤ 0.5 s | post-load NaN scan | Linear interpolate, log warning |
 | Empty/zero `action` column | column missing or `action_norm == 0` for ≥ 95% of frames | Drop the `action_norm_change` detector; continue. Record in `pipeline_params.boundary.disabled_sources`. Future-emitted candidates simply do not include `action_norm_change` in their `sources`. |
 | EEF columns missing on adapter that doesn't expose them | `eef_pose()` and `eef_velocity()` both return `None` | Drop `eef_velocity_valley` and `eef_acceleration_peak`; record in `pipeline_params.boundary.disabled_sources`. Continue. (`gripper_transition` is always available because `gripper_signal()` is mandatory in §7.2, so the pipeline is never starved of detectors.) |
-| Stale `*.tmp.<pid>/` or `*.bak.<pid>/` from a prior crash | startup scavenger sees PID is no longer the index-lock holder | `rm -rf` the stale directory; log the run name and reason (§6.5 "Crash recovery"). |
+| Stale `*.tmp.<pid>/` or `*.bak.<pid>/` from a prior crash | Scavenger reads `.writer.json` and finds: (`pid` is not running OR `pid_start_time` mismatch OR `.writer.json` unparseable) AND `claimed_at` older than `stale_age_threshold_sec` | `rm -rf` the stale directory; never rely on lock holdership; log `canonical_name`, `kind`, `pid`, `claimed_at`, and reason (§4.4 scavenger contract / §6.5 crash recovery). |
 | Initial frame extraction fails (Phase 3) | ffmpeg fails on frame 0 | Retry at 5% of duration; if still fails, abort |
 | SAM3 init failure (Phase 3) | constructor exception | Degrade to Phase 2 mode for the whole run |
 | SAM3 no detection on initial frame | empty masks | Degrade to Phase 2 mode for the whole run |
 | Gemma bad JSON (Phase 2/3) | schema validation fails | Up to 3 retries with stricter prompt; final fallback `phase="unknown"`, `vlm_confidence=0` |
-| `runs/<canonical_name>/` already exists with matching `run_hash` | pre-write check | **Default: reuse** (no-op, exit success). Replace only if `--force` per §6.5. Canonical name = `<episode_id>__<run_hash[:12]>` (§4.1). |
+| `runs/<canonical_name>/` already exists with matching `run_hash` | Detected either at the lock-free pre-write check (§4.4 step 2) or at the locked reuse re-check (§4.4 step 6) | **Default: reuse** (no-op, exit success — at step 2 directly, at step 6 also `rm -rf` the local tmp and self-heal index if needed). Replace only if `--force` per §6.5. Canonical name = `<episode_id>__<run_hash[:12]>` (§4.1). |
 | `runs/<canonical_name>/` already exists with **different** `run_hash` (prefix collision) | pre-write check | Extend suffix to `[:16]` and write to `runs/<episode_id>__<run_hash[:16]>/` (§4.1 collision handling). |
 | `runs/index.json` lock contention | another CLI process holds the lock | Wait up to 30 s with exponential backoff; if still held, abort with the holder's PID if discoverable |
 

@@ -48,7 +48,16 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
 
-## Status (2026-04-25, after user review round 2 — spec re-ready)
+## Status (2026-04-26, after user review round 3 — spec approved, moving to writing-plans)
+
+User review round 3 flagged 1 必須 + 1 強く推奨 + 1 任意:
+- (必須) §11 stale-scavenger row was using the old "lock-holder" detection wording. Updated to the `.writer.json` contract.
+- (強く推奨) Two CLIs could both pass the lock-free reuse short-circuit (§4.4 step 2), do heavy compute, and then race at lock acquisition. Added a **locked reuse re-check** as §4.4 step 6 so the second publisher reuses the first's output instead of overwriting.
+- (任意) `.writer.json` lifecycle clarified: lives only in `*.tmp.<pid>/` and `*.bak.<pid>/`; explicitly removed before finalization so canonical run dirs are clean of writer-only metadata.
+
+Codex round 14-15 verdict: "ready for user review". User approved verbally ("Go でよい") subject to the above 3 fixes — all applied. Next: invoke `superpowers:writing-plans` for Phase 1 implementation plan.
+
+## Status (2026-04-25, after user review round 2 — historical)
 
 User review round 2 flagged 5 actionable issues (3 必須 + 2 準必須) + 4 small fixes. All folded in:
 
