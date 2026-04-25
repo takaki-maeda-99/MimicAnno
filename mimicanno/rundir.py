@@ -72,5 +72,7 @@ def is_collision(
 
 
 def find_run_dirs_for_episode(runs_root: Path, episode_id: str) -> list[Path]:
+    if not runs_root.exists():
+        return []
     prefix = f"{episode_id}{CANONICAL_SEPARATOR}"
     return sorted(p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(prefix))

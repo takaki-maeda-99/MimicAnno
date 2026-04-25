@@ -74,3 +74,8 @@ class TestCollision:
 def test_extend_collision_suffix():
     h = "sha256:" + "abcdef0123456789" + "0" * 48
     assert extend_collision_suffix("ep0", run_hash=h) == "ep0__abcdef0123456789"
+
+
+def test_find_run_dirs_returns_empty_when_runs_root_missing(tmp_path: Path):
+    missing = tmp_path / "does_not_exist"
+    assert find_run_dirs_for_episode(missing, "ep0") == []
