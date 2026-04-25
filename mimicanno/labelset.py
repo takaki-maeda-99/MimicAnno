@@ -38,10 +38,10 @@ class LabelSet:
         return {lbl.id for lbl in self.labels}
 
 
-def default_labels_path(task_type: str = "manipulation") -> str:
+def default_labels_path(task_type: str = "manipulation") -> Path:
     """Return the absolute path of the bundled label YAML for ``task_type``."""
     res = pkg_files("mimicanno.configs.labels").joinpath(f"{task_type}.yaml")
-    return str(res)
+    return Path(str(res))
 
 
 def load_label_set(path: Path) -> LabelSet:
@@ -65,6 +65,10 @@ def load_label_set(path: Path) -> LabelSet:
     labels_raw = raw.get("labels") or []
     labels: list[Label] = []
     for item in labels_raw:
+        if not isinstance(item, dict):
+            raise LabelSetError(f"{path}: label entry is not a mapping: {item!r}")
+        if "id" not in item:
+            raise LabelSetError(f"{path}: label entry missing required 'id' field: {item!r}")
         lid = item["id"]
         if lid in RESERVED_PHASES:
             raise LabelSetError(

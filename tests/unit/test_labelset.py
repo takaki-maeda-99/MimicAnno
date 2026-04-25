@@ -66,3 +66,34 @@ class TestSchemaValidation:
         )
         with pytest.raises(LabelSetError, match="schema_version"):
             load_label_set(p)
+
+
+class TestErrorHandling:
+    def test_missing_id_raises(self, tmp_path: Path):
+        bad = tmp_path / "no_id.yaml"
+        bad.write_text(
+            "schema_version: '0.1.0'\n"
+            "task_type: x\n"
+            "labels:\n"
+            "  - verbs: [grasp]\n"
+            "    requires_object: true\n",
+        )
+        with pytest.raises(LabelSetError, match="missing required 'id'"):
+            load_label_set(bad)
+
+    def test_non_mapping_label_entry_raises(self, tmp_path: Path):
+        bad = tmp_path / "scalar_label.yaml"
+        bad.write_text(
+            "schema_version: '0.1.0'\n"
+            "task_type: x\n"
+            "labels:\n"
+            "  - just_a_string\n",
+        )
+        with pytest.raises(LabelSetError, match="label entry is not a mapping"):
+            load_label_set(bad)
+
+
+def test_default_labels_path_returns_path():
+    p = default_labels_path("manipulation")
+    assert isinstance(p, Path)
+    assert p.exists()
