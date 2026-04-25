@@ -45,6 +45,17 @@ class TestVelocityValley:
         # Valley centered around frame 60
         assert any(50 <= e.frame <= 70 for e in events)
 
+    def test_valley_at_eof_is_emitted(self):
+        """A valley that extends to the last frame must still emit an event."""
+        n = 60
+        fps = 30.0
+        # First half above threshold, second half below.
+        v = np.concatenate([np.full(30, 0.20), np.full(30, 0.01)])
+        events = detect_eef_velocity_valley(
+            v, fps=fps, valley_threshold=0.05, min_valley_sec=0.10,
+        )
+        assert any(e.frame >= 30 for e in events)
+
 
 class TestAccelPeak:
     def test_peak_above_threshold(self):

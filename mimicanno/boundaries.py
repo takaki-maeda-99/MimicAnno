@@ -79,6 +79,18 @@ def detect_eef_velocity_valley(
                     source="eef_velocity_valley",
                     source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
                 ))
+    if in_valley:
+        length = len(below) - start
+        if length >= min_frames:
+            local = eef_velocity[start:]
+            argmin = int(np.argmin(local))
+            vmin = float(local[argmin])
+            events.append(RawEvent(
+                frame=int(start + argmin),
+                time=(start + argmin) / fps,
+                source="eef_velocity_valley",
+                source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
+            ))
     return events
 
 
@@ -135,10 +147,16 @@ def detect_action_norm_change(
 
 
 def _local_maxima(x: np.ndarray, *, threshold: float) -> list[int]:
-    """Strict-greater-than-neighbors local maxima above ``threshold``.
+    """Local maxima of ``x`` above ``threshold``, including plateau members.
 
-    The naive implementation is O(n) and adequate for Phase 1 — episode
-    lengths are O(10^3) frames; we don't need scipy.signal.find_peaks here.
+    Emits every index ``i`` where ``x[i] >= x[i-1]`` AND ``x[i] >= x[i+1]``
+    (non-strict). A flat plateau therefore emits all its constituent
+    indices; downstream ``integrated_candidates`` merging collapses
+    co-located events within ``merge_window_sec`` into a single candidate
+    via the max-merge per-source rule.
+
+    Naive O(n) implementation is adequate for Phase 1 (episode length
+    O(10^3) frames); we don't need scipy.signal.find_peaks.
     """
     out: list[int] = []
     for i in range(len(x)):
@@ -165,8 +183,16 @@ def integrated_candidates(
 ) -> list[BoundaryCandidate]:
     """Merge events within ``merge_window_sec`` and return promoted candidates.
 
-    Same-source merge uses ``max(source_score)`` (§5.3 — explicitly NOT last-wins).
-    Disabled sources contribute 0; weights are NOT renormalized.
+    Merge policy is **sliding-anchor**: each event is compared against the
+    previous event in the current group. Long chains of closely-spaced events
+    therefore collapse into a single candidate even when the chain's total
+    span exceeds ``merge_window_sec``. This matches §5.3's "merge_window_sec"
+    semantics — co-located bursts of detector activity (e.g., a gripper
+    transition that fires across multiple smoothed-signal samples) become
+    one boundary, not many.
+
+    Same-source merge uses ``max(source_score)`` (§5.3 — explicitly NOT
+    last-wins). Disabled sources contribute 0; weights are NOT renormalized.
     """
     sorted_events = sorted(events, key=lambda e: (e.time, e.source))
     if not sorted_events:
