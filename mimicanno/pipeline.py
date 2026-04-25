@@ -64,6 +64,15 @@ from mimicanno.writers import (
     write_signals_json,
 )
 
+# Maps BoundaryConfig.weights short keys (spec §4.3 manifest example)
+# to the detector source names emitted by RawEvent.source in boundaries.py.
+_WEIGHT_KEY_TO_SOURCE: dict[str, str] = {
+    "gripper": "gripper_transition",
+    "velocity": "eef_velocity_valley",
+    "acceleration": "eef_acceleration_peak",
+    "action": "action_norm_change",
+}
+
 
 @dataclass(slots=True)
 class AnnotateRequest:
@@ -216,11 +225,22 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             )
         )
 
+    # Translate BoundaryConfig.weights short keys to detector source names.
+    # e.g. {"gripper": 0.5} → {"gripper_transition": 0.5}
+    unknown_keys = [k for k in bcfg.weights if k not in _WEIGHT_KEY_TO_SOURCE]
+    if unknown_keys:
+        raise MimicAnnoError(
+            "config.unknown_weight_key",
+            f"BoundaryConfig.weights contains unknown key(s): {unknown_keys!r}; "
+            f"expected keys: {list(_WEIGHT_KEY_TO_SOURCE)!r}",
+            {"unknown_keys": unknown_keys},
+        )
+    detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in bcfg.weights.items()}
     candidates = integrated_candidates(
         events,
         fps=fps,
         merge_window_sec=bcfg.merge_window_sec,
-        weights=bcfg.weights,
+        weights=detector_weights,
         score_threshold=bcfg.score_threshold,
     )
 
