@@ -66,3 +66,16 @@ def test_aloha_eef_velocity_is_finite_and_nonneg():
     assert v.shape == (30,)
     assert np.isfinite(v).all()
     assert (v >= 0).all()
+
+
+def test_aloha_eef_velocity_handles_single_frame():
+    """1-frame episode: velocity is undefined; return zeros (length-T) without crashing."""
+    table = pa.table({
+        "observation.state": pa.array([[0.0] * 14]),
+        "action": pa.array([[0.0] * 14]),
+        "timestamp": pa.array([0.0]),
+    })
+    v = AlohaAdapter().eef_velocity(table)
+    assert v is not None
+    assert v.shape == (1,)
+    assert (v == 0.0).all()

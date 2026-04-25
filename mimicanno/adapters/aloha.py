@@ -38,11 +38,15 @@ class AlohaAdapter:
         pose = self.eef_pose(df)
         if pose is None:
             return None
+        if len(pose) < 2:
+            # Single-frame (or empty) episode: velocity is undefined; return zeros.
+            return np.zeros(len(pose), dtype=np.float64)
         ts = self._timestamps(df)
-        # Backward-difference magnitude. dt[0] handled by replicating dt[1].
         dt = np.diff(ts)
         if (dt <= 0).any():
             raise ValueError("non-monotonic timestamps in parquet")
         d_xyz = np.diff(pose[:, :3], axis=0)
         speed = np.linalg.norm(d_xyz, axis=1) / dt
+        # speed[0] (interval [frame0, frame1]) is replicated so frame 0 gets
+        # a non-zero velocity estimate instead of a length-T-1 array.
         return np.concatenate([[speed[0]], speed]).astype(np.float64)
