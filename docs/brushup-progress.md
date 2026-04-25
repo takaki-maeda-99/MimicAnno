@@ -48,7 +48,28 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
 
-## Status (2026-04-25, after user review round 1 — spec re-ready)
+## Status (2026-04-25, after user review round 2 — spec re-ready)
+
+User review round 2 flagged 5 actionable issues (3 必須 + 2 準必須) + 4 small fixes. All folded in:
+
+Required:
+- `config_hash` now covers `target_phase` + `model_config` (vlm/sam3 + checkpoints); `input_hash` now covers `robot_adapter_config_sha256` for GenericAdapter. Phase 1 vs 2 vs 3 produce different `run_hash`es.
+- Scavenger no longer judges by lock holdership. Each `.tmp` / `.bak` carries `.writer.json` (pid, pid_start_time, canonical_name, kind, claimed_at). Deletion requires (PID gone OR start_time mismatch) AND age > threshold. Live writers are safe.
+- Run-dir replacement: default is **reuse** (no-op when run_hash matches); `--force` triggers two-rename. Atomicity wording weakened to "brief missing-directory window between the two renames"; viewer retries.
+
+Quasi-required:
+- `canonical_name` suffix length 8 → 12 hex. Prefix collision extends to 16. Index upsert keys on full `run_hash` (full sha256 added to index entry).
+- §6.6 consumer-capability check changed from `>=` to set membership.
+
+Small:
+- §5.3 same-source merge uses `max`, not last-wins.
+- "gripper-anchored" → "gripper-biased" with explicit note that multiple non-gripper sources can co-promote.
+- Disabled sources contribute 0; weights NOT renormalized — explicit.
+- §15 exit criteria renumbered monotonically (1–17).
+
+Codex rounds 11–13 verdict: "ready for user review".
+
+## Status (2026-04-25, after user review round 1 — historical)
 
 User review round 1 (the human reviewer) flagged 10 concrete issues (6 必須 + 4 推奨):
 1. canonical_name was config_hash-only → input/task collisions. Fixed by introducing `run_hash = sha256(config_hash + input_hash)` and using `run_hash[:8]` as the directory suffix; `config_hash` and `input_hash` are recorded separately in manifest/index for filtering.
