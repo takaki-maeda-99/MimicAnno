@@ -90,6 +90,17 @@ def interpolate_short_nan_spans(
                 f"(>{max_span_sec}s @ {fps}fps) starting at frame {span_start}",
             )
     # All spans are short — interpolate.
+    # All-NaN: cannot interpolate without any anchor.
+    if not (~isnan).any():
+        raise ParquetLoadError("column is entirely NaN; cannot interpolate")
+    if isnan[0]:
+        raise ParquetLoadError(
+            f"NaN span starts at frame 0 (no left anchor for interpolation)",
+        )
+    if isnan[-1]:
+        raise ParquetLoadError(
+            f"NaN span extends to last frame (no right anchor for interpolation)",
+        )
     idx = np.arange(len(out))
     out[isnan] = np.interp(idx[isnan], idx[~isnan], out[~isnan])
     return out

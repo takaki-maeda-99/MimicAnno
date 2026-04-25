@@ -84,3 +84,24 @@ class TestInterpolateShortNan:
         x = np.concatenate([np.arange(10.0), np.full(30, np.nan), np.arange(10.0) + 40])
         with pytest.raises(ParquetLoadError, match="NaN span"):
             interpolate_short_nan_spans(x, fps=30.0, max_span_sec=0.5)
+
+    def test_all_nan_raises(self):
+        x = np.array([np.nan, np.nan, np.nan])
+        with pytest.raises(ParquetLoadError, match="entirely NaN"):
+            interpolate_short_nan_spans(x, fps=30.0, max_span_sec=0.5)
+
+    def test_leading_nan_raises(self):
+        x = np.array([np.nan, np.nan, 1.0, 2.0])
+        with pytest.raises(ParquetLoadError, match="frame 0"):
+            interpolate_short_nan_spans(x, fps=30.0, max_span_sec=0.5)
+
+    def test_trailing_nan_raises(self):
+        x = np.array([1.0, 2.0, np.nan, np.nan])
+        with pytest.raises(ParquetLoadError, match="last frame"):
+            interpolate_short_nan_spans(x, fps=30.0, max_span_sec=0.5)
+
+    def test_single_frame_nan_filled(self):
+        x = np.array([1.0, np.nan, 3.0])
+        out = interpolate_short_nan_spans(x, fps=30.0, max_span_sec=0.5)
+        assert np.isfinite(out).all()
+        assert out[1] == pytest.approx(2.0, abs=1e-6)
