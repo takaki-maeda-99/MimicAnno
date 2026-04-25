@@ -15,4 +15,4 @@ def test_write_error_json() -> None:
     buf = io.StringIO()
     write_error_json(err, stream=buf)
     payload = json.loads(buf.getvalue())
-    assert payload == {"code": "E002", "message": "bad input", "context": {"key": "value"}}
+    assert payload == {"error_code": "E002", "message": "bad input", "context": {"key": "value"}}

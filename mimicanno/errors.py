@@ -1,4 +1,4 @@
-"""Structured error type for MimicAno."""
+"""Structured error type for CLI aborts (spec §11)."""
 from __future__ import annotations
 
 import json
@@ -19,7 +19,11 @@ class MimicAnnoError(Exception):
 
 def write_error_json(err: MimicAnnoError, *, stream: TextIO | None = None) -> None:
     """Serialise *err* as JSON to *stream* (default: ``sys.stderr``)."""
-    if stream is None:
-        stream = sys.stderr
-    payload = {"code": err.code, "message": err.message, "context": err.context}
-    json.dump(payload, stream)
+    sink = stream or sys.stderr
+    sink.write(json.dumps({
+        "error_code": err.code,
+        "message": err.message,
+        "context": err.context,
+    }))
+    sink.write("\n")
+    sink.flush()

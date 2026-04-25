@@ -121,7 +121,10 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     # 3) Probe video and load parquet.
     probe = probe_video(req.video)
-    loaded = load_episode_parquet(req.parquet)
+    try:
+        loaded = load_episode_parquet(req.parquet)
+    except ParquetLoadError as e:
+        raise MimicAnnoError("parquet.load_failed", str(e), {"path": str(req.parquet)}) from e
 
     inputs = InputBundle(
         video_sha256=probe.sha256,

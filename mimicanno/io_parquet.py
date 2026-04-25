@@ -28,6 +28,8 @@ OPTIONAL_COLUMNS: tuple[str, ...] = ("action", "frame_index", "episode_index")
 
 
 def load_episode_parquet(path: Path) -> LoadedEpisode:
+    if not path.exists():
+        raise ParquetLoadError(f"parquet file not found: {path}")
     table = pq.read_table(path)
     missing = [c for c in REQUIRED_COLUMNS if c not in table.column_names]
     if missing:
