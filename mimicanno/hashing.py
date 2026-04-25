@@ -44,7 +44,8 @@ def _validate_no_nan_inf(obj: Any) -> None:
         if math.isinf(obj):
             raise ValueError("Infinity is not allowed in canonical JSON")
     elif isinstance(obj, dict):
-        for v in obj.values():
+        for k, v in obj.items():
+            _validate_no_nan_inf(k)
             _validate_no_nan_inf(v)
     elif isinstance(obj, (list, tuple)):
         for item in obj:

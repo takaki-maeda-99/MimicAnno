@@ -38,6 +38,10 @@ class TestCanonicalJson:
         with pytest.raises(ValueError, match="NaN"):
             canonical_json({"x": float("nan")})
 
+    def test_rejects_nan_in_dict_key(self):
+        with pytest.raises(ValueError, match="NaN"):
+            canonical_json({float("nan"): 1})
+
     def test_rejects_infinity(self):
         with pytest.raises(ValueError, match="Infinity"):
             canonical_json({"x": float("inf")})
