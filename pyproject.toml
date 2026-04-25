@@ -24,6 +24,7 @@ mimicanno = "mimicanno.cli:app"
 dev = [
   "pytest>=8",
   "pytest-xdist>=3.5",
+  "pytest-timeout>=2.3",
   "ruff>=0.4",
   "mypy>=1.10",
 ]
