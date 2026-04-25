@@ -45,3 +45,28 @@ class TestDownsample:
         out = downsample_for_viewer(ch, target_hz=30.0)
         assert out.values.size == 60
         assert out.dt_sec == pytest.approx(1.0 / 30.0)
+
+
+class TestSmoothEdgeCases:
+    def test_zero_sigma_returns_copy(self):
+        x = np.array([1.0, 2.0, 3.0])
+        out = gaussian_smooth_1d(x, sigma=0.0)
+        assert np.array_equal(out, x)
+        assert out is not x  # copy, not the same object
+
+    def test_nan_input_raises(self):
+        x = np.array([1.0, float("nan"), 3.0])
+        with pytest.raises(ValueError, match="NaN"):
+            gaussian_smooth_1d(x, sigma=1.0)
+
+
+class TestDownsampleEdgeCases:
+    def test_zero_dt_raises(self):
+        ch = SignalChannel(name="x", unit="raw", values=np.array([1.0]), dt_sec=0.0)
+        with pytest.raises(ValueError, match="dt_sec"):
+            downsample_for_viewer(ch, target_hz=30.0)
+
+    def test_zero_target_hz_raises(self):
+        ch = SignalChannel(name="x", unit="raw", values=np.array([1.0]), dt_sec=1.0 / 60.0)
+        with pytest.raises(ValueError, match="target_hz"):
+            downsample_for_viewer(ch, target_hz=0.0)
