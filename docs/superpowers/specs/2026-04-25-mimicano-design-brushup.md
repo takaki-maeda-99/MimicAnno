@@ -62,7 +62,7 @@ Each phase produces a runnable, testable artifact. Phase N+1 may *change* (not a
 
 ### Phase 1 deliverables (the focus of this brush-up)
 
-- `mimicanno annotate` CLI that ingests a LeRobot episode and writes a **run directory** under `<repo>/runs/<episode_id>/`.
+- `mimicanno annotate` CLI that ingests a LeRobot episode and writes a **run directory** under `<repo>/runs/<canonical_name>/` (canonical name defined in §4.1).
 - `boundaries.json` with **integrated-score boundary candidates** (signals only).
 - `signals.json` for viewer waveform display.
 - Skeleton `annotation.json` with one segment per Phase 1 candidate-bracketed clip, `phase="unlabeled"`.
@@ -94,22 +94,31 @@ The Phase 1 viewer is a static React/Vite app reading a self-contained, versione
 
 ### 4.1 Run directory layout
 
-CLI writes to `<repo>/runs/<episode_id>/` (NOT under `frontend/public/`):
+CLI writes to `<repo>/runs/<canonical_name>/` (NOT under `frontend/public/`), where the **canonical name** is the deterministic key:
+
+```
+canonical_name := f"{episode_id}__{config_hash[:8]}"
+```
+
+Two runs with different `(episode_id, config_hash)` always have distinct canonical names; re-running with the same `(episode_id, config_hash)` reuses the same canonical name and therefore the same directory (per §6.5). All other paths in this spec — the rename protocol, the index entries, the routing rules — assume this canonical name.
 
 ```
 <repo>/
-  runs/                       # gitignored; CLI output root
-    episode_000/
+  runs/                              # gitignored; CLI output root
+    episode_000__abc12345/           # canonical name
       manifest.json
       annotation.json
       boundaries.json
       signals.json
-      video.mp4               # default: copied. Symlink only with --link-video.
-    episode_001/
+      video.mp4                      # default: copied. Symlink only with --link-video.
+    episode_000__def67890/           # different config_hash → distinct directory
       ...
-    index.json                # run discovery (auto-maintained by CLI)
+    episode_001__abc12345/
+      ...
+    index.json                       # run discovery (auto-maintained by CLI)
+    index.json.lock                  # advisory file lock (§4.4)
   frontend/
-    vite.config.ts            # mounts ../runs at /runs/* during `pnpm dev`
+    vite.config.ts                   # mounts ../runs at /runs/* during `pnpm dev`
     src/
       ...
 ```
@@ -163,9 +172,7 @@ CLI writes to `<repo>/runs/<episode_id>/` (NOT under `frontend/public/`):
     "manifest":   1,
     "annotation": 1,
     "boundaries": 1,
-    "signals":    1,
-    "labels":     1,
-    "index":      1
+    "signals":    1
   },
   "artifacts": [
     { "role": "video",       "url": "video.mp4",       "content_type": "video/mp4" },
@@ -201,9 +208,23 @@ Auto-maintained by the CLI on every successful run:
 }
 ```
 
-Viewer behavior:
-- `?run=<id>` → use `manifest_url` from `index.json` to resolve; fetch the manifest.
-- no `?run` → fetch `/runs/index.json`, render run list, user picks one.
+**URL resolution rule.** All `manifest_url` and `artifact.url` fields are **relative to the directory containing the file that emitted them**:
+
+- `runs/index.json` → its `manifest_url` resolves against `runs/`. In Phase 1 the viewer fetches `/runs/<manifest_url>` (e.g. `/runs/episode_000__abc12345/manifest.json`).
+- `<canonical_name>/manifest.json` → its `artifacts[].url` resolves against `runs/<canonical_name>/`. The viewer fetches `/runs/<canonical_name>/<artifact.url>`.
+- In Phase 5, the backend serves the same JSON shapes from `/api/runs/index.json` and `/api/runs/<canonical_name>/manifest.json`. The same relative-resolution rule applies — the viewer picks up `/api/runs/...` automatically because it resolves against the URL it just fetched.
+
+This single rule keeps relative paths in the JSON and leaves URL composition to the consumer's URL-resolver. No hard-coded `/runs/` or `/api/runs/` strings in the viewer.
+
+Viewer routing rules:
+
+| URL | Behavior |
+|---|---|
+| no params | Fetch `runs/index.json`, render the run list (one row per index entry, newest `generated_at` first), user picks one. |
+| `?run=<id>` | Filter index entries by `episode_id == <id>`. **0 matches** → error page "no such run" with a back link to the list. **1 match** → resolve `manifest_url` against the index URL and fetch. **>1 matches** → load the entry with the most recent `generated_at` AND show a non-modal banner "N config variants exist for this episode" with a chooser of `(config_hash_short, generated_at, task_text)`. |
+| `?run=<id>&hash=<config_hash_short>` | Look up the exact `(episode_id, config_hash_short)` row. Match → load. No match → error page. |
+
+The viewer never enumerates the `runs/` directory itself; it relies on `index.json`. This keeps the static-vs-backend story symmetric (Phase 5 just swaps `index.json` for `GET /api/runs/index.json` with the same shape).
 
 **Concurrency on update.** The CLI updates `index.json` via:
 1. Acquire `runs/index.json.lock` (POSIX `fcntl.flock`, exclusive; on Windows `msvcrt.locking`).
@@ -233,7 +254,7 @@ cd frontend && pnpm dev
 
 Notes:
 - `--out` is reserved for advanced override of the run-root path; the default is `<repo>/runs/`. Users SHOULD NOT pass `--out runs/episode_000` directly because the directory name is derived from `(episode_id, config_hash)` to enforce one-run-per-config-hash.
-- `?run=<id>` disambiguates by `episode_id`. If multiple runs exist for the same episode (different `config_hash`), the viewer surfaces a sub-picker.
+- `?run=<id>` and `?run=<id>&hash=<config_hash_short>` are defined in §4.4. `?run=<id>` alone with multiple config variants picks the most recent and shows a chooser banner.
 
 ### 4.6 Video materialization policy
 
@@ -249,7 +270,7 @@ When the backend appears in Phase 5, the contract migrates to HTTP without UI re
 
 - `manifest.json` shape unchanged; just delivered over HTTP.
 - `artifacts[i].url` becomes a backend-issued URL (signed S3, gateway path, etc.).
-- `runs/index.json` becomes `GET /api/runs`.
+- `runs/index.json` becomes `GET /api/runs/index.json` (same JSON shape as the static file).
 - Viewer code paths are unchanged because they already only touch `manifest.artifact(role).url` and `Manifest`-typed objects.
 
 ---
@@ -491,37 +512,47 @@ Geometric mean penalizes asymmetry (high VLM confidence over a flaky boundary st
 
 - **JSON sidecar inside the run directory.** Source video and parquet are never modified.
 - One run per `(episode_id, config_hash)` pair. Phase 1 supports **POSIX filesystems**; Windows behaves correctly but with weaker atomicity guarantees (see below).
-- Re-running with different config writes to `runs/<id>__<config_hash[:8]>/`. `index.json` lists both.
+- Re-running with a different config produces a different canonical name (different `config_hash`) and therefore a distinct directory. `index.json` lists both.
 
 **POSIX run-directory replacement (atomic from a reader's perspective):**
 
-1. Write all artifacts to `runs/<id>.tmp.<pid>/`.
-2. Compute final name `runs/<id>__<config_hash[:8]>/`.
-3. If a previous run dir exists, rename it to `runs/<id>.bak.<pid>/` (atomic).
-4. Rename `runs/<id>.tmp.<pid>/` → `runs/<id>__<config_hash[:8]>/` (atomic).
-5. `rm -rf runs/<id>.bak.<pid>/`.
+Let `name = f"{episode_id}__{config_hash[:8]}"` be the canonical name (§4.1). All paths below use this exact `name`.
 
-Steps 3 and 4 are each atomic on POSIX. A reader holding a path obtained from `runs/index.json` either sees the old run or the new run, never a mix.
+1. Write all artifacts to `runs/<name>.tmp.<pid>/`.
+2. If `runs/<name>/` already exists (same-config re-run), rename it to `runs/<name>.bak.<pid>/` (atomic).
+3. Rename `runs/<name>.tmp.<pid>/` → `runs/<name>/` (atomic).
+4. `rm -rf runs/<name>.bak.<pid>/`.
+
+Steps 2 and 3 are each atomic on POSIX. A reader holding a path obtained from `runs/index.json` either sees the old run or the new run at `runs/<name>/`, never a mix. Because the canonical name is fully qualified, two simultaneously-running CLIs targeting different `config_hash`es never collide on the same temp/backup paths.
+
+**Crash recovery / startup scavenger.** Because steps 1, 2, and 4 are not transactional, a CLI crash may leave `runs/<name>.tmp.<pid>/` and/or `runs/<name>.bak.<pid>/` directories on disk. On startup, the CLI scavenges:
+
+- For every directory matching `runs/*.tmp.<pid>/` or `runs/*.bak.<pid>/`, check whether `<pid>` is a live process holding the index lock (§4.4). If not, `rm -rf` it.
+- The scavenger runs after acquiring `runs/index.json.lock` so it does not race with another CLI's mid-write state.
+- Scavenger actions are logged with the canonical name and reason.
+
+`runs/index.json` is updated only after step 3 succeeds, so a stale `.bak` never causes index drift.
 
 **Windows behavior:** `os.replace` is used for files but **non-empty directory replacement is not atomic** on Windows. A reader could observe a transient state. This is acknowledged and accepted for Phase 1 (single-developer, single-CLI workflows). Phase 5's backend will own this concern.
 
 ### 6.6 Schema versioning rule
 
-Each artifact carries its own `schema_version` (semver `"MAJOR.MINOR.PATCH"`). Versions are **independent across artifacts** — bumping `signals.json` does not require bumping `manifest.json`.
+Each schema carries its own `schema_version` (semver `"MAJOR.MINOR.PATCH"`). Versions are **independent** — bumping `signals.json` does not require bumping `manifest.json` or any other schema.
 
 **Compatibility check:** the viewer (and any consumer) parses each artifact and asserts `consumer_max_major >= artifact_major`. Mismatch → fail loudly with both versions in the error message. MINOR/PATCH differences are ignored at parse time; consumers ignore unknown fields and tolerate missing optional fields within the same MAJOR.
 
-`manifest.json` carries an explicit `compat` block listing the MAJOR versions it knows how to consume:
+`manifest.json` carries a `compat` block whose scope is **only the in-run artifacts** (the things rooted under this manifest's directory). It declares the MAJOR version that the producer actually emitted for each:
 
 ```jsonc
 "compat": {
-  "annotation":  1,
-  "boundaries":  1,
-  "signals":     1,
-  "labels":      1,
-  "index":       1
+  "manifest":   1,
+  "annotation": 1,
+  "boundaries": 1,
+  "signals":    1
 }
 ```
+
+External schemas — `runs/index.json` (run-root) and label YAMLs (`mimicanno/configs/labels/*.yaml`, package-level) — are **not** in `compat`. They each carry their own `schema_version` and consumers that load them perform an independent MAJOR compare at the point of load. This keeps `compat` from leaking package-level concerns into a run-level contract.
 
 The CLI populates `compat` based on the artifacts it just emitted. The viewer compares each artifact's MAJOR against the corresponding `compat` entry, not its own hardcoded value, so a viewer two versions ahead of an old run can still display it correctly if `compat` matches what that viewer supports.
 
@@ -764,12 +795,13 @@ viterbi_enabled: bool = True   # Phase 4 default
 | Robot-state NaN spans > 0.5 s | post-load NaN scan | Abort with frame range |
 | Robot-state NaN spans ≤ 0.5 s | post-load NaN scan | Linear interpolate, log warning |
 | Empty/zero `action` column | column missing or `action_norm == 0` for ≥ 95% of frames | Drop the `action_norm_change` detector; continue. Record in `pipeline_params.boundary.disabled_sources`. Future-emitted candidates simply do not include `action_norm_change` in their `sources`. |
-| EEF columns missing on adapter that doesn't expose them | `eef_pose()` and `eef_velocity()` both return `None` | Drop `eef_velocity_valley` and `eef_acceleration_peak`; record in `pipeline_params.boundary.disabled_sources`. Continue if at least `gripper_transition` is still active. Abort if all detectors are disabled. |
+| EEF columns missing on adapter that doesn't expose them | `eef_pose()` and `eef_velocity()` both return `None` | Drop `eef_velocity_valley` and `eef_acceleration_peak`; record in `pipeline_params.boundary.disabled_sources`. Continue. (`gripper_transition` is always available because `gripper_signal()` is mandatory in §7.2, so the pipeline is never starved of detectors.) |
+| Stale `*.tmp.<pid>/` or `*.bak.<pid>/` from a prior crash | startup scavenger sees PID is no longer the index-lock holder | `rm -rf` the stale directory; log the run name and reason (§6.5 "Crash recovery"). |
 | Initial frame extraction fails (Phase 3) | ffmpeg fails on frame 0 | Retry at 5% of duration; if still fails, abort |
 | SAM3 init failure (Phase 3) | constructor exception | Degrade to Phase 2 mode for the whole run |
 | SAM3 no detection on initial frame | empty masks | Degrade to Phase 2 mode for the whole run |
 | Gemma bad JSON (Phase 2/3) | schema validation fails | Up to 3 retries with stricter prompt; final fallback `phase="unknown"`, `vlm_confidence=0` |
-| `runs/<id>__<hash>/` already exists | pre-write check | Replace per §6.5 (POSIX atomic via two renames; non-atomic on Windows) |
+| `runs/<canonical_name>/` already exists | pre-write check | Replace per §6.5 (POSIX atomic via two renames; non-atomic on Windows). Canonical name = `<episode_id>__<config_hash[:8]>`. |
 | `runs/index.json` lock contention | another CLI process holds the lock | Wait up to 30 s with exponential backoff; if still held, abort with the holder's PID if discoverable |
 
 Every abort writes a structured error JSON to stderr (`{"error_code": "...", "message": "...", "context": {...}}`) and exits non-zero.
@@ -851,7 +883,13 @@ Targets are split into **compute path** (CPU work the pipeline must do) and **I/
 
 `mimicanno` exposes `annotate_episode(...)` and a typed `AnnotationResult`. MimicRec's Replay page consumes the run directory directly (read `manifest.json`), or invokes a Phase 5 backend.
 
-The backend (Phase 5) wraps the same run-directory contract over HTTP: `GET /api/runs`, `GET /api/runs/<id>/manifest.json`, `GET /api/runs/<id>/<artifact>` (and editing endpoints). The viewer code is unchanged because it consumes `Manifest`-typed objects and `artifact(role).url`.
+The backend (Phase 5) wraps the same run-directory contract over HTTP. Canonical endpoints (chosen so the relative-path resolution rule from §4.4 carries over unchanged):
+
+- `GET /api/runs/index.json` — same shape as the static `runs/index.json`.
+- `GET /api/runs/<canonical_name>/manifest.json` — same shape as the static manifest.
+- `GET /api/runs/<canonical_name>/<artifact>` — serves the artifact bytes.
+
+Editing endpoints are added in Phase 5 and are out of scope here. The viewer code is unchanged because it consumes `Manifest`-typed objects and `artifact(role).url`, both resolved relatively.
 
 ---
 
@@ -866,6 +904,8 @@ The backend (Phase 5) wraps the same run-directory contract over HTTP: `GET /api
 6. Re-running with the same config and same inputs produces a byte-equivalent `manifest.json` (modulo `generated_at`) and reuses the same run directory.
 7. On an Aloha episode (Cartesian EEF available) the run uses all four detectors. On a Koch episode (joint-only) the run completes with `pipeline_params.boundary.disabled_sources` listing the EEF-based detectors and `gripper_transition` still firing.
 8. Phase 1 viewer correctly aligns boundary markers to waveforms when channels have different `dt_sec` (§5.5).
+9. With two runs of the same episode under different configs in `index.json`, `?run=<id>` shows the chooser banner; `?run=<id>&hash=<short>` loads the exact one (§4.4).
+10. Crashing the CLI mid-write (after the `.tmp` is created, before the rename) leaves the previous run readable; a subsequent CLI invocation scavenges the stale `.tmp` (§6.5).
 
 ### Phase 2
 7. VLM labels every Phase 1 clip with one of the allowed labels; rejection retries are observable in logs.

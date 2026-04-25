@@ -48,11 +48,19 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
 
-## Status (2026-04-25, autonomous mode)
+## Status (2026-04-25, autonomous mode — spec ready for user review)
 
-- Q3 answered: **B-1''** (CLI writes self-contained run directory at `<repo>/runs/<episode_id>__<config_hash[:8]>/`; React/Vite reads `manifest.json`; Vite dev server mounts `../runs/` at `/runs/*`; no backend in Phase 1).
-- Codex `gpt-5.4` reviews: round 1 on Q3 decision (5 fixes folded in: external runs root, manifest provenance fields, `runs/index.json`, typed `artifacts[]`, copy-default with symlink opt-in). Round 2 on full spec (12 fixes folded in: per-edge boundary refs, object track ID contract, Phase-1 clip bracketing algo, EEF-availability rule for joint-only robots, `signals.json` time alignment, index.json file lock, POSIX-only atomic rename, per-artifact schema versioning + `compat` block, reserved phases `unlabeled`/`unknown`, performance compute-vs-I/O split).
-- Spec draft written to `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md`. Pending: final Codex review pass + user review gate + writing-plans transition.
+- Q3 answered: **B-1''** (CLI writes self-contained run directory at `<repo>/runs/<canonical_name>/` where `canonical_name = <episode_id>__<config_hash[:8]>`; React/Vite reads `manifest.json`; Vite dev server mounts `../runs/` at `/runs/*`; no backend in Phase 1).
+- Codex `gpt-5.4` reviews completed across **7 rounds**:
+  - R1 (Q3 decision): 5 fixes — external runs root, manifest provenance, `runs/index.json`, typed `artifacts[]`, copy-default with symlink opt-in.
+  - R2 (full spec): 12 fixes — per-edge `BoundaryRef`, object track ID contract, Phase-1 clip bracketing algo, EEF rule for joint-only robots, `signals.json` time alignment, `index.json` file lock, POSIX-only atomic rename, per-artifact schema versioning + `compat`, reserved phases `unlabeled`/`unknown`, perf compute-vs-I/O split.
+  - R3: 4 fixes — `compat` scope (in-run only), `?run=` disambiguation table, stale `.bak` scavenger, dropped unreachable abort path.
+  - R4: 2 fixes — canonical_name introduced; §4.1 + §6.5 path consistency.
+  - R5: 1 fix — propagated canonical_name to remaining unsuffixed reference (line 65, §3 deliverables).
+  - R6: 1 fix — relative-URL resolution rule (`manifest_url` against index dir, `artifact.url` against manifest dir).
+  - R7: 1 fix — Phase 5 endpoint name unification (`/api/runs/index.json`).
+  - Final verdict: **"ready for user review"**.
+- Spec at `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md`. Pending: user review gate → writing-plans transition.
 
 ## Original Q3 description (kept for reference)
 
