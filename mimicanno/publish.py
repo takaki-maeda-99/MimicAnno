@@ -13,7 +13,7 @@ from typing import Callable
 
 from mimicanno.config import RUN_HASH_FALLBACK_PREFIX_LEN, run_hash_short
 from mimicanno.locks import file_lock
-from mimicanno.rundir import RunPaths, canonical_name_for, is_collision
+from mimicanno.rundir import CANONICAL_SEPARATOR, RunPaths, canonical_name_for, is_collision
 from mimicanno.runindex import IndexRow, upsert_row
 from mimicanno.scavenger import (
     WriterMetadata,
@@ -108,58 +108,74 @@ def publish(
         kind="tmp",
         claimed_at=dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
     ))
-    write_artifacts(paths.tmp)
+    try:
+        write_artifacts(paths.tmp)
 
-    # §4.4 step 4-9: locked publish.
-    lock_path = runs_root / "index.json.lock"
-    with file_lock(lock_path, timeout_sec=LOCK_TIMEOUT_SEC):
-        # Step 5: scavenger.
-        scavenge_stale_dirs(runs_root, stale_age_sec=stale_age_sec)
+        # §4.4 contract: write_artifacts must produce a manifest with the expected run_hash.
+        produced_hash = _existing_run_hash(paths.tmp)
+        if produced_hash != req.run_hash:
+            raise ValueError(
+                f"write_artifacts produced manifest.run_hash={produced_hash!r} "
+                f"but PublishRequest.run_hash={req.run_hash!r}; the contract requires they match.",
+            )
 
-        # Step 6: locked reuse re-check.
-        if not req.force:
-            existing = _existing_run_hash(paths.final)
-            if existing == req.run_hash:
-                shutil.rmtree(paths.tmp, ignore_errors=True)
-                _self_heal_index(runs_root, req, name)
-                return PublishOutcome.REUSED_LOCKED
+        # §4.4 step 4-9: locked publish.
+        lock_path = runs_root / "index.json.lock"
+        with file_lock(lock_path, timeout_sec=LOCK_TIMEOUT_SEC):
+            # Step 5: scavenger.
+            scavenge_stale_dirs(runs_root, stale_age_sec=stale_age_sec)
 
-        # Step 7: run-directory replacement (§6.5).
-        # 7a) remove .writer.json from the soon-to-be-final dir.
-        writer_md = paths.tmp / WRITER_METADATA_FILENAME
-        if writer_md.exists():
-            writer_md.unlink()
-        # 7b) backup existing final.
-        if paths.final.exists():
-            paths.final.rename(paths.bak)
-            write_writer_metadata(paths.bak, WriterMetadata(
-                pid=pid,
-                pid_start_time=current_pid_start_time(pid),
-                canonical_name=name,
-                kind="bak",
-                claimed_at=dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-            ))
-        # 7c) atomic rename tmp → final.
-        paths.tmp.rename(paths.final)
+            # Step 6: locked reuse re-check.
+            if not req.force:
+                existing = _existing_run_hash(paths.final)
+                if existing == req.run_hash:
+                    shutil.rmtree(paths.tmp, ignore_errors=True)
+                    _self_heal_index(runs_root, req, name)
+                    return PublishOutcome.REUSED_LOCKED
 
-        # Step 8: index upsert.
-        upsert_row(runs_root / "index.json", IndexRow(
-            episode_id=req.episode_id,
-            run_hash=req.run_hash,
-            run_hash_short=run_hash_short(req.run_hash, length=len(name) - len(req.episode_id) - 2),
-            config_hash_short=req.config_hash_short,
-            input_hash_short=req.input_hash_short,
-            manifest_url=f"{name}/manifest.json",
-            task_text=req.task_text,
-            pipeline_phase=req.pipeline_phase,
-            generated_at=req.generated_at,
-        ))
+            # Step 7: run-directory replacement (§6.5).
+            # 7a) remove .writer.json from the soon-to-be-final dir.
+            writer_md = paths.tmp / WRITER_METADATA_FILENAME
+            if writer_md.exists():
+                writer_md.unlink()
+            # 7b) backup existing final, then rename tmp → final, then upsert index.
+            bak_created = False
+            try:
+                if paths.final.exists():
+                    paths.final.rename(paths.bak)
+                    bak_created = True
+                    write_writer_metadata(paths.bak, WriterMetadata(
+                        pid=pid,
+                        pid_start_time=current_pid_start_time(pid),
+                        canonical_name=name,
+                        kind="bak",
+                        claimed_at=dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+                    ))
+                # 7c) atomic rename tmp → final.
+                paths.tmp.rename(paths.final)
 
-        # Step 9: rm -rf bak.
-        if paths.bak.exists():
-            shutil.rmtree(paths.bak, ignore_errors=True)
+                # Step 8: index upsert.
+                upsert_row(runs_root / "index.json", IndexRow(
+                    episode_id=req.episode_id,
+                    run_hash=req.run_hash,
+                    run_hash_short=run_hash_short(req.run_hash, length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR)),
+                    config_hash_short=req.config_hash_short,
+                    input_hash_short=req.input_hash_short,
+                    manifest_url=f"{name}/manifest.json",
+                    task_text=req.task_text,
+                    pipeline_phase=req.pipeline_phase,
+                    generated_at=req.generated_at,
+                ))
+            finally:
+                # Step 9: rm -rf bak (always clean up, even if upsert raises).
+                if bak_created and paths.bak.exists():
+                    shutil.rmtree(paths.bak, ignore_errors=True)
 
-    return PublishOutcome.PUBLISHED
+        return PublishOutcome.PUBLISHED
+    except Exception:
+        # C1: clean up any partial tmp dir before re-raising.
+        shutil.rmtree(paths.tmp, ignore_errors=True)
+        raise
 
 
 def _self_heal_index(
@@ -170,7 +186,7 @@ def _self_heal_index(
         episode_id=req.episode_id,
         run_hash=req.run_hash,
         run_hash_short=run_hash_short(
-            req.run_hash, length=len(name) - len(req.episode_id) - 2,
+            req.run_hash, length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR),
         ),
         config_hash_short=req.config_hash_short,
         input_hash_short=req.input_hash_short,

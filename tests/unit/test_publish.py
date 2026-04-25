@@ -57,3 +57,39 @@ def test_force_replaces_run_dir(tmp_path: Path):
     req.force = True
     outcome = publish(req, write_artifacts=_stub_writer)
     assert outcome == PublishOutcome.PUBLISHED
+
+
+def test_write_artifacts_failure_cleans_up_tmp(tmp_path: Path):
+    rh = "sha256:" + "9" * 64
+    req = _request(tmp_path, rh)
+
+    def _failing_writer(run_dir: Path) -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        # Don't write a manifest; the contract check will catch it as ValueError.
+        raise RuntimeError("simulated I/O error")
+
+    with pytest.raises(RuntimeError):
+        publish(req, write_artifacts=_failing_writer)
+
+    # No .tmp dir should remain.
+    leftover = list(tmp_path.glob("ep0__*.tmp.*"))
+    assert leftover == []
+
+
+def test_write_artifacts_run_hash_mismatch_raises(tmp_path: Path):
+    rh_request = "sha256:" + "9" * 64
+    rh_actual = "sha256:" + "1" * 64
+    req = _request(tmp_path, rh_request)
+
+    def _wrong_writer(run_dir: Path) -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"run_hash": rh_actual, "schema_version": "0.1.0"}),
+        )
+
+    with pytest.raises(ValueError, match="contract requires"):
+        publish(req, write_artifacts=_wrong_writer)
+
+    # And tmp is cleaned up.
+    leftover = list(tmp_path.glob("ep0__*.tmp.*"))
+    assert leftover == []
