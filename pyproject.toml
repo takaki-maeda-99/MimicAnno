@@ -31,6 +31,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["mimicanno"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"mimicanno/configs/labels/manipulation.yaml" = "mimicanno/configs/labels/manipulation.yaml"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

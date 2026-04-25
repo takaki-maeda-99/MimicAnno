@@ -1,0 +1,35 @@
+# mimicanno/configs/labels/manipulation.yaml
+schema_version: "0.1.0"
+task_type: manipulation
+labels:
+  - id: idle
+    verbs: []
+    requires_object: false
+  - id: approach_object
+    verbs: [approach, reach]
+    requires_object: true
+  - id: align_gripper
+    verbs: [align]
+    requires_object: true
+  - id: grasp_object
+    verbs: [grasp, pick, take]
+    requires_object: true
+  - id: lift_object
+    verbs: [lift]
+    requires_object: true
+  - id: move_to_target
+    verbs: [move, transport, carry]
+    requires_object: true
+  - id: align_to_target
+    verbs: [align]
+    requires_object: true
+  - id: place_object
+    verbs: [place, put]
+    requires_object: true
+  - id: release_object
+    verbs: [release]
+    requires_object: true
+  - id: retreat
+    verbs: [retreat, withdraw]
+    requires_object: false
+unknown_task_fallback: manipulation
