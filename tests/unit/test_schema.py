@@ -162,7 +162,9 @@ def _make_minimal_manifest() -> Manifest:
         task=TaskInfo(text="pick red block", version=None),
         generated_at="2026-04-26T00:00:00Z",
         generator=GeneratorInfo(
-            name="mimicanno", cli_version="0.1.0", pipeline_phase=1,
+            name="mimicanno",
+            cli_version="0.1.0",
+            pipeline_phase=1,
         ),
         config_hash="sha256:" + "0" * 64,
         input_hash="sha256:" + "1" * 64,
@@ -226,9 +228,11 @@ class TestAnnotationResult:
 class TestDeepJsonify:
     def test_tuples_become_lists(self):
         from mimicanno.schema import _deep_jsonify
+
         assert _deep_jsonify({"x": (1, 2, 3)}) == {"x": [1, 2, 3]}
 
     def test_nested_tuple_inside_dict(self):
         from mimicanno.schema import _deep_jsonify
+
         out = _deep_jsonify({"weights": ("a", ("b", "c"))})
         assert out == {"weights": ["a", ["b", "c"]]}

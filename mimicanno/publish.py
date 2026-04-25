@@ -1,28 +1,28 @@
 # mimicanno/publish.py
 """Publish transaction (spec §4.4 / §6.5)."""
+
 from __future__ import annotations
 
 import datetime as dt
 import json
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
 
 from mimicanno.config import RUN_HASH_FALLBACK_PREFIX_LEN, run_hash_short
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR, RunPaths, canonical_name_for, is_collision
 from mimicanno.runindex import IndexRow, upsert_row
 from mimicanno.scavenger import (
+    WRITER_METADATA_FILENAME,
     WriterMetadata,
     current_pid_start_time,
     scavenge_stale_dirs,
     write_writer_metadata,
-    WRITER_METADATA_FILENAME,
 )
-
 
 LOCK_TIMEOUT_SEC: float = 30.0
 DEFAULT_STALE_AGE_SEC: float = 24 * 3600.0
@@ -61,7 +61,8 @@ def _existing_run_hash(run_dir: Path) -> str | None:
     if not manifest.exists():
         return None
     try:
-        return json.loads(manifest.read_text()).get("run_hash")
+        result = json.loads(manifest.read_text()).get("run_hash")
+        return str(result) if result is not None else None
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -87,7 +88,8 @@ def publish(
     name = canonical_name_for(req.episode_id, run_hash=req.run_hash)
     if is_collision(runs_root, canonical_name=name, expected_run_hash=req.run_hash):
         name = canonical_name_for(
-            req.episode_id, run_hash=req.run_hash,
+            req.episode_id,
+            run_hash=req.run_hash,
             length=RUN_HASH_FALLBACK_PREFIX_LEN,
         )
 
@@ -101,13 +103,16 @@ def publish(
 
     # §4.4 step 3: heavy compute outside the lock, into .tmp.<pid>/ with .writer.json.
     paths.tmp.mkdir(parents=True, exist_ok=True)
-    write_writer_metadata(paths.tmp, WriterMetadata(
-        pid=pid,
-        pid_start_time=current_pid_start_time(pid),
-        canonical_name=name,
-        kind="tmp",
-        claimed_at=dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-    ))
+    write_writer_metadata(
+        paths.tmp,
+        WriterMetadata(
+            pid=pid,
+            pid_start_time=current_pid_start_time(pid),
+            canonical_name=name,
+            kind="tmp",
+            claimed_at=dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z"),
+        ),
+    )
     try:
         write_artifacts(paths.tmp)
 
@@ -144,28 +149,39 @@ def publish(
                 if paths.final.exists():
                     paths.final.rename(paths.bak)
                     bak_created = True
-                    write_writer_metadata(paths.bak, WriterMetadata(
-                        pid=pid,
-                        pid_start_time=current_pid_start_time(pid),
-                        canonical_name=name,
-                        kind="bak",
-                        claimed_at=dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-                    ))
+                    write_writer_metadata(
+                        paths.bak,
+                        WriterMetadata(
+                            pid=pid,
+                            pid_start_time=current_pid_start_time(pid),
+                            canonical_name=name,
+                            kind="bak",
+                            claimed_at=dt.datetime.now(tz=dt.UTC)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                        ),
+                    )
                 # 7c) atomic rename tmp → final.
                 paths.tmp.rename(paths.final)
 
                 # Step 8: index upsert.
-                upsert_row(runs_root / "index.json", IndexRow(
-                    episode_id=req.episode_id,
-                    run_hash=req.run_hash,
-                    run_hash_short=run_hash_short(req.run_hash, length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR)),
-                    config_hash_short=req.config_hash_short,
-                    input_hash_short=req.input_hash_short,
-                    manifest_url=f"{name}/manifest.json",
-                    task_text=req.task_text,
-                    pipeline_phase=req.pipeline_phase,
-                    generated_at=req.generated_at,
-                ))
+                upsert_row(
+                    runs_root / "index.json",
+                    IndexRow(
+                        episode_id=req.episode_id,
+                        run_hash=req.run_hash,
+                        run_hash_short=run_hash_short(
+                            req.run_hash,
+                            length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR),
+                        ),
+                        config_hash_short=req.config_hash_short,
+                        input_hash_short=req.input_hash_short,
+                        manifest_url=f"{name}/manifest.json",
+                        task_text=req.task_text,
+                        pipeline_phase=req.pipeline_phase,
+                        generated_at=req.generated_at,
+                    ),
+                )
             finally:
                 # Step 9: rm -rf bak (always clean up, even if upsert raises).
                 if bak_created and paths.bak.exists():
@@ -179,19 +195,25 @@ def publish(
 
 
 def _self_heal_index(
-    runs_root: Path, req: PublishRequest, name: str,
+    runs_root: Path,
+    req: PublishRequest,
+    name: str,
 ) -> None:
     """If the index lost a row that disk says exists, re-insert it."""
-    upsert_row(runs_root / "index.json", IndexRow(
-        episode_id=req.episode_id,
-        run_hash=req.run_hash,
-        run_hash_short=run_hash_short(
-            req.run_hash, length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR),
+    upsert_row(
+        runs_root / "index.json",
+        IndexRow(
+            episode_id=req.episode_id,
+            run_hash=req.run_hash,
+            run_hash_short=run_hash_short(
+                req.run_hash,
+                length=len(name) - len(req.episode_id) - len(CANONICAL_SEPARATOR),
+            ),
+            config_hash_short=req.config_hash_short,
+            input_hash_short=req.input_hash_short,
+            manifest_url=f"{name}/manifest.json",
+            task_text=req.task_text,
+            pipeline_phase=req.pipeline_phase,
+            generated_at=req.generated_at,
         ),
-        config_hash_short=req.config_hash_short,
-        input_hash_short=req.input_hash_short,
-        manifest_url=f"{name}/manifest.json",
-        task_text=req.task_text,
-        pipeline_phase=req.pipeline_phase,
-        generated_at=req.generated_at,
-    ))
+    )

@@ -20,11 +20,13 @@ def _write_parquet(table: pa.Table, path: Path) -> Path:
 
 
 def _good_table(n: int = 30, fps: float = 30.0) -> pa.Table:
-    return pa.table({
-        "observation.state": pa.array([[0.0] * 14 for _ in range(n)]),
-        "action": pa.array([[0.0] * 14 for _ in range(n)]),
-        "timestamp": pa.array((np.arange(n) / fps).tolist()),
-    })
+    return pa.table(
+        {
+            "observation.state": pa.array([[0.0] * 14 for _ in range(n)]),
+            "action": pa.array([[0.0] * 14 for _ in range(n)]),
+            "timestamp": pa.array((np.arange(n) / fps).tolist()),
+        }
+    )
 
 
 class TestLoad:
@@ -35,23 +37,27 @@ class TestLoad:
         assert result.sha256.startswith("sha256:")
 
     def test_missing_required_column_raises(self, tmp_path: Path):
-        bad = pa.table({
-            "observation.state": pa.array([[0.0] * 14]),
-            # action missing — but action is OPTIONAL per §7.1, so this is OK
-            "timestamp": pa.array([0.0]),
-        })
+        bad = pa.table(
+            {
+                "observation.state": pa.array([[0.0] * 14]),
+                # action missing — but action is OPTIONAL per §7.1, so this is OK
+                "timestamp": pa.array([0.0]),
+            }
+        )
         p = _write_parquet(bad, tmp_path / "no_action.parquet")
         # Should NOT raise — action is optional in Phase 1.
         result = load_episode_parquet(p)
         assert result.table.num_rows == 1
 
     def test_missing_state_raises(self, tmp_path: Path):
-        bad = pa.table({
-            "action": pa.array([[0.0]]),
-            "timestamp": pa.array([0.0]),
-        })
+        bad = pa.table(
+            {
+                "action": pa.array([[0.0]]),
+                "timestamp": pa.array([0.0]),
+            }
+        )
         p = _write_parquet(bad, tmp_path / "bad.parquet")
-        with pytest.raises(ParquetLoadError, match="observation.state"):
+        with pytest.raises(ParquetLoadError, match=r"observation\.state"):
             load_episode_parquet(p)
 
 

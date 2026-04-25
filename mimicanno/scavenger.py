@@ -1,5 +1,6 @@
 # mimicanno/scavenger.py
 """Scavenger contract for *.tmp.<pid> and *.bak.<pid> dirs (spec §4.4)."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -19,8 +20,8 @@ class WriterMetadata:
     pid: int
     pid_start_time: str  # ISO-8601 UTC
     canonical_name: str
-    kind: str            # "tmp" or "bak"
-    claimed_at: str      # ISO-8601 UTC
+    kind: str  # "tmp" or "bak"
+    claimed_at: str  # ISO-8601 UTC
 
 
 def write_writer_metadata(dir_path: Path, md: WriterMetadata) -> None:
@@ -85,7 +86,7 @@ def scavenge_stale_dirs(
     """
     if not runs_root.exists():
         return []
-    now = dt.datetime.now(tz=dt.timezone.utc)
+    now = dt.datetime.now(tz=dt.UTC)
     removed: list[Path] = []
     for entry in runs_root.iterdir():
         m = _PID_DIR_RE.match(entry.name)
@@ -104,16 +105,14 @@ def scavenge_stale_dirs(
             claimed = None
         if claimed is None:
             # Fallback: directory mtime as a stand-in for claimed_at.
-            mtime = dt.datetime.fromtimestamp(entry.stat().st_mtime, tz=dt.timezone.utc)
+            mtime = dt.datetime.fromtimestamp(entry.stat().st_mtime, tz=dt.UTC)
             age_sec = (now - mtime).total_seconds()
         else:
             age_sec = (now - claimed).total_seconds()
         is_old = age_sec >= stale_age_sec
         pid = int(m.group("pid"))
         is_dead = (
-            md is None
-            or not is_pid_alive(pid)
-            or md.pid_start_time != current_pid_start_time(pid)
+            md is None or not is_pid_alive(pid) or md.pid_start_time != current_pid_start_time(pid)
         )
         if is_dead and is_old:
             shutil.rmtree(entry, ignore_errors=True)

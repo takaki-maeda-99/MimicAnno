@@ -1,12 +1,11 @@
 # tests/unit/test_publish.py
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 from mimicanno.publish import PublishOutcome, PublishRequest, publish
-from mimicanno.runindex import IndexRow, read_index
+from mimicanno.runindex import read_index
 
 
 def _request(runs_root: Path, run_hash: str, task: str = "pick") -> PublishRequest:

@@ -1,10 +1,9 @@
 # tests/unit/test_labelset.py
-from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import pytest
 
-from mimicanno.labelset import LabelSet, LabelSetError, default_labels_path, load_label_set
+from mimicanno.labelset import LabelSetError, default_labels_path, load_label_set
 
 
 def _bundled_path() -> Path:
@@ -60,9 +59,7 @@ class TestSchemaValidation:
     def test_rejects_old_schema_version(self, tmp_path: Path):
         p = tmp_path / "old.yaml"
         p.write_text(
-            "schema_version: '0.0.1'\n"
-            "task_type: x\n"
-            "labels: []\n",
+            "schema_version: '0.0.1'\ntask_type: x\nlabels: []\n",
         )
         with pytest.raises(LabelSetError, match="schema_version"):
             load_label_set(p)
@@ -84,10 +81,7 @@ class TestErrorHandling:
     def test_non_mapping_label_entry_raises(self, tmp_path: Path):
         bad = tmp_path / "scalar_label.yaml"
         bad.write_text(
-            "schema_version: '0.1.0'\n"
-            "task_type: x\n"
-            "labels:\n"
-            "  - just_a_string\n",
+            "schema_version: '0.1.0'\ntask_type: x\nlabels:\n  - just_a_string\n",
         )
         with pytest.raises(LabelSetError, match="label entry is not a mapping"):
             load_label_set(bad)

@@ -7,3 +7,5 @@ ignore = ["E501"]  # line length is enforced by formatter
 
 [lint.per-file-ignores]
 "tests/**" = ["B011"]  # allow assert in tests
+# Typer requires function-default calls for CLI option declarations.
+"mimicanno/cli.py" = ["B008"]

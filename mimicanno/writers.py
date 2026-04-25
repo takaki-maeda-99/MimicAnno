@@ -1,5 +1,6 @@
 # mimicanno/writers.py
 """Atomic JSON writers + jsonschema validation for run-dir artifacts."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,7 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
 
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 
 from mimicanno.schema import (
     AnnotationResult,
@@ -22,11 +23,7 @@ _SCHEMA_CACHE: dict[str, dict[str, Any]] = {}
 
 def _load_schema(name: str) -> dict[str, Any]:
     if name not in _SCHEMA_CACHE:
-        text = (
-            pkg_files("mimicanno.jsonschemas")
-            .joinpath(f"{name}.schema.json")
-            .read_text()
-        )
+        text = pkg_files("mimicanno.jsonschemas").joinpath(f"{name}.schema.json").read_text()
         _SCHEMA_CACHE[name] = json.loads(text)
     return _SCHEMA_CACHE[name]
 

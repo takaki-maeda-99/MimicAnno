@@ -1,4 +1,5 @@
 """Run-directory path helpers — single source of truth for canonical_name (§4.1)."""
+
 from __future__ import annotations
 
 import json
@@ -15,14 +16,19 @@ CANONICAL_SEPARATOR = "__"
 
 
 def canonical_name_for(
-    episode_id: str, *, run_hash: str, length: int = RUN_HASH_DEFAULT_PREFIX_LEN,
+    episode_id: str,
+    *,
+    run_hash: str,
+    length: int = RUN_HASH_DEFAULT_PREFIX_LEN,
 ) -> str:
     return f"{episode_id}{CANONICAL_SEPARATOR}{run_hash_short(run_hash, length=length)}"
 
 
 def extend_collision_suffix(episode_id: str, *, run_hash: str) -> str:
     return canonical_name_for(
-        episode_id, run_hash=run_hash, length=RUN_HASH_FALLBACK_PREFIX_LEN,
+        episode_id,
+        run_hash=run_hash,
+        length=RUN_HASH_FALLBACK_PREFIX_LEN,
     )
 
 
@@ -53,7 +59,10 @@ class RunPaths:
 
 
 def is_collision(
-    runs_root: Path, *, canonical_name: str, expected_run_hash: str,
+    runs_root: Path,
+    *,
+    canonical_name: str,
+    expected_run_hash: str,
 ) -> bool:
     """Return True iff ``runs/<canonical_name>/`` exists with a DIFFERENT run_hash.
 
@@ -68,7 +77,7 @@ def is_collision(
         data = json.loads(manifest.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    return data.get("run_hash") != expected_run_hash
+    return bool(data.get("run_hash") != expected_run_hash)
 
 
 def find_run_dirs_for_episode(runs_root: Path, episode_id: str) -> list[Path]:

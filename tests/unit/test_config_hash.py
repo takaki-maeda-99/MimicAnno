@@ -1,5 +1,4 @@
 # tests/unit/test_config_hash.py
-import pytest
 
 from mimicanno.config import (
     AnnotationConfig,
@@ -23,8 +22,10 @@ def _make_config(score_threshold: float = 0.30) -> AnnotationConfig:
         ),
         target_phase=1,
         model_config=ModelConfig(
-            vlm_model=None, vlm_checkpoint=None,
-            sam3_model=None, sam3_checkpoint=None,
+            vlm_model=None,
+            vlm_checkpoint=None,
+            sam3_model=None,
+            sam3_checkpoint=None,
         ),
     )
 
@@ -106,12 +107,14 @@ class TestComposeRunHash:
 
     def test_run_hash_short_is_12_hex(self):
         from mimicanno.config import run_hash_short
+
         h = "sha256:" + "9" * 64
         assert run_hash_short(h, length=12) == "9" * 12
         assert run_hash_short(h, length=16) == "9" * 16
 
     def test_run_hash_short_default_length(self):
         from mimicanno.config import RUN_HASH_DEFAULT_PREFIX_LEN, run_hash_short
+
         assert RUN_HASH_DEFAULT_PREFIX_LEN == 12
         h = "sha256:" + "f" * 64
         assert len(run_hash_short(h)) == 12

@@ -1,5 +1,8 @@
 """Phase 1 clip bracketing algorithm (spec §5.6)."""
+
 from __future__ import annotations
+
+import itertools
 
 from mimicanno.schema import BoundaryCandidate, BoundaryRef, SubtaskSegment
 
@@ -43,7 +46,10 @@ def bracket_phase1_segments(
     end_ref = BoundaryRef(candidate_id=None, time=duration_sec, sources=["episode_end"], score=1.0)
     cand_refs = [
         BoundaryRef(
-            candidate_id=c.id, time=c.time, sources=list(c.sources), score=c.score,
+            candidate_id=c.id,
+            time=c.time,
+            sources=list(c.sources),
+            score=c.score,
         )
         for c in sorted_cands
     ]
@@ -51,15 +57,15 @@ def bracket_phase1_segments(
 
     out: list[SubtaskSegment] = []
     next_id = 1
-    for left, right in zip(edges, edges[1:], strict=False):
+    for left, right in itertools.pairwise(edges):
         if right.time - left.time < epsilon_sec:
             continue
         boundary_confidence = min(left.score, right.score)
         seg = SubtaskSegment(
             segment_id=f"s_{next_id:03d}",
             episode_id=episode_id,
-            start_frame=int(round(left.time * fps)),
-            end_frame=max(int(round(right.time * fps)) - 1, int(round(left.time * fps))),
+            start_frame=round(left.time * fps),
+            end_frame=max(round(right.time * fps) - 1, round(left.time * fps)),
             start_time=left.time,
             end_time=right.time,
             phase="unlabeled",

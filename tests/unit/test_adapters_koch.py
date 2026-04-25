@@ -12,11 +12,13 @@ def _joint_only_table(n: int = 30) -> pa.Table:
     state[:, 5] = np.linspace(1.0, 0.0, n)
     action = rng.uniform(-1.0, 1.0, size=(n, 6)).astype(np.float32)
     ts = np.arange(n, dtype=np.float64) / 30.0
-    return pa.table({
-        "observation.state": pa.array(state.tolist()),
-        "action": pa.array(action.tolist()),
-        "timestamp": pa.array(ts.tolist()),
-    })
+    return pa.table(
+        {
+            "observation.state": pa.array(state.tolist()),
+            "action": pa.array(action.tolist()),
+            "timestamp": pa.array(ts.tolist()),
+        }
+    )
 
 
 class TestKoch:
@@ -40,15 +42,17 @@ class TestKoch:
         state[:, 5] = np.array([-0.5, 0.0, 0.5, 1.5, 2.0])
         action = np.zeros((n, 6), dtype=np.float32)
         ts = np.arange(n, dtype=np.float64) / 30.0
-        table = pa.table({
-            "observation.state": pa.array(state.tolist()),
-            "action": pa.array(action.tolist()),
-            "timestamp": pa.array(ts.tolist()),
-        })
+        table = pa.table(
+            {
+                "observation.state": pa.array(state.tolist()),
+                "action": pa.array(action.tolist()),
+                "timestamp": pa.array(ts.tolist()),
+            }
+        )
         g = KochAdapter().gripper_signal(table)
         assert (g >= 0.0).all()
         assert (g <= 1.0).all()
-        assert g[0] == 0.0   # -0.5 clipped to 0
+        assert g[0] == 0.0  # -0.5 clipped to 0
         assert g[-1] == 1.0  # 2.0 clipped to 1
 
 

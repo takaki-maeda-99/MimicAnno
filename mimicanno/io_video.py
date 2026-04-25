@@ -1,5 +1,6 @@
 # mimicanno/io_video.py
 """Video probing + run-dir materialization (spec §4.6, §13)."""
+
 from __future__ import annotations
 
 import json
@@ -9,7 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from imageio_ffmpeg import get_ffmpeg_exe
+from imageio_ffmpeg import get_ffmpeg_exe  # type: ignore[import-untyped]
 
 from mimicanno.hashing import sha256_file
 
@@ -20,7 +21,7 @@ class VideoProbeError(Exception):
 
 @dataclass(slots=True)
 class VideoProbe:
-    sha256: str             # "sha256:<hex>"
+    sha256: str  # "sha256:<hex>"
     duration_sec: float
     fps: float
     width: int
@@ -52,10 +53,14 @@ def probe_video(path: Path) -> VideoProbe:
     ffprobe = _find_ffprobe()
     cmd = [
         ffprobe,
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,r_frame_rate,duration:format=duration",
-        "-of", "json",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,r_frame_rate,duration:format=duration",
+        "-of",
+        "json",
         str(path),
     ]
     try:

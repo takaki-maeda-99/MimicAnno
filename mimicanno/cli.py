@@ -1,15 +1,17 @@
 # mimicanno/cli.py
 """mimicanno CLI entry (typer)."""
+
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import typer
 
 from mimicanno import __version__
 from mimicanno.config import (
-    AnnotationConfig, BoundaryConfig, ModelConfig,
+    AnnotationConfig,
+    BoundaryConfig,
+    ModelConfig,
 )
 from mimicanno.errors import MimicAnnoError, write_error_json
 from mimicanno.pipeline import AnnotateRequest, annotate_episode
@@ -28,8 +30,7 @@ def annotate(
     video: Path = typer.Option(..., "--video", exists=True, dir_okay=False),
     parquet: Path = typer.Option(..., "--parquet", dir_okay=False),
     task: str = typer.Option(..., "--task"),
-    robot: str = typer.Option(..., "--robot",
-                              help="Adapter: aloha | koch | so100 | generic"),
+    robot: str = typer.Option(..., "--robot", help="Adapter: aloha | koch | so100 | generic"),
     robot_config: Path | None = typer.Option(None, "--robot-config"),
     labels: Path | None = typer.Option(None, "--labels-file"),
     runs_root: Path = typer.Option(Path("runs"), "--runs-root"),
@@ -51,21 +52,31 @@ def annotate(
         model_config=ModelConfig(None, None, None, None),
     )
     req = AnnotateRequest(
-        video=video, parquet=parquet, task=task,
-        robot_adapter_name=robot, robot_adapter_config_path=robot_config,
-        labels_path=labels, runs_root=runs_root,
-        link_video=link_video, force=force, config=cfg,
+        video=video,
+        parquet=parquet,
+        task=task,
+        robot_adapter_name=robot,
+        robot_adapter_config_path=robot_config,
+        labels_path=labels,
+        runs_root=runs_root,
+        link_video=link_video,
+        force=force,
+        config=cfg,
     )
     try:
         annotate_episode(req)
     except MimicAnnoError as e:
         write_error_json(e)
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
     except Exception as e:  # pragma: no cover — last-resort safety net
-        write_error_json(MimicAnnoError(
-            code="internal.unhandled", message=str(e), context={"type": type(e).__name__},
-        ))
-        raise typer.Exit(code=3)
+        write_error_json(
+            MimicAnnoError(
+                code="internal.unhandled",
+                message=str(e),
+                context={"type": type(e).__name__},
+            )
+        )
+        raise typer.Exit(code=3) from e
 
 
 def main() -> None:

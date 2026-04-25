@@ -1,5 +1,6 @@
 # mimicanno/io_parquet.py
 """Parquet loading + FPS resolution + NaN gap handling (spec §7.1 / §7.3 / §7.4)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ OPTIONAL_COLUMNS: tuple[str, ...] = ("action", "frame_index", "episode_index")
 def load_episode_parquet(path: Path) -> LoadedEpisode:
     if not path.exists():
         raise ParquetLoadError(f"parquet file not found: {path}")
-    table = pq.read_table(path)
+    table = pq.read_table(path)  # type: ignore[no-untyped-call]
     missing = [c for c in REQUIRED_COLUMNS if c not in table.column_names]
     if missing:
         raise ParquetLoadError(
@@ -59,7 +60,10 @@ def resolve_fps(timestamps: np.ndarray) -> float:
 
 
 def interpolate_short_nan_spans(
-    x: np.ndarray, *, fps: float, max_span_sec: float = 0.5,
+    x: np.ndarray,
+    *,
+    fps: float,
+    max_span_sec: float = 0.5,
 ) -> np.ndarray:
     """Linear-interpolate NaN spans no longer than ``max_span_sec``; abort longer ones."""
     if x.ndim != 1:
@@ -97,11 +101,11 @@ def interpolate_short_nan_spans(
         raise ParquetLoadError("column is entirely NaN; cannot interpolate")
     if isnan[0]:
         raise ParquetLoadError(
-            f"NaN span starts at frame 0 (no left anchor for interpolation)",
+            "NaN span starts at frame 0 (no left anchor for interpolation)",
         )
     if isnan[-1]:
         raise ParquetLoadError(
-            f"NaN span extends to last frame (no right anchor for interpolation)",
+            "NaN span extends to last frame (no right anchor for interpolation)",
         )
     idx = np.arange(len(out))
     out[isnan] = np.interp(idx[isnan], idx[~isnan], out[~isnan])

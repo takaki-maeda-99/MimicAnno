@@ -1,5 +1,6 @@
 # mimicanno/adapters/generic.py
 """GenericAdapter: column mapping driven by a user-supplied YAML."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 @dataclass(slots=True)
@@ -27,7 +28,7 @@ class GenericAdapter:
     eef_quat_column: str | None
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "GenericAdapter":
+    def from_yaml(cls, path: Path) -> GenericAdapter:
         cfg = yaml.safe_load(path.read_text())
         if cfg.get("schema_version") != "0.1.0":
             raise ValueError(

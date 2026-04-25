@@ -1,4 +1,5 @@
 """runs/index.json read + upsert (spec §4.4)."""
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,8 @@ from mimicanno.schema_versions import INDEX_SCHEMA_VERSION
 @dataclass(frozen=True, slots=True)
 class IndexRow:
     episode_id: str
-    run_hash: str            # full sha256:<hex>
-    run_hash_short: str      # display only
+    run_hash: str  # full sha256:<hex>
+    run_hash_short: str  # display only
     config_hash_short: str
     input_hash_short: str
     manifest_url: str
@@ -53,7 +54,9 @@ def upsert_row(path: Path, row: IndexRow) -> None:
     this — the function does not acquire the lock itself.
     """
     idx = read_index(path)
-    rows = [r for r in idx.rows if not (r.episode_id == row.episode_id and r.run_hash == row.run_hash)]
+    rows = [
+        r for r in idx.rows if not (r.episode_id == row.episode_id and r.run_hash == row.run_hash)
+    ]
     rows.append(row)
     rows.sort(key=lambda r: r.generated_at, reverse=True)
     write_index_atomic(path, IndexFile(schema_version=idx.schema_version, rows=rows))

@@ -7,6 +7,7 @@ Determinism rules:
 - non-ASCII strings kept as-is (ensure_ascii=False)
 - NaN / Infinity rejected (canonical hashing must not depend on platform float quirks)
 """
+
 from __future__ import annotations
 
 import hashlib

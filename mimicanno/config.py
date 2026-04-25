@@ -10,10 +10,11 @@ input_hash covers the bytes/text that go in:
 run_hash = sha256(config_hash || input_hash).
 canonical_name = f"{episode_id}__{run_hash[:12]}"  (extended to [:16] on collision).
 """
+
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from mimicanno.hashing import canonical_json, sha256_hex_of_str
@@ -73,6 +74,7 @@ class AnnotationConfig:
 @dataclass(slots=True)
 class InputBundle:
     """Identity of the inputs for one run. All sha256 strings are ``sha256:<hex>``."""
+
     video_sha256: str
     parquet_sha256: str
     task_text: str
@@ -112,5 +114,5 @@ def run_hash_short(run_hash: str, length: int = RUN_HASH_DEFAULT_PREFIX_LEN) -> 
     """Return the truncated hex prefix used as the canonical-name suffix."""
     if not run_hash.startswith("sha256:"):
         raise ValueError(f"run_hash must be 'sha256:'-prefixed; got {run_hash!r}")
-    hex_part = run_hash[len("sha256:"):]
+    hex_part = run_hash[len("sha256:") :]
     return hex_part[:length]

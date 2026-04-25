@@ -17,7 +17,8 @@ def _aloha_table(n_frames: int = 30) -> pa.Table:
     state[:, 13] = np.linspace(1.0, 0.0, n_frames, dtype=np.float32)
     # EEF position columns (0..2 = xyz)
     state[:, 0:3] = np.cumsum(
-        rng.normal(0, 0.01, size=(n_frames, 3)).astype(np.float32), axis=0,
+        rng.normal(0, 0.01, size=(n_frames, 3)).astype(np.float32),
+        axis=0,
     )
     action = rng.uniform(-1.0, 1.0, size=(n_frames, 14)).astype(np.float32)
     timestamps = np.arange(n_frames, dtype=np.float64) / 30.0
@@ -70,11 +71,13 @@ def test_aloha_eef_velocity_is_finite_and_nonneg():
 
 def test_aloha_eef_velocity_handles_single_frame():
     """1-frame episode: velocity is undefined; return zeros (length-T) without crashing."""
-    table = pa.table({
-        "observation.state": pa.array([[0.0] * 14]),
-        "action": pa.array([[0.0] * 14]),
-        "timestamp": pa.array([0.0]),
-    })
+    table = pa.table(
+        {
+            "observation.state": pa.array([[0.0] * 14]),
+            "action": pa.array([[0.0] * 14]),
+            "timestamp": pa.array([0.0]),
+        }
+    )
     v = AlohaAdapter().eef_velocity(table)
     assert v is not None
     assert v.shape == (1,)

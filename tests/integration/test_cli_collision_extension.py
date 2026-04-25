@@ -1,6 +1,7 @@
 # tests/integration/test_cli_collision_extension.py
 """§15.11: forcing a run_hash[:12] prefix collision triggers [:16] extension
 without overwriting the existing run."""
+
 import json
 import subprocess
 import sys
@@ -12,16 +13,20 @@ pytestmark = pytest.mark.integration
 
 
 def test_collision_triggers_16_hex_extension(tmp_path: Path):
-    from tests.fixtures.synthesize import synthesize_aloha_episode
     from mimicanno.config import (
-        AnnotationConfig, BoundaryConfig, InputBundle, ModelConfig,
-        compose_run_hash, compute_config_hash, compute_input_hash, run_hash_short,
+        AnnotationConfig,
+        BoundaryConfig,
+        InputBundle,
+        ModelConfig,
+        compose_run_hash,
+        compute_config_hash,
+        compute_input_hash,
     )
-    from mimicanno.hashing import sha256_file
-    from mimicanno.io_video import probe_video
     from mimicanno.io_parquet import load_episode_parquet
+    from mimicanno.io_video import probe_video
     from mimicanno.labelset import default_labels_path, load_label_set
     from mimicanno.rundir import canonical_name_for
+    from tests.fixtures.synthesize import synthesize_aloha_episode
 
     episode = synthesize_aloha_episode(tmp_path / "data")
     runs_root = tmp_path / "runs"
@@ -51,33 +56,52 @@ def test_collision_triggers_16_hex_extension(tmp_path: Path):
         labels_yaml_sha256=labels.sha256,
     )
     expected_run_hash = compose_run_hash(
-        compute_config_hash(cfg), compute_input_hash(inputs),
+        compute_config_hash(cfg),
+        compute_input_hash(inputs),
     )
     name = canonical_name_for(episode.episode_id, run_hash=expected_run_hash)
 
     # Plant a colliding (but different-content) run dir.
     plant = runs_root / name
     plant.mkdir()
-    (plant / "manifest.json").write_text(json.dumps({
-        "schema_version": "0.1.0",
-        "run_hash": "sha256:" + "f" * 64,  # different from expected
-    }))
+    (plant / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1.0",
+                "run_hash": "sha256:" + "f" * 64,  # different from expected
+            }
+        )
+    )
 
     # Now run the CLI; it should write to <episode>__<hash[:16]>/ instead.
     result = subprocess.run(
-        [sys.executable, "-m", "mimicanno.cli", "annotate",
-         "--video", str(episode.video),
-         "--parquet", str(episode.parquet),
-         "--task", "pick red block",
-         "--robot", "aloha",
-         "--runs-root", str(runs_root)],
-        capture_output=True, text=True, timeout=120,
+        [
+            sys.executable,
+            "-m",
+            "mimicanno.cli",
+            "annotate",
+            "--video",
+            str(episode.video),
+            "--parquet",
+            str(episode.parquet),
+            "--task",
+            "pick red block",
+            "--robot",
+            "aloha",
+            "--runs-root",
+            str(runs_root),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
 
     # Both directories now exist; the planted one is untouched.
     expected_extended = runs_root / canonical_name_for(
-        episode.episode_id, run_hash=expected_run_hash, length=16,
+        episode.episode_id,
+        run_hash=expected_run_hash,
+        length=16,
     )
     assert plant.exists()
     assert expected_extended.exists()

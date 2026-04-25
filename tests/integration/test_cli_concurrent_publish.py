@@ -2,6 +2,7 @@
 """§15.4 + §4.4 step 6: two concurrent CLIs targeting the same run_hash
 must not lose entries or corrupt the run dir; only one writes, the
 other reuses."""
+
 import json
 import subprocess
 import sys
@@ -16,20 +17,27 @@ pytestmark = pytest.mark.integration
 def _spawn(args: list[str]) -> subprocess.Popen[bytes]:
     return subprocess.Popen(
         [sys.executable, "-m", "mimicanno.cli", "annotate", *args],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
 
 
 def test_two_concurrent_publishes_same_hash(tmp_path: Path):
     from tests.fixtures.synthesize import synthesize_aloha_episode
+
     episode = synthesize_aloha_episode(tmp_path / "data", n_frames=300)
     runs_root = tmp_path / "runs"
     args = [
-        "--video", str(episode.video),
-        "--parquet", str(episode.parquet),
-        "--task", "pick red block",
-        "--robot", "aloha",
-        "--runs-root", str(runs_root),
+        "--video",
+        str(episode.video),
+        "--parquet",
+        str(episode.parquet),
+        "--task",
+        "pick red block",
+        "--robot",
+        "aloha",
+        "--runs-root",
+        str(runs_root),
     ]
     p1 = _spawn(args)
     # Stagger by 50 ms so both processes are likely to be in the
@@ -42,7 +50,11 @@ def test_two_concurrent_publishes_same_hash(tmp_path: Path):
     assert rc2 == 0
 
     # Exactly one final run dir.
-    runs = [p for p in runs_root.iterdir() if p.is_dir() and p.name.startswith(episode.episode_id + "__")]
+    runs = [
+        p
+        for p in runs_root.iterdir()
+        if p.is_dir() and p.name.startswith(episode.episode_id + "__")
+    ]
     assert len(runs) == 1
 
     # Index has exactly one row.

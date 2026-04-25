@@ -1,5 +1,6 @@
 # mimicanno/adapters/so100.py
 """SO-100 adapter: joint-only, layout shared with Koch for Phase 1."""
+
 from __future__ import annotations
 
 import numpy as np

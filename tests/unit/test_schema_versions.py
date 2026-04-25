@@ -1,15 +1,18 @@
 from mimicanno.schema_versions import (
     ARTIFACT_SCHEMA_VERSIONS,
     COMPAT_BLOCK,
-    LABELS_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
+    LABELS_SCHEMA_VERSION,
     parse_major,
 )
 
 
 def test_artifact_versions_present():
     assert set(ARTIFACT_SCHEMA_VERSIONS.keys()) == {
-        "manifest", "annotation", "boundaries", "signals",
+        "manifest",
+        "annotation",
+        "boundaries",
+        "signals",
     }
     for version in ARTIFACT_SCHEMA_VERSIONS.values():
         assert version == "0.1.0"
@@ -18,7 +21,10 @@ def test_artifact_versions_present():
 def test_compat_block_only_lists_in_run_artifacts():
     # External schemas (labels, index) are NOT in compat per spec §6.6.
     assert set(COMPAT_BLOCK.keys()) == {
-        "manifest", "annotation", "boundaries", "signals",
+        "manifest",
+        "annotation",
+        "boundaries",
+        "signals",
     }
     for major in COMPAT_BLOCK.values():
         assert major == 0

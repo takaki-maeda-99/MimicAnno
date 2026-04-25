@@ -1,12 +1,13 @@
 # mimicanno/labelset.py
 """Label-set YAML loader (spec §8.1 / §8.4)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from mimicanno.hashing import sha256_file
 from mimicanno.schema_versions import LABELS_SCHEMA_VERSION
@@ -53,13 +54,13 @@ def load_label_set(path: Path) -> LabelSet:
     # §6.6 set-membership check — only exact versions in SUPPORTED_LABEL_VERSIONS
     # are accepted; widening the supported set is an explicit decision, not
     # implicit (>=) compatibility.
-    SUPPORTED_LABEL_VERSIONS: frozenset[str] = frozenset({LABELS_SCHEMA_VERSION})
+    supported_label_versions: frozenset[str] = frozenset({LABELS_SCHEMA_VERSION})
     if not isinstance(sv, str):
         raise LabelSetError(f"{path}: schema_version must be a string, got {sv!r}")
-    if sv not in SUPPORTED_LABEL_VERSIONS:
+    if sv not in supported_label_versions:
         raise LabelSetError(
             f"{path}: schema_version {sv!r} not in supported set "
-            f"{sorted(SUPPORTED_LABEL_VERSIONS)} (this consumer's set)",
+            f"{sorted(supported_label_versions)} (this consumer's set)",
         )
 
     labels_raw = raw.get("labels") or []
@@ -74,11 +75,13 @@ def load_label_set(path: Path) -> LabelSet:
             raise LabelSetError(
                 f"{path}: label id {lid!r} is reserved (see spec §8.4)",
             )
-        labels.append(Label(
-            id=lid,
-            verbs=list(item.get("verbs") or []),
-            requires_object=bool(item.get("requires_object", False)),
-        ))
+        labels.append(
+            Label(
+                id=lid,
+                verbs=list(item.get("verbs") or []),
+                requires_object=bool(item.get("requires_object", False)),
+            )
+        )
 
     return LabelSet(
         schema_version=sv,

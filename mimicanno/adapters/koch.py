@@ -1,5 +1,6 @@
 # mimicanno/adapters/koch.py
 """Koch adapter: joint-only state; no Cartesian EEF in the parquet by default."""
+
 from __future__ import annotations
 
 import numpy as np

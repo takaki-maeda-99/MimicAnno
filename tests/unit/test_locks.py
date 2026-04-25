@@ -9,8 +9,9 @@ from mimicanno.locks import LockTimeout, file_lock
 
 
 def _hold_lock_then_release(path: str, hold_sec: float, ready: mp.Event):
-    from pathlib import Path as P
-    with file_lock(P(path), timeout_sec=10.0):
+    from pathlib import Path
+
+    with file_lock(Path(path), timeout_sec=10.0):
         ready.set()
         time.sleep(hold_sec)
 
@@ -48,7 +49,6 @@ def test_timeout_raises(tmp_path: Path):
     p = ctx.Process(target=_hold_lock_then_release, args=(str(lock_path), 5.0, ready))
     p.start()
     assert ready.wait(5.0)
-    with pytest.raises(LockTimeout):
-        with file_lock(lock_path, timeout_sec=0.5):
-            pass
+    with pytest.raises(LockTimeout), file_lock(lock_path, timeout_sec=0.5):
+        pass
     p.join()

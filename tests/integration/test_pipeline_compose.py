@@ -2,6 +2,7 @@
 
 Heavier end-to-end tests live alongside CLI tests under integration/.
 """
+
 import json
 from pathlib import Path
 
@@ -11,11 +12,13 @@ pytestmark = pytest.mark.integration
 
 
 def test_annotate_synthetic_aloha_smoke(tmp_path: Path):
-    from tests.fixtures.synthesize import synthesize_aloha_episode
-    from mimicanno.pipeline import AnnotateRequest, annotate_episode
     from mimicanno.config import (
-        AnnotationConfig, BoundaryConfig, ModelConfig,
+        AnnotationConfig,
+        BoundaryConfig,
+        ModelConfig,
     )
+    from mimicanno.pipeline import AnnotateRequest, annotate_episode
+    from tests.fixtures.synthesize import synthesize_aloha_episode
 
     inputs = synthesize_aloha_episode(tmp_path / "data", n_frames=120, fps=30.0)
     req = AnnotateRequest(
@@ -24,7 +27,7 @@ def test_annotate_synthetic_aloha_smoke(tmp_path: Path):
         task="pick red block",
         robot_adapter_name="aloha",
         robot_adapter_config_path=None,
-        labels_path=None,         # use bundled manipulation.yaml
+        labels_path=None,  # use bundled manipulation.yaml
         runs_root=tmp_path / "runs",
         link_video=False,
         force=False,

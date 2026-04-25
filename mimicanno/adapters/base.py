@@ -1,5 +1,6 @@
 # mimicanno/adapters/base.py
 """RobotAdapter Protocol — see spec §7.2."""
+
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable

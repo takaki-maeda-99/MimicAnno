@@ -1,4 +1,5 @@
 """Tests for mimicanno.errors."""
+
 import io
 import json
 

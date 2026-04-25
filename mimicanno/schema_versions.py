@@ -4,6 +4,7 @@ Each schema is independent. ``COMPAT_BLOCK`` is the producer-side declaration
 of what MAJOR each in-run artifact was emitted at; consumers verify this against
 their own ``supported_majors`` set membership (NOT >=).
 """
+
 from __future__ import annotations
 
 
@@ -14,17 +15,16 @@ def parse_major(version: str) -> int:
 
 
 ARTIFACT_SCHEMA_VERSIONS: dict[str, str] = {
-    "manifest":   "0.1.0",
+    "manifest": "0.1.0",
     "annotation": "0.1.0",
     "boundaries": "0.1.0",
-    "signals":    "0.1.0",
+    "signals": "0.1.0",
 }
 
 # COMPAT scope per §6.6: in-run artifacts only. Labels YAML and index.json
 # carry their own schema_version and are validated independently at load time.
 COMPAT_BLOCK: dict[str, int] = {
-    role: parse_major(version)
-    for role, version in ARTIFACT_SCHEMA_VERSIONS.items()
+    role: parse_major(version) for role, version in ARTIFACT_SCHEMA_VERSIONS.items()
 }
 
 LABELS_SCHEMA_VERSION = "0.1.0"

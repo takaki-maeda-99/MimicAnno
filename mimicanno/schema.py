@@ -8,6 +8,7 @@ We deliberately use plain ``@dataclass`` rather than pydantic / msgspec —
 this code has no validation needs that can't be served by ``jsonschema``
 at the I/O boundary, and avoiding the third-party dep simplifies install.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -78,6 +79,7 @@ class BoundaryRef:
     in that case ``sources`` holds ``["episode_start"]`` or ``["episode_end"]``
     and ``score`` is 1.0.
     """
+
     candidate_id: str | None
     time: float
     sources: list[str]
@@ -95,6 +97,7 @@ class BoundaryRef:
 @dataclass(slots=True)
 class BoundaryCandidate:
     """A boundary candidate emitted by the integrated-score detector (spec §5.4)."""
+
     id: str
     frame: int
     time: float
@@ -124,6 +127,7 @@ LabelSource = Literal[
 @dataclass(slots=True)
 class SubtaskSegment:
     """One labeled (or, in Phase 1, ``unlabeled``) clip in a timeline."""
+
     segment_id: str
     episode_id: str
     start_frame: int
@@ -151,9 +155,9 @@ class SubtaskSegment:
     def __post_init__(self) -> None:
         # Reject None for list fields — the schema is opinionated to avoid
         # downstream None-checks. Empty list is the valid sentinel.
-        if self.failure_flags is None:  # type: ignore[unreachable]
+        if self.failure_flags is None:
             raise TypeError("failure_flags must be list[str], not None")
-        if self.object_track_ids is None:  # type: ignore[unreachable]
+        if self.object_track_ids is None:
             raise TypeError("object_track_ids must be list[str], not None")
 
     def to_dict(self) -> dict[str, Any]:

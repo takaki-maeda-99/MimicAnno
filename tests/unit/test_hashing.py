@@ -51,13 +51,12 @@ class TestSha256HexOfStr:
     def test_known_value(self):
         # echo -n "" | sha256sum
         assert sha256_hex_of_str("") == (
-            "e3b0c44298fc1c149afbf4c8996fb924"
-            "27ae41e4649b934ca495991b7852b855"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         )
 
     def test_utf8_bytes(self):
         result = sha256_hex_of_str("つかむ")
-        expected = hashlib.sha256("つかむ".encode("utf-8")).hexdigest()
+        expected = hashlib.sha256("つかむ".encode()).hexdigest()
         assert result == expected
 
 

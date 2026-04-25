@@ -9,7 +9,6 @@ from mimicanno.io_video import (
     copy_video,
     materialize_video,
     probe_video,
-    symlink_video,
 )
 
 
@@ -17,6 +16,7 @@ from mimicanno.io_video import (
 def tiny_mp4(tmp_path: Path) -> Path:
     """Generate a 30-frame 64x64 video at 30 fps via imageio_ffmpeg."""
     import imageio_ffmpeg
+
     out = tmp_path / "tiny.mp4"
     writer = imageio_ffmpeg.write_frames(
         str(out),

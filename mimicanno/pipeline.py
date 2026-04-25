@@ -1,13 +1,13 @@
 # mimicanno/pipeline.py
 """End-to-end Phase 1 pipeline orchestrator."""
+
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pyarrow as pa
 
 from mimicanno import __version__
 from mimicanno.adapters.aloha import AlohaAdapter
@@ -117,6 +117,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     adapter_config_sha: str | None = None
     if req.robot_adapter_config_path is not None:
         from mimicanno.hashing import sha256_file
+
         adapter_config_sha = "sha256:" + sha256_file(req.robot_adapter_config_path)
 
     # 3) Probe video and load parquet.
@@ -143,14 +144,13 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     try:
         fps_from_ts = resolve_fps(timestamps)
     except ParquetLoadError as e:
-        raise MimicAnnoError("fps.unresolvable", str(e), {})
+        raise MimicAnnoError("fps.unresolvable", str(e), {}) from e
     fps = float(probe.fps) if probe.fps > 0 else fps_from_ts
     duration_sec = float(probe.duration_sec)
     episode_id = req.parquet.stem  # Phase 1: derive from filename.
 
     # 5) Extract signals through the adapter.
     gripper = adapter.gripper_signal(loaded.table)
-    eef_pose = adapter.eef_pose(loaded.table)
     eef_vel = adapter.eef_velocity(loaded.table)
     has_eef = eef_vel is not None
 
@@ -166,44 +166,62 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 6) Smooth.
     sigma = smoothing_sigma_for_fps(fps)
     gripper_s = gaussian_smooth_1d(gripper, sigma=sigma)
-    vel_s = gaussian_smooth_1d(eef_vel, sigma=sigma) if has_eef else None
-    # |a| in m/s²: |Δv| / dt where dt = 1/fps. Without the *fps, the values are
-    # off by ~30× at 30 fps and the peak_threshold (set in m/s²) effectively
-    # becomes 30× too high — the detector would never fire on real data.
-    accel_s = (
-        gaussian_smooth_1d(
+    if eef_vel is not None:
+        vel_s: np.ndarray | None = gaussian_smooth_1d(eef_vel, sigma=sigma)
+        # |a| in m/s2: |Δv| / dt where dt = 1/fps. Without the *fps, the values are
+        # off by ~30x at 30 fps and the peak_threshold (set in m/s2) effectively
+        # becomes 30x too high -- the detector would never fire on real data.
+        accel_s: np.ndarray | None = gaussian_smooth_1d(
             np.abs(np.diff(eef_vel, prepend=eef_vel[0])) * fps,
             sigma=sigma,
         )
-        if has_eef else None
-    )
-    action_s = (
-        gaussian_smooth_1d(action_norm, sigma=sigma) if action_norm is not None else None
-    )
+    else:
+        vel_s = None
+        accel_s = None
+    action_s = gaussian_smooth_1d(action_norm, sigma=sigma) if action_norm is not None else None
 
     # 7) Detect per source.
     bcfg = req.config.boundary
-    events = list(detect_gripper_transition(
-        gripper_s, fps=fps, delta_threshold=bcfg.thresholds.get("gripper_delta", 0.30),
-    ))
+    events = list(
+        detect_gripper_transition(
+            gripper_s,
+            fps=fps,
+            delta_threshold=bcfg.thresholds.get("gripper_delta", 0.30),
+        )
+    )
     if vel_s is not None:
-        events.extend(detect_eef_velocity_valley(
-            vel_s, fps=fps,
-            valley_threshold=bcfg.thresholds.get("velocity_valley", 0.05),
-            min_valley_sec=0.10,
-        ))
+        events.extend(
+            detect_eef_velocity_valley(
+                vel_s,
+                fps=fps,
+                valley_threshold=bcfg.thresholds.get("velocity_valley", 0.05),
+                min_valley_sec=0.10,
+            )
+        )
     if accel_s is not None:
-        events.extend(detect_eef_acceleration_peak(
-            accel_s, fps=fps, peak_threshold=1.0,
-        ))
+        events.extend(
+            detect_eef_acceleration_peak(
+                accel_s,
+                fps=fps,
+                peak_threshold=1.0,
+            )
+        )
     if action_s is not None:
-        events.extend(detect_action_norm_change(
-            action_s, fps=fps, change_threshold=0.2, window_sec=0.5,
-        ))
+        events.extend(
+            detect_action_norm_change(
+                action_s,
+                fps=fps,
+                change_threshold=0.2,
+                window_sec=0.5,
+            )
+        )
 
     candidates = integrated_candidates(
-        events, fps=fps, merge_window_sec=bcfg.merge_window_sec,
-        weights=bcfg.weights, score_threshold=bcfg.score_threshold,
+        events,
+        fps=fps,
+        merge_window_sec=bcfg.merge_window_sec,
+        weights=bcfg.weights,
+        score_threshold=bcfg.score_threshold,
     )
 
     # 8) Determine disabled sources from what was actually run.
@@ -215,8 +233,10 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     # 9) Bracket into Phase 1 skeleton segments.
     segments = bracket_phase1_segments(
-        episode_id=episode_id, candidates=candidates,
-        fps=fps, duration_sec=duration_sec,
+        episode_id=episode_id,
+        candidates=candidates,
+        fps=fps,
+        duration_sec=duration_sec,
     )
 
     # 10) Build pipeline_params for manifest (records what was actually used).
@@ -233,20 +253,20 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 11) Build per-channel signals downsampled for viewer.
     signal_channels: list[SignalChannel] = [
         downsample_for_viewer(
-            SignalChannel(name="gripper", unit="normalized",
-                          values=gripper_s, dt_sec=1.0 / fps),
+            SignalChannel(name="gripper", unit="normalized", values=gripper_s, dt_sec=1.0 / fps),
             target_hz=30.0,
         ),
     ]
     if vel_s is not None:
-        signal_channels.append(downsample_for_viewer(
-            SignalChannel(name="eef_velocity", unit="m/s",
-                          values=vel_s, dt_sec=1.0 / fps),
-            target_hz=30.0,
-        ))
+        signal_channels.append(
+            downsample_for_viewer(
+                SignalChannel(name="eef_velocity", unit="m/s", values=vel_s, dt_sec=1.0 / fps),
+                target_hz=30.0,
+            )
+        )
 
     # 12) Build dataclass payloads.
-    generated_at = dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    generated_at = dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
     pipeline_status = PipelineStatus(
         object_state_available=False,
         degraded_from_phase=None,
@@ -254,7 +274,9 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     )
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(
-        name="mimicanno", cli_version=__version__, pipeline_phase=1,
+        name="mimicanno",
+        cli_version=__version__,
+        pipeline_phase=1,
     )
 
     manifest = Manifest(
@@ -316,7 +338,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         )
         write_boundaries_json(
             tmp_dir / "boundaries.json",
-            episode_id=episode_id, candidates=candidates,
+            episode_id=episode_id,
+            candidates=candidates,
         )
         write_annotation_json(tmp_dir / "annotation.json", annotation)
         write_manifest_json(tmp_dir / "manifest.json", manifest)
@@ -338,6 +361,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     name = canonical_name_for(episode_id, run_hash=run_hash)
     if is_collision(req.runs_root, canonical_name=name, expected_run_hash=run_hash):
         name = canonical_name_for(
-            episode_id, run_hash=run_hash, length=RUN_HASH_FALLBACK_PREFIX_LEN,
+            episode_id,
+            run_hash=run_hash,
+            length=RUN_HASH_FALLBACK_PREFIX_LEN,
         )
     return AnnotateResult(run_dir=req.runs_root / name, outcome=outcome)

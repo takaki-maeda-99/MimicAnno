@@ -1,5 +1,4 @@
 # tests/unit/test_scavenger.py
-import json
 import os
 import time
 from pathlib import Path
@@ -21,8 +20,11 @@ def test_write_and_read_writer_metadata(tmp_path: Path):
     d = tmp_path / "ep0__abc.tmp.123"
     d.mkdir()
     md = WriterMetadata(
-        pid=123, pid_start_time="2026-04-26T00:00:00.000Z",
-        canonical_name="ep0__abc", kind="tmp", claimed_at=_now(),
+        pid=123,
+        pid_start_time="2026-04-26T00:00:00.000Z",
+        canonical_name="ep0__abc",
+        kind="tmp",
+        claimed_at=_now(),
     )
     write_writer_metadata(d, md)
     got = read_writer_metadata(d)
@@ -34,12 +36,14 @@ def test_is_pid_alive_for_self():
 
 
 def test_scavenge_skips_live_pid_within_age(tmp_path: Path):
-    d = tmp_path / "ep0__abc.tmp.{}".format(os.getpid())
+    d = tmp_path / f"ep0__abc.tmp.{os.getpid()}"
     d.mkdir()
     md = WriterMetadata(
         pid=os.getpid(),
         pid_start_time=_pid_start_time_now(),
-        canonical_name="ep0__abc", kind="tmp", claimed_at=_now(),
+        canonical_name="ep0__abc",
+        kind="tmp",
+        claimed_at=_now(),
     )
     write_writer_metadata(d, md)
     scavenge_stale_dirs(tmp_path, stale_age_sec=3600)
@@ -50,8 +54,10 @@ def test_scavenge_removes_dir_with_dead_pid(tmp_path: Path):
     d = tmp_path / "ep0__abc.tmp.999999"  # virtually-impossible-PID for this run
     d.mkdir()
     md = WriterMetadata(
-        pid=999999, pid_start_time="1970-01-01T00:00:00.000Z",
-        canonical_name="ep0__abc", kind="tmp",
+        pid=999999,
+        pid_start_time="1970-01-01T00:00:00.000Z",
+        canonical_name="ep0__abc",
+        kind="tmp",
         claimed_at="1970-01-01T00:00:00.000Z",
     )
     write_writer_metadata(d, md)
@@ -63,8 +69,11 @@ def test_scavenge_keeps_dir_with_dead_pid_under_age(tmp_path: Path):
     d = tmp_path / "ep0__abc.tmp.999999"
     d.mkdir()
     md = WriterMetadata(
-        pid=999999, pid_start_time="1970-01-01T00:00:00.000Z",
-        canonical_name="ep0__abc", kind="tmp", claimed_at=_now(),
+        pid=999999,
+        pid_start_time="1970-01-01T00:00:00.000Z",
+        canonical_name="ep0__abc",
+        kind="tmp",
+        claimed_at=_now(),
     )
     write_writer_metadata(d, md)
     scavenge_stale_dirs(tmp_path, stale_age_sec=3600)
@@ -102,4 +111,5 @@ def test_scavenge_keeps_unparseable_metadata_with_huge_age(tmp_path: Path):
 def _pid_start_time_now() -> str:
     """Return the current process's start time formatted exactly like scavenger does."""
     from mimicanno.scavenger import current_pid_start_time
+
     return current_pid_start_time(os.getpid())

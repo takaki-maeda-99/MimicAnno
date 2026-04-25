@@ -1,16 +1,18 @@
 # mimicanno/signals.py
 """Signal smoothing + viewer-side downsampling (spec §5.1, §5.5)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d  # type: ignore[import-untyped]
 
 
 @dataclass(slots=True)
 class SignalChannel:
     """A 1-D signal sampled uniformly with ``dt_sec`` between samples."""
+
     name: str
     unit: str
     values: np.ndarray
@@ -32,7 +34,7 @@ def gaussian_smooth_1d(x: np.ndarray, *, sigma: float) -> np.ndarray:
         )
     if sigma <= 0:
         return x.astype(np.float64).copy()
-    return gaussian_filter1d(x.astype(np.float64), sigma=sigma, mode="reflect")
+    return gaussian_filter1d(x.astype(np.float64), sigma=sigma, mode="reflect")  # type: ignore[no-any-return]
 
 
 def downsample_for_viewer(channel: SignalChannel, *, target_hz: float) -> SignalChannel:
@@ -52,7 +54,7 @@ def downsample_for_viewer(channel: SignalChannel, *, target_hz: float) -> Signal
     current_hz = 1.0 / channel.dt_sec
     if current_hz <= target_hz * 1.05:  # already close enough
         return channel
-    factor = max(1, int(round(current_hz / target_hz)))
+    factor = max(1, round(current_hz / target_hz))
     decimated = channel.values[::factor]
     return SignalChannel(
         name=channel.name,

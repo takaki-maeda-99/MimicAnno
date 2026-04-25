@@ -40,19 +40,24 @@ class TestVelocityValley:
         # Triangle: high → near-zero (valley) → high
         v = np.abs(np.linspace(-0.5, 0.5, 120)) * 0.4
         events = detect_eef_velocity_valley(
-            v, fps=30.0, valley_threshold=0.05, min_valley_sec=0.10,
+            v,
+            fps=30.0,
+            valley_threshold=0.05,
+            min_valley_sec=0.10,
         )
         # Valley centered around frame 60
         assert any(50 <= e.frame <= 70 for e in events)
 
     def test_valley_at_eof_is_emitted(self):
         """A valley that extends to the last frame must still emit an event."""
-        n = 60
         fps = 30.0
         # First half above threshold, second half below.
         v = np.concatenate([np.full(30, 0.20), np.full(30, 0.01)])
         events = detect_eef_velocity_valley(
-            v, fps=fps, valley_threshold=0.05, min_valley_sec=0.10,
+            v,
+            fps=fps,
+            valley_threshold=0.05,
+            min_valley_sec=0.10,
         )
         assert any(e.frame >= 30 for e in events)
 
@@ -69,7 +74,10 @@ class TestActionNormChange:
     def test_change_detected(self):
         norms = np.concatenate([np.full(60, 0.1), np.full(60, 0.5)])
         events = detect_action_norm_change(
-            norms, fps=30.0, change_threshold=0.2, window_sec=0.5,
+            norms,
+            fps=30.0,
+            change_threshold=0.2,
+            window_sec=0.5,
         )
         assert any(50 <= e.frame <= 70 for e in events)
 
@@ -82,8 +90,11 @@ class TestIntegrated:
             RawEvent(frame=11, time=11 / 30, source="gripper_transition", source_score=0.4),
         ]
         candidates = integrated_candidates(
-            events, fps=30.0, merge_window_sec=0.10,
-            weights=DEFAULT_PHASE1_WEIGHTS, score_threshold=0.30,
+            events,
+            fps=30.0,
+            merge_window_sec=0.10,
+            weights=DEFAULT_PHASE1_WEIGHTS,
+            score_threshold=0.30,
         )
         assert len(candidates) == 1
         c = candidates[0]
@@ -91,10 +102,13 @@ class TestIntegrated:
         assert c.score == pytest.approx(0.9 * 0.5, abs=1e-9)
 
     def test_threshold_filters_below(self):
-        events = [RawEvent(frame=5, time=5/30, source="eef_velocity_valley", source_score=1.0)]
+        events = [RawEvent(frame=5, time=5 / 30, source="eef_velocity_valley", source_score=1.0)]
         candidates = integrated_candidates(
-            events, fps=30.0, merge_window_sec=0.10,
-            weights=DEFAULT_PHASE1_WEIGHTS, score_threshold=0.30,
+            events,
+            fps=30.0,
+            merge_window_sec=0.10,
+            weights=DEFAULT_PHASE1_WEIGHTS,
+            score_threshold=0.30,
         )
         # eef_velocity_valley alone caps at 0.25 < 0.30 → dropped
         assert candidates == []
@@ -102,17 +116,21 @@ class TestIntegrated:
     def test_two_non_gripper_can_promote(self):
         # gripper-biased policy (§5.3): velocity 0.25 + accel 0.15 = 0.40 > 0.30
         events = [
-            RawEvent(frame=10, time=10/30, source="eef_velocity_valley", source_score=1.0),
-            RawEvent(frame=10, time=10/30, source="eef_acceleration_peak", source_score=1.0),
+            RawEvent(frame=10, time=10 / 30, source="eef_velocity_valley", source_score=1.0),
+            RawEvent(frame=10, time=10 / 30, source="eef_acceleration_peak", source_score=1.0),
         ]
         candidates = integrated_candidates(
-            events, fps=30.0, merge_window_sec=0.10,
-            weights=DEFAULT_PHASE1_WEIGHTS, score_threshold=0.30,
+            events,
+            fps=30.0,
+            merge_window_sec=0.10,
+            weights=DEFAULT_PHASE1_WEIGHTS,
+            score_threshold=0.30,
         )
         assert len(candidates) == 1
         assert candidates[0].score == pytest.approx(0.40, abs=1e-9)
         assert sorted(candidates[0].sources) == [
-            "eef_acceleration_peak", "eef_velocity_valley",
+            "eef_acceleration_peak",
+            "eef_velocity_valley",
         ]
 
     def test_disabled_source_contributes_zero_no_renormalization(self):
@@ -120,21 +138,27 @@ class TestIntegrated:
         # it out and confirm the weight stays at 0.5 (no renormalization).
         weights = dict(DEFAULT_PHASE1_WEIGHTS)
         events = [
-            RawEvent(frame=10, time=10/30, source="eef_velocity_valley", source_score=1.0),
+            RawEvent(frame=10, time=10 / 30, source="eef_velocity_valley", source_score=1.0),
         ]
         candidates = integrated_candidates(
-            events, fps=30.0, merge_window_sec=0.10,
-            weights=weights, score_threshold=0.30,
+            events,
+            fps=30.0,
+            merge_window_sec=0.10,
+            weights=weights,
+            score_threshold=0.30,
         )
         assert candidates == []  # 0.25 still below 0.30 — gripper weight is NOT redistributed.
 
     def test_candidate_id_is_zero_padded(self):
         events = [
-            RawEvent(frame=i, time=i/30, source="gripper_transition", source_score=1.0)
+            RawEvent(frame=i, time=i / 30, source="gripper_transition", source_score=1.0)
             for i in range(0, 120, 30)
         ]
         cands = integrated_candidates(
-            events, fps=30.0, merge_window_sec=0.05,
-            weights=DEFAULT_PHASE1_WEIGHTS, score_threshold=0.30,
+            events,
+            fps=30.0,
+            merge_window_sec=0.05,
+            weights=DEFAULT_PHASE1_WEIGHTS,
+            score_threshold=0.30,
         )
         assert [c.id for c in cands] == ["b_001", "b_002", "b_003", "b_004"]

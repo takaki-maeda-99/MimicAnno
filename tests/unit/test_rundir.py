@@ -19,7 +19,9 @@ class TestCanonicalName:
 
     def test_extended_is_16_hex(self):
         n = canonical_name_for(
-            "ep_x", run_hash="sha256:" + "abcdef0123456789" + "0" * 48, length=16,
+            "ep_x",
+            run_hash="sha256:" + "abcdef0123456789" + "0" * 48,
+            length=16,
         )
         assert n == "ep_x__abcdef0123456789"
 
@@ -45,8 +47,9 @@ class TestRunPaths:
 
 class TestCollision:
     def test_no_existing_no_collision(self, tmp_path: Path):
-        assert not is_collision(tmp_path, canonical_name="ep0__abc",
-                                expected_run_hash="sha256:" + "0" * 64)
+        assert not is_collision(
+            tmp_path, canonical_name="ep0__abc", expected_run_hash="sha256:" + "0" * 64
+        )
 
     def test_existing_with_matching_hash_no_collision(self, tmp_path: Path):
         d = tmp_path / "ep0__abc"
@@ -55,7 +58,8 @@ class TestCollision:
             '{"run_hash":"sha256:' + "0" * 64 + '"}',
         )
         assert not is_collision(
-            tmp_path, canonical_name="ep0__abc",
+            tmp_path,
+            canonical_name="ep0__abc",
             expected_run_hash="sha256:" + "0" * 64,
         )
 
@@ -66,7 +70,8 @@ class TestCollision:
             '{"run_hash":"sha256:' + "1" * 64 + '"}',
         )
         assert is_collision(
-            tmp_path, canonical_name="ep0__abc",
+            tmp_path,
+            canonical_name="ep0__abc",
             expected_run_hash="sha256:" + "0" * 64,
         )
 

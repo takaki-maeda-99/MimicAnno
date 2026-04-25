@@ -1,9 +1,10 @@
 # mimicanno/boundaries.py
 """Boundary detectors + integrated weighted score (spec §5.2 / §5.3 / §5.4)."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import numpy as np
 
@@ -11,10 +12,10 @@ from mimicanno.schema import BoundaryCandidate
 
 # §5.3 default weights — gripper-biased precision policy.
 DEFAULT_PHASE1_WEIGHTS: dict[str, float] = {
-    "gripper_transition":   0.50,
-    "eef_velocity_valley":  0.25,
+    "gripper_transition": 0.50,
+    "eef_velocity_valley": 0.25,
     "eef_acceleration_peak": 0.15,
-    "action_norm_change":   0.10,
+    "action_norm_change": 0.10,
 }
 
 
@@ -30,8 +31,12 @@ class RawEvent:
 # Per-source detectors. Each returns a list[RawEvent] in frame order.
 # ------------------------------------------------------------------
 
+
 def detect_gripper_transition(
-    gripper: np.ndarray, *, fps: float, delta_threshold: float = 0.30,
+    gripper: np.ndarray,
+    *,
+    fps: float,
+    delta_threshold: float = 0.30,
 ) -> list[RawEvent]:
     """Fire on |Δgripper| local peaks above ``delta_threshold`` (§5.2)."""
     if gripper.size < 2:
@@ -50,8 +55,11 @@ def detect_gripper_transition(
 
 
 def detect_eef_velocity_valley(
-    eef_velocity: np.ndarray, *, fps: float,
-    valley_threshold: float = 0.05, min_valley_sec: float = 0.10,
+    eef_velocity: np.ndarray,
+    *,
+    fps: float,
+    valley_threshold: float = 0.05,
+    min_valley_sec: float = 0.10,
 ) -> list[RawEvent]:
     """Fire on smoothed |v| local minima below ``valley_threshold`` whose
     duration below threshold is at least ``min_valley_sec`` (§5.2)."""
@@ -73,29 +81,36 @@ def detect_eef_velocity_valley(
                 local = eef_velocity[start:i]
                 argmin = int(np.argmin(local))
                 vmin = float(local[argmin])
-                events.append(RawEvent(
-                    frame=int(start + argmin),
-                    time=(start + argmin) / fps,
-                    source="eef_velocity_valley",
-                    source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
-                ))
+                events.append(
+                    RawEvent(
+                        frame=int(start + argmin),
+                        time=(start + argmin) / fps,
+                        source="eef_velocity_valley",
+                        source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
+                    )
+                )
     if in_valley:
         length = len(below) - start
         if length >= min_frames:
             local = eef_velocity[start:]
             argmin = int(np.argmin(local))
             vmin = float(local[argmin])
-            events.append(RawEvent(
-                frame=int(start + argmin),
-                time=(start + argmin) / fps,
-                source="eef_velocity_valley",
-                source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
-            ))
+            events.append(
+                RawEvent(
+                    frame=int(start + argmin),
+                    time=(start + argmin) / fps,
+                    source="eef_velocity_valley",
+                    source_score=float(np.clip(1.0 - vmin / valley_threshold, 0.0, 1.0)),
+                )
+            )
     return events
 
 
 def detect_eef_acceleration_peak(
-    eef_acceleration: np.ndarray, *, fps: float, peak_threshold: float = 1.0,
+    eef_acceleration: np.ndarray,
+    *,
+    fps: float,
+    peak_threshold: float = 1.0,
 ) -> list[RawEvent]:
     """Fire on |a| local maxima above ``peak_threshold`` (§5.2)."""
     peaks = _local_maxima(eef_acceleration, threshold=peak_threshold)
@@ -111,8 +126,11 @@ def detect_eef_acceleration_peak(
 
 
 def detect_action_norm_change(
-    action_norm: np.ndarray, *, fps: float,
-    change_threshold: float = 0.2, window_sec: float = 0.5,
+    action_norm: np.ndarray,
+    *,
+    fps: float,
+    change_threshold: float = 0.2,
+    window_sec: float = 0.5,
 ) -> list[RawEvent]:
     """Rolling-mean change-point on ``||a_t||`` (§5.2).
 
@@ -173,6 +191,7 @@ def _local_maxima(x: np.ndarray, *, threshold: float) -> list[int]:
 # Integrated score and candidate promotion (§5.3).
 # ------------------------------------------------------------------
 
+
 def integrated_candidates(
     events: Iterable[RawEvent],
     *,
@@ -222,13 +241,15 @@ def integrated_candidates(
         if score < score_threshold:
             continue
         median_time = float(np.median([ev.time for ev in group]))
-        out.append(BoundaryCandidate(
-            id=f"b_{next_id:03d}",
-            frame=int(round(median_time * fps)),
-            time=median_time,
-            sources=sorted(scores.keys()),
-            scores=dict(scores),
-            score=score,
-        ))
+        out.append(
+            BoundaryCandidate(
+                id=f"b_{next_id:03d}",
+                frame=round(median_time * fps),
+                time=median_time,
+                sources=sorted(scores.keys()),
+                scores=dict(scores),
+                score=score,
+            )
+        )
         next_id += 1
     return out

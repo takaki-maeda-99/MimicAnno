@@ -7,7 +7,7 @@ from mimicanno.schema import BoundaryCandidate
 def _cand(id_: str, time: float) -> BoundaryCandidate:
     return BoundaryCandidate(
         id=id_,
-        frame=int(round(time * 30.0)),
+        frame=round(time * 30.0),
         time=time,
         sources=["gripper_transition"],
         scores={"gripper_transition": 0.9},
@@ -54,7 +54,7 @@ class TestBracket:
         assert segs[1].start_time == 1.5
         assert segs[1].end_time == 3.0
         # end_frame is inclusive (round(t*fps)-1 — see §5.6).
-        assert segs[0].end_frame == int(round(1.5 * 30)) - 1
+        assert segs[0].end_frame == round(1.5 * 30) - 1
 
     def test_drops_subframe_segments(self):
         cands = [_cand("b_001", 1.0), _cand("b_002", 1.0001)]
