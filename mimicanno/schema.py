@@ -10,7 +10,7 @@ at the I/O boundary, and avoiding the third-party dep simplifies install.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 
@@ -277,7 +277,7 @@ def _deep_jsonify(value: Any) -> Any:
     """
     if isinstance(value, dict):
         return {k: _deep_jsonify(v) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_deep_jsonify(v) for v in value]
     if hasattr(value, "to_dict") and callable(value.to_dict):
         return value.to_dict()

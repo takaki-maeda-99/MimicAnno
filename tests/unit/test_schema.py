@@ -89,6 +89,35 @@ class TestSubtaskSegment:
                 reviewer_id=None,
             )
 
+    def test_object_track_ids_required_list(self):
+        # Symmetric guard: object_track_ids=None must also raise TypeError.
+        with pytest.raises(TypeError):
+            SubtaskSegment(  # type: ignore[call-arg]
+                segment_id="s",
+                episode_id="e",
+                start_frame=0,
+                end_frame=1,
+                start_time=0.0,
+                end_time=0.1,
+                phase="unlabeled",
+                verb=None,
+                object=None,
+                target=None,
+                failure_flags=[],
+                label_source="signals_only",
+                object_state_unavailable=True,
+                object_track_ids=None,  # type: ignore[arg-type]
+                label_version="m.v1",
+                start_boundary=BoundaryRef(None, 0.0, ["episode_start"], 1.0),
+                end_boundary=BoundaryRef(None, 0.1, ["episode_end"], 1.0),
+                boundary_confidence=1.0,
+                vlm_confidence=None,
+                overall_confidence=0.0,
+                evidence=None,
+                reviewed=False,
+                reviewer_id=None,
+            )
+
 
 class TestBoundaryCandidate:
     def test_serializes_max_merged_scores(self):
@@ -192,3 +221,14 @@ class TestAnnotationResult:
         d = a.to_dict()
         assert d["pipeline_phase"] == 1
         assert d["segments"] == []
+
+
+class TestDeepJsonify:
+    def test_tuples_become_lists(self):
+        from mimicanno.schema import _deep_jsonify
+        assert _deep_jsonify({"x": (1, 2, 3)}) == {"x": [1, 2, 3]}
+
+    def test_nested_tuple_inside_dict(self):
+        from mimicanno.schema import _deep_jsonify
+        out = _deep_jsonify({"weights": ("a", ("b", "c"))})
+        assert out == {"weights": ["a", ["b", "c"]]}
