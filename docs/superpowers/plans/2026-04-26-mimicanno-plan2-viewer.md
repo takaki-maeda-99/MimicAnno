@@ -555,7 +555,7 @@ import {
   assertArtifactSelfConsistent,
   SUPPORTED_MAJORS,
 } from "../manifest";
-import type { IndexDoc, AnnotationResult } from "../manifest";
+import type { IndexDoc, AnnotationResult, Manifest } from "../manifest";
 import realManifest from "./fixtures/manifest.json";
 import realAnnotation from "./fixtures/annotation.json";
 import realIndex from "./fixtures/index.json";
@@ -573,6 +573,10 @@ describe("assertIndexSchema", () => {
 describe("assertConsumerCapability", () => {
   it("passes on a valid manifest", () => {
     expect(() => assertConsumerCapability(realManifest as Manifest, SUPPORTED_MAJORS)).not.toThrow();
+  });
+  it("throws when manifest's own schema_version major is unsupported", () => {
+    const bad = { ...(realManifest as Manifest), schema_version: "9.0.0" as const };
+    expect(() => assertConsumerCapability(bad, SUPPORTED_MAJORS)).toThrow(/manifest.*major 9/);
   });
   it("throws when manifest.compat.annotation is unsupported", () => {
     const bad = { ...(realManifest as Manifest), compat: { ...(realManifest as Manifest).compat, annotation: 99 } };
@@ -968,6 +972,32 @@ describe("fetchRetry", () => {
     await expect(promise).rejects.toThrow(/500/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("propagates network errors immediately (no retry)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("network failure"));
+    vi.stubGlobal("fetch", fetchMock);
+    const promise = fetchRetry("https://x/y");
+    await vi.runAllTimersAsync();
+    await expect(promise).rejects.toThrow(/network failure/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates AbortError without retrying", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation((_, init) => {
+      const reason = (init as RequestInit | undefined)?.signal?.aborted
+        ? new DOMException("aborted", "AbortError")
+        : new Response("nope", { status: 404 });
+      if (reason instanceof Response) return Promise.resolve(reason);
+      return Promise.reject(reason);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    controller.abort();
+    const promise = fetchRetry("https://x/y", { signal: controller.signal });
+    await vi.runAllTimersAsync();
+    await expect(promise).rejects.toThrow(/abort/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 ```
 
@@ -987,6 +1017,10 @@ const BACKOFF_MS = 100;
 export async function fetchRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let lastStatus: number | null = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // Network errors and AbortError propagate immediately — no retry.
+    // This is intentional: 5xx and network failures indicate real bugs in
+    // Phase 1 (no proxy in front of the dev server), and abort means the
+    // caller has already moved on (URL change race in RunViewer).
     const r = await fetch(input, init);
     if (r.status === 404) {
       lastStatus = 404;
@@ -1201,152 +1235,64 @@ git commit -m "components/RunList: fetch + render runs/index.json with error sta
 
 ---
 
-## Task 10: `RunViewer.tsx` — data fetch wiring + AbortController
+## Task 10a: `RunViewer.tsx` — index fetch + run selection (no manifest yet)
 
 **Files:**
 - Modify: `frontend/src/components/RunViewer.tsx`
 
-This is the largest single component. It does:
-1. Fetch `index.json` and run `selectRun` to pick which run.
-2. Fetch the manifest with `fetchRetry`.
-3. `assertConsumerCapability` BEFORE artifact fetch.
-4. Fetch annotation/boundaries/signals in parallel with a shared `AbortController`.
-5. `assertArtifactSelfConsistent` AFTER each artifact resolves.
-6. Hold `currentTimeSec` and `widthPx`.
-7. Render the multi-runs chooser banner, the `pipeline_status` banner, and the children (Video/Timeline/Waveform). Children are placeholders for now and get wired up in tasks 11–13.
+This is the first slice. RunViewer fetches `runs/index.json`, runs `selectRun`, and renders one of three states: loading, no-match (with a "back to list" link per spec §4.4), or "selected" (we just stash the entry; manifest fetch comes in 10b).
 
-- [ ] **Step 1: Implement RunViewer**
+- [ ] **Step 1: Implement the index-fetch slice**
 
 ```tsx
 // frontend/src/components/RunViewer.tsx
 import { useEffect, useRef, useState } from "react";
 import {
-  artifactUrl,
-  assertConsumerCapability,
-  assertArtifactSelfConsistent,
   assertIndexSchema,
-  resolveUrl,
   SUPPORTED_MAJORS,
-  type AnnotationResult,
-  type BoundariesDoc,
   type IndexDoc,
   type IndexEntry,
-  type Manifest,
-  type SignalsDoc,
 } from "../lib/manifest";
-import { fetchRetry } from "../lib/fetchRetry";
 import { selectRun, type RunSelection } from "../lib/runSelection";
-
-type Loaded = {
-  selection: RunSelection;
-  manifest: Manifest;
-  manifestUrl: string;
-  annotation: AnnotationResult;
-  boundaries: BoundariesDoc;
-  signals: SignalsDoc;
-};
 
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "no-match"; episodeId: string; runHashShort: string | undefined }
-  | { kind: "loaded"; data: Loaded };
+  | { kind: "selected"; selection: RunSelection; entry: IndexEntry };
 
 type Props = { episodeId: string; runHashShort: string | undefined };
 
 export default function RunViewer({ episodeId, runHashShort }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
-  const [currentTimeSec, setCurrentTimeSec] = useState(0);
-  const [widthPx, setWidthPx] = useState(0);
-  const rowRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // ResizeObserver: RunViewer is the single owner of the X-axis width.
-  useEffect(() => {
-    if (!rowRef.current) return;
-    const obs = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width ?? 0;
-      if (w > 0) setWidthPx(w);
-    });
-    obs.observe(rowRef.current);
-    return () => obs.disconnect();
-  }, []);
-
-  // Data fetch. Re-runs whenever (episodeId, runHashShort) changes.
-  // Previous controller is aborted to handle the URL-change race.
   useEffect(() => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setState({ kind: "loading" });
-    setCurrentTimeSec(0);
 
     (async () => {
       try {
-        // 1) index.json
-        const indexResp = await fetch("/runs/index.json", { signal: controller.signal });
-        if (!indexResp.ok) {
-          setState({ kind: "error", message: `failed to load index.json: HTTP ${indexResp.status}` });
+        const r = await fetch("/runs/index.json", { signal: controller.signal });
+        if (!r.ok) {
+          setState({ kind: "error", message: `failed to load index.json: HTTP ${r.status}` });
           return;
         }
-        const indexDoc = (await indexResp.json()) as IndexDoc;
-        assertIndexSchema(indexDoc, SUPPORTED_MAJORS.index);
-
-        const selection = selectRun(indexDoc.runs, episodeId, runHashShort);
+        const doc = (await r.json()) as IndexDoc;
+        assertIndexSchema(doc, SUPPORTED_MAJORS.index);
+        const selection = selectRun(doc.runs, episodeId, runHashShort);
         if (selection.kind === "none") {
           setState({ kind: "no-match", episodeId, runHashShort });
           return;
         }
-        const entry: IndexEntry =
-          selection.kind === "single" ? selection.entry : selection.chosen;
-
-        // 2) manifest with publish-gap retry
-        const manifestUrl = resolveUrl(
-          new URL("/runs/index.json", window.location.origin).toString(),
-          entry.manifest_url,
-        );
-        const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
-        const manifest = (await manifestResp.json()) as Manifest;
-
-        // 3) consumer-capability check (BEFORE artifact fetches)
-        assertConsumerCapability(manifest, SUPPORTED_MAJORS);
-
-        // 4) artifacts in parallel
-        const [annResp, bndResp, sigResp] = await Promise.all([
-          fetch(resolveUrl(manifestUrl, artifactUrl(manifest, "annotation")), { signal: controller.signal }),
-          fetch(resolveUrl(manifestUrl, artifactUrl(manifest, "boundaries")), { signal: controller.signal }),
-          fetch(resolveUrl(manifestUrl, artifactUrl(manifest, "signals")), { signal: controller.signal }),
-        ]);
-        for (const [role, r] of [
-          ["annotation", annResp],
-          ["boundaries", bndResp],
-          ["signals", sigResp],
-        ] as const) {
-          if (!r.ok) {
-            setState({ kind: "error", message: `failed to load ${role}: HTTP ${r.status}` });
-            return;
-          }
-        }
-        const annotation = (await annResp.json()) as AnnotationResult;
-        const boundaries = (await bndResp.json()) as BoundariesDoc;
-        const signals = (await sigResp.json()) as SignalsDoc;
-
-        // 5) producer-internal consistency (AFTER artifact bytes are in hand)
-        assertArtifactSelfConsistent("annotation", annotation, manifest);
-        assertArtifactSelfConsistent("boundaries", boundaries, manifest);
-        assertArtifactSelfConsistent("signals", signals, manifest);
-
+        const entry = selection.kind === "single" ? selection.entry : selection.chosen;
         if (controller.signal.aborted) return;
-        setState({
-          kind: "loaded",
-          data: { selection, manifest, manifestUrl, annotation, boundaries, signals },
-        });
+        setState({ kind: "selected", selection, entry });
       } catch (err) {
-        if (controller.signal.aborted) return; // swallow aborted-fetch
-        setState({
-          kind: "error",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        if (controller.signal.aborted) return;
+        setState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
       }
     })();
 
@@ -1362,34 +1308,395 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         {h !== undefined
           ? `no run for episode_id=${e} hash=${h}`
           : `no run for episode_id=${e}`}
+        {" "}
+        <a href="/">all runs</a>
       </div>
     );
   }
-  const { selection, manifest, manifestUrl, annotation, boundaries, signals } = state.data;
-  const videoUrl = resolveUrl(manifestUrl, artifactUrl(manifest, "video"));
-
+  // kind === "selected"
   return (
     <div className="run-viewer">
-      {selection.kind === "multiple" && (
-        <ChooserBanner selection={selection} episodeId={episodeId} />
-      )}
-      {manifest.pipeline_status.degraded_from_phase !== null && (
-        <div className="pipeline-status-banner">
-          degraded from phase {manifest.pipeline_status.degraded_from_phase}: {manifest.pipeline_status.degrade_reason}
-        </div>
-      )}
-      {/* Video / Timeline / Waveform rows are wired up in tasks 11–13. */}
-      <div ref={rowRef} className="x-row">
-        <div>video placeholder ({videoUrl})</div>
-        <div>widthPx={widthPx} currentTimeSec={currentTimeSec.toFixed(3)}</div>
-        <div>
-          {boundaries.candidates.length} candidates · {annotation.segments.length} segments · {signals.channels.length} channels
-        </div>
-      </div>
+      <div>selected: <code>{state.entry.run_hash_short}</code> ({state.entry.task_text})</div>
     </div>
   );
 }
+```
 
+- [ ] **Step 2: Type-check**
+
+```bash
+cd frontend && pnpm tsc --noEmit
+```
+
+Expected: no errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+git add frontend/src/components/RunViewer.tsx
+git commit -m "components/RunViewer: index fetch + selectRun + no-match w/ back link"
+```
+
+---
+
+## Task 10b: `RunViewer.tsx` — manifest fetch + consumer-capability check
+
+**Files:**
+- Modify: `frontend/src/components/RunViewer.tsx`
+
+Add the manifest fetch under the publish-gap retry contract; run `assertConsumerCapability` BEFORE artifact fetches; new `kind: "manifest-loaded"` state. Artifacts come in 10c.
+
+- [ ] **Step 1: Extend imports and state**
+
+In `RunViewer.tsx`, expand the imports:
+
+```tsx
+import {
+  artifactUrl,
+  assertConsumerCapability,
+  assertIndexSchema,
+  resolveUrl,
+  SUPPORTED_MAJORS,
+  type IndexDoc,
+  type IndexEntry,
+  type Manifest,
+} from "../lib/manifest";
+import { fetchRetry } from "../lib/fetchRetry";
+```
+
+Extend the `State` discriminated union:
+
+```tsx
+type State =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "no-match"; episodeId: string; runHashShort: string | undefined }
+  | {
+      kind: "manifest-loaded";
+      selection: RunSelection;
+      entry: IndexEntry;
+      manifest: Manifest;
+      manifestUrl: string;
+    };
+```
+
+(Drop the intermediate `kind: "selected"`; we transition straight from "loading" to "manifest-loaded".)
+
+- [ ] **Step 2: Add the manifest fetch + compat check inside the same async IIFE**
+
+Replace the body inside `(async () => { ... })()` with:
+
+```tsx
+try {
+  // 1) index.json + selectRun
+  const r = await fetch("/runs/index.json", { signal: controller.signal });
+  if (!r.ok) {
+    setState({ kind: "error", message: `failed to load index.json: HTTP ${r.status}` });
+    return;
+  }
+  const doc = (await r.json()) as IndexDoc;
+  assertIndexSchema(doc, SUPPORTED_MAJORS.index);
+  const selection = selectRun(doc.runs, episodeId, runHashShort);
+  if (selection.kind === "none") {
+    setState({ kind: "no-match", episodeId, runHashShort });
+    return;
+  }
+  const entry = selection.kind === "single" ? selection.entry : selection.chosen;
+
+  // 2) manifest with publish-gap retry (parent-spec §6.5)
+  const manifestUrl = resolveUrl(
+    new URL("/runs/index.json", window.location.origin).toString(),
+    entry.manifest_url,
+  );
+  const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
+  const manifest = (await manifestResp.json()) as Manifest;
+
+  // 3) consumer-capability check (BEFORE artifact fetches) — parent §6.6 half 1.
+  assertConsumerCapability(manifest, SUPPORTED_MAJORS);
+
+  if (controller.signal.aborted) return;
+  setState({ kind: "manifest-loaded", selection, entry, manifest, manifestUrl });
+} catch (err) {
+  if (controller.signal.aborted) return;
+  setState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+}
+```
+
+- [ ] **Step 3: Update the render branches**
+
+Replace the `kind === "selected"` branch with `kind === "manifest-loaded"`:
+
+```tsx
+return (
+  <div className="run-viewer">
+    <div>
+      manifest loaded for <code>{state.entry.run_hash_short}</code>
+      {" "}
+      ({state.manifest.duration_sec.toFixed(2)}s, {state.manifest.fps.toFixed(0)} fps).
+      Loading artifacts…
+    </div>
+  </div>
+);
+```
+
+- [ ] **Step 4: Type-check**
+
+```bash
+cd frontend && pnpm tsc --noEmit
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+git add frontend/src/components/RunViewer.tsx
+git commit -m "components/RunViewer: manifest fetch + assertConsumerCapability"
+```
+
+---
+
+## Task 10c: `RunViewer.tsx` — per-artifact state + AbortController + producer-internal consistency
+
+**Files:**
+- Modify: `frontend/src/components/RunViewer.tsx`
+
+Per parent-spec §5: an artifact-level error must surface only for that role, not collapse the whole viewer. We track each of `annotation`, `boundaries`, `signals` independently. The shared `AbortController` from `RunViewer`'s effect is already keyed off `(episodeId, runHashShort)`; this task only adds per-artifact bookkeeping on top.
+
+- [ ] **Step 1: Add the per-artifact state shape**
+
+Add a helper type to `manifest.ts` or near the top of `RunViewer.tsx`:
+
+```tsx
+type ArtifactSlot<T> =
+  | { kind: "loading" }
+  | { kind: "ok"; data: T }
+  | { kind: "error"; message: string };
+
+type Loaded = {
+  selection: RunSelection;
+  entry: IndexEntry;
+  manifest: Manifest;
+  manifestUrl: string;
+  annotation: ArtifactSlot<AnnotationResult>;
+  boundaries: ArtifactSlot<BoundariesDoc>;
+  signals: ArtifactSlot<SignalsDoc>;
+  videoError: string | null;
+};
+```
+
+Update the `State` union: replace `kind: "manifest-loaded"` with `kind: "loaded"; data: Loaded`. Initial value when entering "loaded" is `annotation: { kind: "loading" }`, etc.
+
+- [ ] **Step 2: Implement the per-artifact fetch + self-consistency check**
+
+After computing `manifest`, replace the `setState({ kind: "manifest-loaded", ... })` with:
+
+```tsx
+if (controller.signal.aborted) return;
+const initial: Loaded = {
+  selection,
+  entry,
+  manifest,
+  manifestUrl,
+  annotation: { kind: "loading" },
+  boundaries: { kind: "loading" },
+  signals: { kind: "loading" },
+  videoError: null,
+};
+setState({ kind: "loaded", data: initial });
+
+// Fetch each artifact independently. Per spec §5, role-level failures must
+// not collapse the others; we update only the slot that resolved.
+const updateSlot = <K extends "annotation" | "boundaries" | "signals">(
+  role: K,
+  slot: Loaded[K],
+) => {
+  if (controller.signal.aborted) return;
+  setState((prev) =>
+    prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, [role]: slot } } : prev,
+  );
+};
+
+const fetchArtifact = async <T extends { schema_version: string }>(
+  role: "annotation" | "boundaries" | "signals",
+) => {
+  try {
+    const url = resolveUrl(manifestUrl, artifactUrl(manifest, role));
+    const r = await fetch(url, { signal: controller.signal });
+    if (!r.ok) {
+      updateSlot(role, { kind: "error", message: `failed to load ${role}: HTTP ${r.status}` });
+      return;
+    }
+    let data: T;
+    try {
+      data = (await r.json()) as T;
+    } catch (e) {
+      updateSlot(role, { kind: "error", message: `malformed ${role}: ${e instanceof Error ? e.message : String(e)}` });
+      return;
+    }
+    try {
+      assertArtifactSelfConsistent(role, data as { schema_version: SchemaVersion }, manifest);
+    } catch (e) {
+      updateSlot(role, { kind: "error", message: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    updateSlot(role, { kind: "ok", data: data as never });
+  } catch (e) {
+    if (controller.signal.aborted) return;
+    updateSlot(role, { kind: "error", message: e instanceof Error ? e.message : String(e) });
+  }
+};
+
+void Promise.all([
+  fetchArtifact<AnnotationResult>("annotation"),
+  fetchArtifact<BoundariesDoc>("boundaries"),
+  fetchArtifact<SignalsDoc>("signals"),
+]);
+```
+
+Add the missing imports:
+
+```tsx
+import {
+  // ...existing
+  assertArtifactSelfConsistent,
+  type AnnotationResult,
+  type BoundariesDoc,
+  type SchemaVersion,
+  type SignalsDoc,
+} from "../lib/manifest";
+```
+
+- [ ] **Step 3: Update the render branches**
+
+When `state.kind === "loaded"`, render a row per role:
+
+```tsx
+const { annotation, boundaries, signals } = state.data;
+return (
+  <div className="run-viewer">
+    <div>
+      {(["annotation", "boundaries", "signals"] as const).map((role) => {
+        const slot = state.data[role];
+        if (slot.kind === "loading") return <div key={role}>{role}: loading…</div>;
+        if (slot.kind === "error") return <div key={role} className="error">{slot.message}</div>;
+        return <div key={role}>{role}: ok</div>;
+      })}
+    </div>
+  </div>
+);
+```
+
+(Children are still placeholders. Tasks 11–13 will replace these with VideoPlayer / Timeline / WaveformView, gated on each role's `kind === "ok"`.)
+
+- [ ] **Step 4: Type-check**
+
+```bash
+cd frontend && pnpm tsc --noEmit
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+git add frontend/src/components/RunViewer.tsx
+git commit -m "components/RunViewer: per-artifact state + abort + self-consistency"
+```
+
+---
+
+## Task 10d: `RunViewer.tsx` — `widthPx` (`ResizeObserver`) + `currentTimeSec` ownership
+
+**Files:**
+- Modify: `frontend/src/components/RunViewer.tsx`
+
+`RunViewer` is the single owner of the X-axis width and the playhead. Children (Timeline, WaveformView, VideoPlayer) consume them as props; they must not measure the DOM themselves.
+
+- [ ] **Step 1: Add `currentTimeSec` and `widthPx` state**
+
+Inside `RunViewer`, after the existing `useState`:
+
+```tsx
+const [currentTimeSec, setCurrentTimeSec] = useState(0);
+const [widthPx, setWidthPx] = useState(0);
+const rowRef = useRef<HTMLDivElement | null>(null);
+
+useEffect(() => {
+  if (!rowRef.current) return;
+  const obs = new ResizeObserver((entries) => {
+    const w = entries[0]?.contentRect.width ?? 0;
+    if (w > 0) setWidthPx(w);
+  });
+  obs.observe(rowRef.current);
+  return () => obs.disconnect();
+}, []);
+
+// Reset playhead when the run changes
+useEffect(() => {
+  setCurrentTimeSec(0);
+}, [episodeId, runHashShort]);
+```
+
+- [ ] **Step 2: Wrap the artifact-rows in the measured container**
+
+Replace the inner `<div>` of the loaded branch with:
+
+```tsx
+return (
+  <div className="run-viewer">
+    <div ref={rowRef} className="x-row">
+      {/* placeholders — Tasks 11-13 replace these */}
+      <div>video placeholder</div>
+      <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
+      <div>waveform placeholder</div>
+    </div>
+    <div>
+      {(["annotation", "boundaries", "signals"] as const).map((role) => {
+        const slot = state.data[role];
+        if (slot.kind === "loading") return <div key={role}>{role}: loading…</div>;
+        if (slot.kind === "error") return <div key={role} className="error">{slot.message}</div>;
+        return <div key={role}>{role}: ok</div>;
+      })}
+    </div>
+  </div>
+);
+```
+
+- [ ] **Step 3: Append CSS**
+
+```css
+/* frontend/src/App.css — append */
+.run-viewer { padding: 1rem; }
+.x-row { display: flex; flex-direction: column; gap: 0.5rem; }
+```
+
+- [ ] **Step 4: Type-check**
+
+```bash
+cd frontend && pnpm tsc --noEmit
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+git add frontend/src/components/RunViewer.tsx frontend/src/App.css
+git commit -m "components/RunViewer: ResizeObserver widthPx + currentTimeSec owners"
+```
+
+---
+
+## Task 10e: `RunViewer.tsx` — chooser banner + `pipeline_status` banner
+
+**Files:**
+- Modify: `frontend/src/components/RunViewer.tsx`
+- Modify: `frontend/src/App.css`
+
+Spec §3 (component table) and parent-§4.3 (pipeline_status surfacing) require both banners.
+
+- [ ] **Step 1: Add the chooser banner subcomponent**
+
+```tsx
 function ChooserBanner({
   selection,
   episodeId,
@@ -1410,7 +1717,11 @@ function ChooserBanner({
       >
         {all.map((entry) => (
           <option key={entry.run_hash_short} value={entry.run_hash_short}>
-            {entry.run_hash_short} · {entry.generated_at} · {entry.task_text}
+            {entry.run_hash_short}
+            {" · cfg "}{entry.config_hash_short}
+            {" · in "}{entry.input_hash_short}
+            {" · "}{entry.generated_at}
+            {" · "}{entry.task_text}
           </option>
         ))}
       </select>
@@ -1419,36 +1730,74 @@ function ChooserBanner({
 }
 ```
 
-- [ ] **Step 2: Append CSS**
+(All five fields the spec mandates: `run_hash_short`, `config_hash_short`, `input_hash_short`, `generated_at`, `task_text`.)
+
+- [ ] **Step 2: Render both banners inside the loaded branch**
+
+At the top of the loaded branch:
+
+```tsx
+const { selection, manifest } = state.data;
+return (
+  <div className="run-viewer">
+    {selection.kind === "multiple" && (
+      <ChooserBanner selection={selection} episodeId={episodeId} />
+    )}
+    {manifest.pipeline_status.degraded_from_phase !== null && (
+      <div className="pipeline-status-banner">
+        degraded from phase {manifest.pipeline_status.degraded_from_phase}: {manifest.pipeline_status.degrade_reason}
+      </div>
+    )}
+    {/* rest of the body — measured row + per-role status — stays as in 10d */}
+    <div ref={rowRef} className="x-row">
+      <div>video placeholder</div>
+      <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
+      <div>waveform placeholder</div>
+    </div>
+    <div>
+      {(["annotation", "boundaries", "signals"] as const).map((role) => {
+        const slot = state.data[role];
+        if (slot.kind === "loading") return <div key={role}>{role}: loading…</div>;
+        if (slot.kind === "error") return <div key={role} className="error">{slot.message}</div>;
+        return <div key={role}>{role}: ok</div>;
+      })}
+    </div>
+  </div>
+);
+```
+
+- [ ] **Step 3: Append CSS**
 
 ```css
 /* frontend/src/App.css — append */
-.run-viewer { padding: 1rem; }
-.x-row { display: flex; flex-direction: column; gap: 0.5rem; }
 .chooser-banner { background: #fef3c7; padding: 0.5rem; margin-bottom: 0.5rem; }
 .pipeline-status-banner { background: #fee2e2; padding: 0.5rem; margin-bottom: 0.5rem; }
 ```
 
-- [ ] **Step 3: Type-check**
+- [ ] **Step 4: Type-check + smoke**
 
 ```bash
 cd frontend && pnpm tsc --noEmit
 ```
 
-Expected: no errors.
-
-- [ ] **Step 4: Smoke test against the real run**
+Quick smoke (after `mimicanno annotate` has produced at least one run under `<repo>/runs/`):
 
 ```bash
-cd frontend
-ln -sfn /tmp/mimicanno-real-verify/runs ../runs-symlink-test || true  # not strictly needed; the app reads ../runs/
-pnpm dev &
+cd frontend && pnpm dev &
 sleep 3
-curl -s 'http://localhost:5173/runs/index.json' | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["runs"]))'
+curl -s 'http://localhost:5173/runs/index.json' | python3 -c 'import json, sys; d=json.load(sys.stdin); print(d["schema_version"], len(d["runs"]))'
 kill %1
 ```
 
-Expected: a number ≥ 1 (the candidates from the verified run). If the path `../runs/` is not the same as `/tmp/mimicanno-real-verify/runs/`, you'll get a 404 — point it at the real run dir for smoke purposes (e.g., temporarily change `runsDir` in `vite.config.ts`, or copy the run dir into `<repo>/runs/`).
+Expected: `0.1.0 1` (or `2`/`3` if multiple runs already exist).
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+git add frontend/src/components/RunViewer.tsx frontend/src/App.css
+git commit -m "components/RunViewer: chooser banner (5 fields) + pipeline_status banner"
+```
 
 - [ ] **Step 5: Commit**
 
@@ -1476,9 +1825,10 @@ type Props = {
   videoUrl: string;
   currentTimeSec: number;
   onTimeChange: (tSec: number) => void;
+  onError: (message: string) => void;
 };
 
-export default function VideoPlayer({ videoUrl, currentTimeSec, onTimeChange }: Props) {
+export default function VideoPlayer({ videoUrl, currentTimeSec, onTimeChange, onError }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   // External seeks: when the parent updates currentTimeSec by some
@@ -1499,8 +1849,9 @@ export default function VideoPlayer({ videoUrl, currentTimeSec, onTimeChange }: 
       src={videoUrl}
       controls
       onTimeUpdate={(e) => onTimeChange(e.currentTarget.currentTime)}
-      onError={() => {
-        /* error message is rendered separately by RunViewer */
+      onError={(e) => {
+        const code = e.currentTarget.error?.code;
+        onError(`video playback failed${code !== undefined ? ` (code ${code})` : ""}`);
       }}
       style={{ maxWidth: "100%" }}
     />
@@ -1508,15 +1859,33 @@ export default function VideoPlayer({ videoUrl, currentTimeSec, onTimeChange }: 
 }
 ```
 
-- [ ] **Step 2: Wire it into RunViewer**
+- [ ] **Step 2: Wire VideoPlayer + videoError into RunViewer**
 
-In `RunViewer.tsx`, replace `<div>video placeholder ({videoUrl})</div>` with:
+In `RunViewer.tsx`:
+- Add import: `import VideoPlayer from "./VideoPlayer";`
+- Add the helper that sets `videoError` on the loaded state:
 
 ```tsx
-<VideoPlayer videoUrl={videoUrl} currentTimeSec={currentTimeSec} onTimeChange={setCurrentTimeSec} />
+const setVideoError = (message: string) => {
+  setState((prev) =>
+    prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, videoError: message } } : prev,
+  );
+};
 ```
 
-Also import: `import VideoPlayer from "./VideoPlayer";`.
+- Replace the `<div>video placeholder</div>` with a conditional that shows either the player or the error (the rest of the timeline still renders below per spec §5):
+
+```tsx
+{state.data.videoError !== null
+  ? <div className="error">{state.data.videoError}</div>
+  : <VideoPlayer
+      videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video"))}
+      currentTimeSec={currentTimeSec}
+      onTimeChange={setCurrentTimeSec}
+      onError={setVideoError}
+    />
+}
+```
 
 - [ ] **Step 3: Type-check**
 
@@ -1682,21 +2051,24 @@ export default function Timeline({
 }
 ```
 
-- [ ] **Step 3: Wire it into RunViewer**
+- [ ] **Step 3: Wire it into RunViewer (gated on slot.kind === "ok")**
 
 In `RunViewer.tsx`:
 - Import: `import Timeline from "./Timeline";`
-- Replace `<div>widthPx={widthPx} currentTimeSec={...}</div>` with:
+- Replace the `<div>timeline placeholder ...</div>` with the gated component. Per spec §5, when `annotation` or `boundaries` is in error, the others must still render — so we gate Timeline on both being ok and otherwise show the per-role error inline:
 
 ```tsx
-<Timeline
-  widthPx={widthPx}
-  durationSec={manifest.duration_sec}
-  currentTimeSec={currentTimeSec}
-  candidates={boundaries.candidates}
-  segments={annotation.segments}
-  onSeek={setCurrentTimeSec}
-/>
+{state.data.boundaries.kind === "ok" && state.data.annotation.kind === "ok"
+  ? <Timeline
+      widthPx={widthPx}
+      durationSec={state.data.manifest.duration_sec}
+      currentTimeSec={currentTimeSec}
+      candidates={state.data.boundaries.data.candidates}
+      segments={state.data.annotation.data.segments}
+      onSeek={setCurrentTimeSec}
+    />
+  : <div>timeline unavailable (annotation / boundaries error above)</div>
+}
 ```
 
 - [ ] **Step 4: Type-check**
@@ -1814,20 +2186,25 @@ function ChannelRow({
 .waveform-unit { color: #999; }
 ```
 
-- [ ] **Step 3: Wire it into RunViewer**
+- [ ] **Step 3: Wire it into RunViewer (gated on signals.kind === "ok")**
 
 In `RunViewer.tsx`:
 - Import: `import WaveformView from "./WaveformView";`
-- Replace the boundaries/segments/channels debug div with:
+- Replace the `<div>waveform placeholder</div>` with the gated component:
 
 ```tsx
-<WaveformView
-  widthPx={widthPx}
-  durationSec={manifest.duration_sec}
-  currentTimeSec={currentTimeSec}
-  channels={signals.channels}
-/>
+{state.data.signals.kind === "ok"
+  ? <WaveformView
+      widthPx={widthPx}
+      durationSec={state.data.manifest.duration_sec}
+      currentTimeSec={currentTimeSec}
+      channels={state.data.signals.data.channels}
+    />
+  : <div>waveform unavailable (signals error above)</div>
+}
 ```
+
+The per-role status row from Task 10c can be removed at this point — each component now renders its own degraded fallback when its slot is in error, so the redundant role table no longer adds information.
 
 - [ ] **Step 4: Type-check**
 
@@ -1906,13 +2283,54 @@ Click the `episode_000` link (or open `http://localhost:5173/?run=episode_000` d
 
 This satisfies parent-§15.1 #5.
 
-- [ ] **Step 5: Verify dt_sec alignment (parent-§15.1 #8)**
+- [ ] **Step 5: Verify dt_sec alignment with a multi-channel synthetic run (parent-§15.1 #8)**
 
-The svla so100 has only one channel (gripper) so this is a degenerate test. Confirm the gripper waveform's playhead is visually aligned with the video time as it plays. If you have access to an aloha episode (which has both gripper AND eef_velocity at potentially different sample rates), open that run instead and confirm both channels' playheads align with the video.
+The svla so100 has only the gripper channel, so it cannot exercise the "multiple channels with different `dt_sec`" alignment contract. Generate a synthetic Aloha episode (which has both `gripper` and `eef_velocity`) using Plan 1's test fixtures, run it through `mimicanno annotate`, and then deliberately downsample one channel in the resulting `signals.json` to a different `dt_sec`:
+
+```bash
+cd /home/takakimaeda/MimicRec/MimicAnno
+env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH .venv/bin/python <<'PY'
+from pathlib import Path
+from tests.fixtures.synthesize import synthesize_aloha_episode
+out = Path("/tmp/mimicanno-plan2-smoke/aloha_ep")
+out.mkdir(parents=True, exist_ok=True)
+synthesize_aloha_episode(out, n_frames=300, fps=30.0)
+PY
+
+env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH .venv/bin/python -m mimicanno.cli annotate \
+  --video   /tmp/mimicanno-plan2-smoke/aloha_ep/ep_synth_000.mp4 \
+  --parquet /tmp/mimicanno-plan2-smoke/aloha_ep/ep_synth_000.parquet \
+  --task    "synthetic alignment test" \
+  --robot   aloha \
+  --runs-root runs \
+  --link-video
+
+# Find the new run dir and decimate the eef_velocity channel to a different dt_sec.
+RUN=$(ls -dt runs/ep_synth_000__* | head -1)
+env -u PYTHONPATH .venv/bin/python <<PY
+import json, pathlib
+p = pathlib.Path("$RUN/signals.json")
+doc = json.loads(p.read_text())
+for ch in doc["channels"]:
+    if ch["name"] == "eef_velocity":
+        # Halve the sample rate: keep every other point, double dt_sec.
+        ch["values"] = ch["values"][::2]
+        ch["dt_sec"] = ch["dt_sec"] * 2
+p.write_text(json.dumps(doc, indent=2))
+print("decimated eef_velocity to dt_sec =", ch["dt_sec"])
+PY
+```
+
+Reload `http://localhost:5173/?run=ep_synth_000`. Expected:
+- Both `gripper` and `eef_velocity` waveforms render.
+- The playhead line in both waveforms lines up at the same X coordinate as the video time and as the timeline's playhead — at every moment of playback.
+- This holds even though the two channels have different `dt_sec`.
+
+If the `eef_velocity` waveform's last sample lands visibly before the right edge of the SVG (or extends past it), `WaveformView`'s `t = t0_sec + i * dt_sec` arithmetic is wrong. Fix and re-verify.
 
 - [ ] **Step 6: Verify chooser banner + exact-hash lookup (parent-§15.1 #9)**
 
-Generate a second run on the same episode with different boundary config:
+Generate a second run on the same so100 episode with different boundary config:
 
 ```bash
 cat > /tmp/mimicanno-plan2-smoke/boundary_hi.yaml <<'EOF'
@@ -1932,19 +2350,33 @@ env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH .venv/bin/python -m mimican
 ls runs/
 ```
 
-Expected: a second `runs/episode_000__<other-hash>/` directory and a 2-row index.json. Now reload `http://localhost:5173/?run=episode_000`. Expected: the chooser banner appears, listing both runs by `run_hash_short`. Pick the other entry — expected: URL changes to `?run=episode_000&hash=<other_short>` and the page reloads showing the alternative run's markers/segments.
+Expected: a second `runs/episode_000__<other-hash>/` directory and a 2-row index.json. Now reload `http://localhost:5173/?run=episode_000`. Expected: the chooser banner appears, listing both runs by `run_hash_short` and showing all five fields (`run_hash_short`, `config_hash_short`, `input_hash_short`, `generated_at`, `task_text`). Pick the other entry — expected: URL changes to `?run=episode_000&hash=<other_short>` and the page reloads showing the alternative run's markers/segments.
 
-- [ ] **Step 7: Verify "no run for episode" error**
+- [ ] **Step 7: Verify URL-change race (AbortController)**
 
-Open `http://localhost:5173/?run=does_not_exist`. Expected: `<div>no run for episode_id=does_not_exist</div>`.
+In Chrome DevTools → Network → Throttling → "Slow 3G" (or "Custom: 50 kb/s"). Reload `http://localhost:5173/?run=episode_000` and immediately, while artifacts are still streaming, select the other entry from the chooser banner. Expected:
+- The screen never flashes a half-loaded mix (markers/waveform from the first run with the second run's video, etc.).
+- DevTools console shows zero unhandled rejections.
+- The aborted requests appear as "(canceled)" in the Network panel.
+- The final view matches the second run's artifacts only.
 
-- [ ] **Step 8: Verify "consumer cannot read major" error path manually**
+Reset throttling to "No throttling" before continuing.
+
+- [ ] **Step 8: Verify "no run for episode" error with back link**
+
+Open `http://localhost:5173/?run=does_not_exist`. Expected: `no run for episode_id=does_not_exist  all runs` with `all runs` rendered as a clickable link to `/`.
+
+- [ ] **Step 9: Verify "consumer cannot read major" error path manually**
 
 Edit `frontend/src/lib/manifest.ts` to set `SUPPORTED_MAJORS.manifest = []`. Reload the run viewer. Expected: `<div>manifest.json schema major 1; viewer reads majors {}</div>` (or equivalent message). Revert the edit.
 
-- [ ] **Step 9: No commit needed unless smoke surfaced bugs**
+- [ ] **Step 10: Verify per-artifact error isolation**
 
-If any of steps 3–8 produced wrong output, fix the offending component (probably in `RunViewer.tsx` or one of `Timeline`/`WaveformView`/`VideoPlayer`), update tests if a unit-testable contract was broken, and commit with `fix:` prefix. Otherwise skip.
+Temporarily rename `runs/<canonical_name>/boundaries.json` to `boundaries.json.bak`. Reload `?run=episode_000`. Expected: `<div>failed to load boundaries: HTTP 404</div>` appears, but the video and waveform still render (per spec §5: per-artifact failure must not collapse the others). Restore the file.
+
+- [ ] **Step 11: No commit needed unless smoke surfaced bugs**
+
+If any of steps 3–10 produced wrong output, fix the offending component (probably in `RunViewer.tsx` or one of `Timeline`/`WaveformView`/`VideoPlayer`), update tests if a unit-testable contract was broken, and commit with `fix:` prefix. Otherwise skip.
 
 ---
 
