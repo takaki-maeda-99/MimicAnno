@@ -1,4 +1,4 @@
-# MimicAno Phase 1 — Python Pipeline Implementation Plan
+# MimicAnno Phase 1 — Python Pipeline Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,14 +8,14 @@
 
 **Tech Stack:** Python 3.11+, `pyarrow` (parquet), `numpy`/`scipy` (signals), `imageio-ffmpeg` (video sha256 + duration + fps probe), `pyyaml` (label YAMLs), `typer` (CLI), `dataclasses` + `json` for schema, `jsonschema` for runtime validation, `pytest` for tests, `ruff` + `mypy --strict` for lint/type. POSIX semantics required (Windows acknowledged as best-effort, see spec §6.5).
 
-**Spec source of truth:** `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md`. Every section reference below (`§4.1`, `§5.3`, etc.) is into that document. **Do not deviate without updating the spec first.**
+**Spec source of truth:** `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md`. Every section reference below (`§4.1`, `§5.3`, etc.) is into that document. **Do not deviate without updating the spec first.**
 
 ---
 
 ## File structure (locked in before tasks)
 
 ```
-MimicAno/
+MimicAnno/
   pyproject.toml                          # NEW
   ruff.toml                               # NEW
   .gitignore                              # NEW (or modified) — adds runs/, *.pyc, etc.
@@ -231,7 +231,7 @@ runs/*
 
 ```python
 # mimicanno/__init__.py
-"""MimicAno — robot episode subtask annotation pipeline."""
+"""MimicAnno — robot episode subtask annotation pipeline."""
 from mimicanno.__version__ import __version__
 
 __all__ = ["__version__"]

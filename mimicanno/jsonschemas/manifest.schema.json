@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mimicanno/manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "episode_id",
+    "task",
+    "generated_at",
+    "generator",
+    "config_hash",
+    "input_hash",
+    "run_hash",
+    "model_versions",
+    "pipeline_params",
+    "inputs",
+    "time_base",
+    "fps",
+    "duration_sec",
+    "pipeline_status",
+    "compat",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "episode_id": {"type": "string"},
+    "task": {
+      "type": "object",
+      "required": ["text", "version"],
+      "properties": {
+        "text": {"type": "string"},
+        "version": {"type": ["string", "null"]}
+      }
+    },
+    "generated_at": {"type": "string"},
+    "generator": {
+      "type": "object",
+      "required": ["name", "cli_version", "pipeline_phase"],
+      "properties": {
+        "name": {"type": "string"},
+        "cli_version": {"type": "string"},
+        "pipeline_phase": {"type": "integer"}
+      }
+    },
+    "config_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "input_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "run_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "model_versions": {
+      "type": "object",
+      "additionalProperties": {"type": ["string", "null"]}
+    },
+    "pipeline_params": {"type": "object"},
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string"}
+        }
+      }
+    },
+    "time_base": {"type": "string"},
+    "fps": {"type": "number"},
+    "duration_sec": {"type": "number"},
+    "pipeline_status": {
+      "type": "object",
+      "required": ["object_state_available", "degraded_from_phase", "degrade_reason"],
+      "properties": {
+        "object_state_available": {"type": "boolean"},
+        "degraded_from_phase": {"type": ["integer", "null"]},
+        "degrade_reason": {"type": ["string", "null"]}
+      }
+    },
+    "compat": {
+      "type": "object",
+      "additionalProperties": {"type": "integer"}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "url", "content_type"],
+        "properties": {
+          "role": {"type": "string"},
+          "url": {"type": "string"},
+          "content_type": {"type": "string"}
+        }
+      }
+    }
+  }
+}

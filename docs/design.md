@@ -1,4 +1,4 @@
-# MimicAno — Robot Episode Subtask Annotator
+# MimicAnno — Robot Episode Subtask Annotator
 
 ## 1. Purpose
 
@@ -150,7 +150,7 @@ merge_threshold_sec: float = 0.2  # merge segments shorter than this
 ## 9. Package structure
 
 ```
-MimicAno/
+MimicAnno/
   sam3/                    # SAM3 (existing clone)
   mimicanno/
     __init__.py

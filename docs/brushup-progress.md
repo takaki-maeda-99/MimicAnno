@@ -1,4 +1,4 @@
-# MimicAno design.md brush-up progress
+# MimicAnno design.md brush-up progress
 
 Resume with `/superpowers:brainstorming`. Mode: **brush-up of `docs/design.md`** (option A from initial scoping).
 
@@ -47,6 +47,28 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
+
+## Status (2026-04-26 PM — Phase 1 calibration knob shipped)
+
+After the morning's real-data verification (`docs/phase1-real-data-verification.md`)
+exposed two issues, both are now resolved on `phase1-pipeline`:
+
+- **Finding 1 (`gripper_delta=0.30` mis-tuned for real trajectories)** — added
+  `--boundary-config <yaml>` to the CLI plus `load_boundary_config_yaml` in
+  `mimicanno/config.py`. All `BoundaryConfig` fields are overridable via YAML;
+  per-flag `--score-threshold` / `--merge-window-sec` still win over the file.
+  Re-running `lerobot/svla_so100_pickplace` ep0 with `gripper_delta=0.10`,
+  `score_threshold=0.05` produces 12 candidates / 13 segments and correctly
+  localises the gripper close at frame 101 and the open across frames 309–324.
+- **Finding 2 (system Python 3.10 crashes on `datetime.UTC`)** — added a
+  `sys.version_info` guard at CLI entry that exits 2 with a friendly message
+  instead of crashing on import.
+
+Test suite: 178 pass (164 previous + 14 new — 11 unit on the YAML loader, 3
+integration covering the YAML override / per-flag override / structured-error
+paths). `ruff check` + `mypy` both clean. Numerical calibration of default
+thresholds (sweep across more episodes) is still open as a future task — the
+plumbing is now sufficient to do that work without touching code.
 
 ## Status (2026-04-26, after user review round 3 — spec approved, moving to writing-plans)
 
@@ -107,7 +129,7 @@ Codex round 8-10 reviews pass: verdict "ready for user review".
   - R6: 1 fix — relative-URL resolution rule (`manifest_url` against index dir, `artifact.url` against manifest dir).
   - R7: 1 fix — Phase 5 endpoint name unification (`/api/runs/index.json`).
   - Final verdict: **"ready for user review"**.
-- Spec at `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md`. Pending: user review gate → writing-plans transition.
+- Spec at `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md`. Pending: user review gate → writing-plans transition.
 
 ## Original Q3 description (kept for reference)
 
@@ -143,5 +165,5 @@ Awaiting user choice on A / B-1 / B-2 / B-3 / C.
 ## Process state
 
 - Brainstorming skill checklist: tasks 1–2 done. On task 3 (clarifying questions). Q1 answered (option A: brush up). Q2 answered (B' phase split). Q3 pending.
-- Final spec target path: `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md` (overwrite/supplant `docs/design.md` once approved).
+- Final spec target path: `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md` (overwrite/supplant `docs/design.md` once approved).
 - Spec review loop, user review gate, and writing-plans transition still pending.

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mimicanno/boundaries",
+  "type": "object",
+  "required": ["schema_version", "episode_id", "candidates"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "episode_id": {"type": "string"},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "frame", "time", "sources", "scores", "score"],
+        "properties": {
+          "id": {"type": "string"},
+          "frame": {"type": "integer"},
+          "time": {"type": "number"},
+          "sources": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "scores": {
+            "type": "object",
+            "additionalProperties": {"type": "number"}
+          },
+          "score": {"type": "number"}
+        }
+      }
+    }
+  }
+}
