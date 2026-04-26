@@ -52,13 +52,17 @@ frontend/
     App.tsx                    # URL → <RunList> | <RunViewer>
     App.css                    # all visual styling lives here
     lib/
-      manifest.ts              # types + URL/artifact resolvers
-      time.ts                  # time ↔ frame helpers + tests
+      manifest.ts              # types + URL/artifact resolvers + assertIndexSchema + assertCompat
+      runSelection.ts          # pure routing rule (parent-spec §4.4 / §15.1 #9)
+      time.ts                  # time ↔ frame helpers
       fetchRetry.ts            # 3× backoff fetch (parent-spec §6.5 publish-gap window)
       __tests__/
         manifest.test.ts
+        runSelection.test.ts
         time.test.ts
         fetchRetry.test.ts
+        fixtures/
+          manifest.json        # committed real-data fixture for the parse test
     components/
       RunList.tsx
       RunViewer.tsx
@@ -84,11 +88,17 @@ URL ?run=<episodeId>[&hash=<runHashShort>]
 App.tsx parses URL → either renders <RunList /> or <RunViewer episodeId hash? />
       │
       ▼
-RunList: fetch("/runs/index.json")        → IndexEntry[]
-                                            (sorted by generated_at desc)
+RunList: fetch("/runs/index.json")        → IndexDoc
+          assertIndexSchema(doc):
+            • doc.schema_version major in supportedMajors.index → continue
+            • else                                              → render compat error
+          render doc.runs[] (sorted by generated_at desc; empty list = "no runs yet" panel)
 RunViewer:
   step 1: fetch("/runs/index.json")
-          filter entries by episodeId ± hash:
+          assertIndexSchema(doc) (parent-spec §6.6 — both consistency-vs-self and
+                                  consumer-capability checks apply to the external
+                                  index.json schema_version too)
+          filter doc.runs[] by (episodeId, hash?) via lib/runSelection.selectRun():
             • 0 matches → render error message
             • 1 match → use it
             • >1 matches → use newest by generated_at;
@@ -97,11 +107,15 @@ RunViewer:
   step 2: resolve manifest_url against /runs/index.json's base URL,
           fetchRetry it (parent-spec §6.5 publish-gap window — 3× 100 ms backoff)
                                             → Manifest
-  step 3: for each artifact role in {annotation, boundaries, signals}:
+  step 3: assertCompat(manifest, supportedMajors) BEFORE artifact fetches
+          (consumer-capability check first; an unreadable run must not
+           generate three more 4xx round-trips before the user sees the
+           compat error)
+  step 4: for each artifact role in {annotation, boundaries, signals}:
           resolve artifact.url against manifest's URL → fetch in parallel
                                             → AnnotationResult, BoundariesDoc, SignalsDoc
-  step 4: validate compat block (parent-spec §6.6, both consistency-vs-self
-          and consumer-capability checks); on mismatch render error
+          (each fetch carries the same AbortController so a URL change while
+           in flight cancels the obsolete request — see §5)
   step 5: render
       │
       ▼
@@ -124,13 +138,17 @@ The viewer never calls `fetch("/runs/")` to enumerate the directory; it always g
 |---|---|---|---|
 | `App` | URL parsing → `RunList` or `RunViewer` | none | route children |
 | `RunList` | fetch and list `index.json`; clicking a row navigates to `?run=&hash=` | none | `<a href>` navigation |
-| `RunViewer` | fetch manifest + 3 artifacts; own `currentTimeSec`; wire children | `episodeId, runHashShort?` | error / chooser banner / `<RunBody>` |
+| `RunViewer` | fetch manifest + 3 artifacts; own `currentTimeSec`; **own `widthPx` (single `ResizeObserver`)**; **render `pipeline_status` banner when `degraded_from_phase != null`**; wire children | `episodeId, runHashShort?` | error / chooser banner / pipeline-status banner / `<RunBody>` |
 | `VideoPlayer` | native `<video>`; emit `timeupdate`; accept seek | `videoUrl, currentTimeSec, onTimeChange` | `onTimeChange(t)` |
-| `Timeline` | shared X scale; segment dividers + playhead; click → seek | `durationSec, currentTimeSec, candidates, segments, onSeek` | `onSeek(t)` |
-| `WaveformView` | per-channel SVG `<polyline>`; Y auto-normalized per channel min/max | `channels, durationSec, currentTimeSec` | none |
-| `BoundaryMarkerLayer` | per-source colored markers on Timeline's SVG; multi-source candidates stack | `candidates, durationSec` | none |
+| `Timeline` | segment dividers + playhead; click → seek; **receives `widthPx` prop** | `widthPx, durationSec, currentTimeSec, candidates, segments, onSeek` | `onSeek(t)` |
+| `WaveformView` | per-channel SVG `<polyline>`; Y auto-normalized per channel min/max; **receives `widthPx` prop** | `widthPx, channels, durationSec, currentTimeSec` | none |
+| `BoundaryMarkerLayer` | per-source colored markers on Timeline's SVG; multi-source candidates stack; **receives `widthPx` prop** | `widthPx, candidates, durationSec` | none |
 
-`Timeline` and `WaveformView` use the same `scaleX(t) = (t / durationSec) * widthPx` so markers line up vertically with waveform features at the pixel level. `WaveformView` plots channel `i` at `t = t0_sec + i * dt_sec` (parent-spec §5.5), which automatically satisfies parent-spec §15.8 (different `dt_sec` per channel still align).
+**Shared X-axis ownership.** `RunViewer` owns the X-axis width. It mounts a single `ResizeObserver` on the row container that wraps `Timeline` and `WaveformView`, stores `widthPx` in local state, and passes it as a prop to both. Children compute `scaleX(t) = (t / durationSec) * widthPx` from the prop — they MUST NOT measure the DOM themselves. First-render alignment is handled by rendering `null` (or a `<div>loading…</div>`) until the first `ResizeObserver` callback delivers a non-zero `widthPx`; this keeps `Timeline` and `WaveformView` from briefly disagreeing about pixel positions on initial mount.
+
+`WaveformView` plots channel `i`'s value at `t = t0_sec + i * dt_sec` (parent-spec §5.5), which automatically satisfies parent-spec §15.1 exit criterion #8 (different `dt_sec` per channel still align).
+
+**Pipeline-status banner.** When `manifest.pipeline_status.degraded_from_phase != null`, `RunViewer` renders a single-line banner above the timeline reading `"degraded from phase <N>: <degrade_reason>"` (parent-spec §4.3 — viewer is required to surface this so users do not have to scan every segment's `object_state_unavailable`). In Phase 1 this banner is dormant because Phase 1 always produces `degraded_from_phase: null`, but the contract is wired up here so Phase 3+ does not need a viewer change.
 
 ### 3.2 Source-color mapping (BoundaryMarkerLayer)
 
@@ -146,7 +164,7 @@ A candidate with multiple sources renders one marker per source, stacked vertica
 
 ### 3.3 `lib/manifest.ts` types
 
-Hand-written interfaces matching `mimicanno/jsonschemas/*.schema.json`. Drift between the two is the test surface for `manifest.test.ts` (load a real fixture from `runs/`, assert it parses as `Manifest`).
+Hand-written interfaces matching `mimicanno/jsonschemas/*.schema.json`. Drift between the two is **not** caught by TypeScript (a `JSON.parse(...) as Manifest` cast is a no-op at runtime), so the safety net is narrow: the unit-test fixture (a real `manifest.json` committed under `src/lib/__tests__/fixtures/`) is parsed and a small set of structural assertions are made against it (key presence, `compat` block, `artifacts[]` length, `time_base === "video_pts_seconds"`). This catches the *known* shape; an unknown new field that the producer adds is silently ignored, and a producer regression that drops a known field surfaces the next time someone refreshes the fixture. Acknowledged PoC limitation; if it bites, Zod is added incrementally without restructuring components.
 
 ```ts
 export type SchemaVersion = `${number}.${number}.${number}`;
@@ -177,9 +195,34 @@ export interface Manifest {
 Helpers:
 - `artifactUrl(manifest: Manifest, role: "annotation" | "boundaries" | "signals" | "video"): string` — looks up the role and returns its `.url`. Throws if absent.
 - `resolveUrl(baseUrl: string, relative: string): string` — wraps `new URL(relative, baseUrl).toString()`. Used by both index→manifest resolution and manifest→artifact resolution. Same single rule the parent spec mandates (§4.4 URL resolution rule).
-- `assertCompat(manifest: Manifest, supportedMajors: { manifest: number[]; annotation: number[]; boundaries: number[]; signals: number[] })` — both consistency checks (§6.6); throws structured errors on mismatch so the caller renders the `<div>` message.
+- `assertIndexSchema(doc: { schema_version: SchemaVersion }, supportedMajors: number[])` — applied to `runs/index.json` itself; throws on consumer-capability mismatch (parent-spec §6.6 set membership for external schemas).
+- `assertCompat(manifest: Manifest, supportedMajors: { manifest: number[]; annotation: number[]; boundaries: number[]; signals: number[] })` — both consistency-vs-self and consumer-capability checks (§6.6); throws structured errors on mismatch so the caller renders the `<div>` message. **Called BEFORE artifact fetches** so an unreadable run does not generate three more 4xx round-trips before the user sees the compat error.
 
-### 3.4 `lib/time.ts`
+### 3.4 `lib/runSelection.ts`
+
+Pure helper for the §4 routing rule (parent-spec §4.4). Exposed as a separate file because (a) it is the one viewer-side contract that must stay regression-stable across Phase 1 → Phase 5 even though the rest of the viewer code will be rewritten and (b) it is straightforward to unit-test without DOM (parent-spec §15.1 exit criterion #9 is just deterministic logic over `IndexEntry[]`).
+
+```ts
+export type RunSelection =
+  | { kind: "none"; episodeId: string; runHashShort?: string }
+  | { kind: "single"; entry: IndexEntry }
+  | { kind: "multiple"; chosen: IndexEntry; alternatives: IndexEntry[] };
+
+export function selectRun(
+  entries: IndexEntry[],
+  episodeId: string,
+  runHashShort: string | undefined,
+): RunSelection;
+```
+
+Behavior:
+- 0 matches → `{ kind: "none", episodeId, runHashShort }`.
+- 1 match  → `{ kind: "single", entry }`.
+- >1 matches AND `runHashShort` undefined → `{ kind: "multiple", chosen: <newest by generated_at>, alternatives: <all others> }`.
+- >1 matches AND `runHashShort` defined → exact-match filter; if exactly one survives, return `single`; otherwise `none`.
+- Stable: ties on `generated_at` resolve by `run_hash` lex order (deterministic for tests).
+
+### 3.5 `lib/time.ts`
 
 Pure helpers. No DOM dependency. Tested.
 
@@ -189,7 +232,7 @@ export function frameToTime(frame: number, fps: number): number;
 export function clampTime(tSec: number, durationSec: number): number;
 ```
 
-### 3.5 `lib/fetchRetry.ts`
+### 3.6 `lib/fetchRetry.ts`
 
 Wraps `fetch` with retry semantics for the publish-gap window (parent-spec §6.5: between the two `os.rename` calls, `manifest.json` may transiently 404). Constants:
 - `MAX_ATTEMPTS = 3`
@@ -217,15 +260,24 @@ PoC-grade — single-line `<div>` messages, no styled error pages.
 | Condition | Render |
 |---|---|
 | any `fetch` in flight | `<div>loading…</div>` |
-| `runs/index.json` 404 | `<div>no runs/index.json found. run `mimicanno annotate` first.</div>` |
+| `runs/index.json` 404 | `<div>runs/index.json not reachable (HTTP 404). check that the dev server is running and that mimicanno annotate has produced a run.</div>` |
+| `runs/index.json` parses but `runs: []` | `<div>no runs yet. run `mimicanno annotate` to produce one.</div>` |
+| `runs/index.json` other 4xx/5xx | `<div>failed to load index.json: HTTP <code></div>` |
+| `runs/index.json` schema major unsupported | `<div>runs/index.json schema major <X>; viewer reads {<Y>}. update viewer.</div>` |
 | `?run=<id>` 0 matches | `<div>no run for episode_id=<id></div>` |
 | `?run=<id>&hash=<h>` no exact match | `<div>no run for episode_id=<id> hash=<h></div>` |
 | manifest fetch 4xx/5xx after retries | `<div>failed to load manifest: HTTP <code></div>` |
 | compat / consumer-capability check fails (§6.6) | `<div>this run uses schema major <X> for <role>; this viewer reads majors {<Y>}. update viewer.</div>` |
+| `annotation.json` / `boundaries.json` / `signals.json` fetch fails (4xx/5xx) | `<div>failed to load <role>: HTTP <code></div>` (one per failing role; the others still render) |
+| any of those three artifacts fails JSON parse or shape assertion | `<div>malformed <role>: <reason></div>` |
 | `<video>` element fires `error` | `<div>video playback failed</div>` (the rest of the timeline still renders) |
 | any thrown JS error inside `RunViewer` | rendered inline error `<div>` (no error boundary stack — PoC) |
 
-The publish-gap retry (§3.5) is invisible to the user when it succeeds; only after exhausting all 3 attempts does the manifest-error message appear.
+The publish-gap retry (§3.6) is invisible to the user when it succeeds; only after exhausting all 3 attempts does the manifest-error message appear.
+
+**URL-change-during-fetch race.** If the user changes the URL (e.g., picks a different alternative from the chooser banner) while the previous run's artifacts are still in flight, the in-flight `fetch` calls MUST NOT race the new render. `RunViewer` keeps a `useRef<AbortController>` keyed off `(episodeId, runHashShort)`; on URL change it `abort()`s the previous controller and creates a new one. Aborted-fetch rejections are silently swallowed (they are not error states the user should see). This is the one piece of async discipline that is not optional even at PoC grade — without it, the screen can briefly show artifacts from the wrong run.
+
+**CORS / mp4 codec / oversized signals.json.** Out of scope for Phase 1 — the dev-server middleware serves same-origin, the producer writes a known H.264 mp4, and `signals.json` is downsampled to ≈ 30 Hz before write (parent-spec §5.5). If real data ever violates these assumptions, the existing error rows above will fire (`<video>` error / artifact malformed) and we revisit.
 
 ## 6. Testing
 
@@ -236,8 +288,10 @@ The publish-gap retry (§3.5) is invisible to the user when it succeeds; only af
   - `artifactUrl(manifest, "annotation")` returns the right URL; missing role throws.
   - `resolveUrl("/runs/", "ep_000__abc/manifest.json")` resolves correctly.
   - `resolveUrl("/runs/ep_000__abc/manifest.json", "boundaries.json")` resolves to `/runs/ep_000__abc/boundaries.json`.
+  - `assertIndexSchema` passes on supported major and throws on unsupported.
   - `assertCompat` passes on a valid manifest fixture and throws with both versions present in the message on a mismatched-major fixture.
-  - A real `manifest.json` fixture (committed under `src/lib/__tests__/fixtures/`, sourced from a `runs/` produced by the test suite) parses as `Manifest` with no `any`-typed escape.
+  - A real `manifest.json` fixture (committed under `src/lib/__tests__/fixtures/`, sourced from a `runs/` produced by the test suite) parses as `Manifest` and the structural assertions described in §3.3 pass.
+- `lib/runSelection.test.ts`: covers the parent-spec §15.1 exit criterion #9 contract end-to-end as pure logic — 0 matches → `none`; 1 match → `single`; multiple matches without `hash` → newest by `generated_at` and `alternatives` populated; multiple matches with matching `hash` → `single`; multiple matches with non-matching `hash` → `none`; deterministic tie-break on equal `generated_at`.
 - `lib/fetchRetry.test.ts`: with a mocked `fetch` that 404s twice then 200s, returns 200; with three 404s, throws; 500 propagates immediately (no retry).
 
 ### 6.2 Manual smoke
@@ -245,15 +299,15 @@ The publish-gap retry (§3.5) is invisible to the user when it succeeds; only af
 After implementation, the developer runs:
 1. `mimicanno annotate` on the `lerobot/svla_so100_pickplace` ep0 episode (already verified by Plan 1's `--boundary-config` real-data run).
 2. `cd frontend && pnpm install && pnpm dev`.
-3. Open `http://localhost:5173/?run=episode_000` in Chrome. Expected: video, timeline with 12 markers (the gripper close at 3.37 s and the open across 10.3–10.8 s should be visible as red markers; action_norm hits as orange), waveforms, no console errors.
-4. Open with `?run=episode_000` after a second `mimicanno annotate --boundary-config <other.yaml>` run on the same episode. Expected: chooser banner appears; clicking the alternative entry rewrites the URL with `&hash=<short>` and reloads.
+3. Open `http://localhost:5173/?run=episode_000` in Chrome. Expected: video plays; the timeline renders boundary markers (red for gripper, blue/green/orange for the other detectors) and waveforms with no console errors. Marker positions visually correspond to the gripper close in the video. Exact counts and timestamps are not asserted because they shift with detector tuning — the assertion is "boundaries land where the gripper transitions actually happen".
+4. Open `?run=episode_000` after a second `mimicanno annotate --boundary-config <other.yaml>` run on the same episode. Expected: chooser banner appears; clicking the alternative entry rewrites the URL with `&hash=<short>` and reloads.
 5. Open with a deliberately-bumped consumer-capability mismatch (edit `supportedMajors` to `{}` in a local diff) — expected: compat error message.
 
-These cover parent-spec §15.1 exit criteria #5, #8, #9. They are not automated.
+These cover parent-spec §15.1 exit criteria #5 (renders without console errors), #8 (different `dt_sec` channels still align — observable when waveforms and markers visually agree), and #9 (chooser banner + exact-hash lookup — exercised in step 4 / by `runSelection` unit tests). They are not automated.
 
 ## 7. Risks and decisions deferred
 
-- **No runtime validation.** If Plan 1 ever emits a JSON shape that diverges from the hand-written types, the viewer will silently coerce and show wrong things. Mitigation: the `manifest.test.ts` fixture comes from a real `mimicanno annotate` output committed into the test tree, and the test re-parses it — so type drift is caught at `pnpm test` time. If this turns out to be insufficient in practice, Zod can be added incrementally without restructuring components.
+- **Hand-written types ≠ runtime validation.** A `JSON.parse(...) as Manifest` cast is a no-op at runtime. The fixture-based unit tests in §3.3 catch the *known* shape only — a producer regression that drops a known field surfaces the next time someone refreshes the fixture, but a producer regression that adds a wrong-shaped field on an existing key is silently ignored until it crashes a component. Acknowledged PoC limitation; Zod can be added incrementally without restructuring components.
 - **No CSS framework.** Phase 5's edit UI may pull in Tailwind or similar. Plan 2's hand-rolled CSS is throwaway by design.
 - **No CI.** Plan 2 doesn't add a GitHub Actions step. The first `pnpm test` is a manual gate.
 - **Single video element.** Multi-camera episodes (parent-spec future) will need a video grid. Plan 2 ignores this; `manifest.artifacts[]` only carries one `role: "video"` entry today.
@@ -268,15 +322,16 @@ These cover parent-spec §15.1 exit criteria #5, #8, #9. They are not automated.
 
 Roughly:
 1. Scaffold `frontend/` (package.json, tsconfig, vite.config.ts, index.html, main.tsx, App.tsx empty shell, App.css).
-2. Implement `lib/manifest.ts` (types + helpers) and its tests with a fixture committed from a real `runs/` directory.
-3. Implement `lib/time.ts` and `lib/fetchRetry.ts` with their tests.
-4. Implement `RunList`.
-5. Implement `RunViewer` (data fetch wiring + `currentTimeSec` state).
-6. Implement `VideoPlayer`.
-7. Implement `Timeline` + `BoundaryMarkerLayer` (shared X scale).
-8. Implement `WaveformView` (per-channel SVG with shared X scale).
-9. Wire compat-mismatch and error/loading states.
-10. Manual smoke against `lerobot/svla_so100_pickplace` ep0 — verify exit criteria #5, #8, #9 in a browser.
-11. `frontend/README.md`: install / dev / test commands. One short file.
+2. Implement `lib/manifest.ts` (types + `artifactUrl` + `resolveUrl` + `assertIndexSchema` + `assertCompat`) and its tests with a fixture committed from a real `runs/` directory.
+3. Implement `lib/runSelection.ts` (pure function for the §4 routing rule) and its tests.
+4. Implement `lib/time.ts` and `lib/fetchRetry.ts` with their tests.
+5. Implement `RunList` (handles the empty / 4xx / 5xx / unsupported-major paths from §5).
+6. Implement `RunViewer` (data fetch wiring + `currentTimeSec` state + `widthPx` `ResizeObserver` + AbortController for URL-change race + `pipeline_status` banner).
+7. Implement `VideoPlayer`.
+8. Implement `Timeline` + `BoundaryMarkerLayer` (consume `widthPx` prop).
+9. Implement `WaveformView` (consume `widthPx` prop; per-channel SVG).
+10. Wire compat-mismatch and the rest of the §5 error/loading states.
+11. Manual smoke against `lerobot/svla_so100_pickplace` ep0 — verify exit criteria #5, #8, #9 in a browser.
+12. `frontend/README.md`: install / dev / test commands. One short file.
 
-The exact granularity (one task or two, ordering, whether to bundle 7+8) is the writing-plans skill's job, not this spec's.
+The exact granularity (one task or two, ordering, whether to bundle 8+9) is the writing-plans skill's job, not this spec's.
