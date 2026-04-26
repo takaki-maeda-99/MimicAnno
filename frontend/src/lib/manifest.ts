@@ -151,3 +151,18 @@ export const SUPPORTED_MAJORS = {
   boundaries: [1] as number[],
   signals: [1] as number[],
 } as const;
+
+export function artifactUrl(
+  manifest: Manifest,
+  role: Artifact["role"],
+): string {
+  const a = manifest.artifacts.find((x) => x.role === role);
+  if (!a) {
+    throw new Error(`no artifact with role ${JSON.stringify(role)} in manifest`);
+  }
+  return a.url;
+}
+
+export function resolveUrl(baseUrl: string, relative: string): string {
+  return new URL(relative, baseUrl).toString();
+}
