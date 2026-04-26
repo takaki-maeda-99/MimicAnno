@@ -118,7 +118,7 @@ RunViewer:
                                             → AnnotationResult, BoundariesDoc, SignalsDoc
           (each fetch carries the same AbortController so a URL change while
            in flight cancels the obsolete request — see §5)
-  step 5: assertArtifactSelfConsistent(artifact, manifest, role) AFTER each
+  step 5: assertArtifactSelfConsistent(role, artifact, manifest) AFTER each
           artifact resolves — checks `artifact.schema_version.major === manifest.compat[role]`.
           This is the OTHER half of parent-spec §6.6 (the producer-internal
           consistency half) and can only be done once the artifact bytes are
