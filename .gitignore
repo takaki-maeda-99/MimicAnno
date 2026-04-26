@@ -16,3 +16,7 @@ runs/*
 .DS_Store
 .vscode/
 .idea/
+
+# Plan 2 viewer
+frontend/node_modules/
+frontend/dist/
