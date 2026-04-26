@@ -1734,7 +1734,7 @@ function ChooserBanner({
 
 - [ ] **Step 2: Render both banners inside the loaded branch**
 
-At the top of the loaded branch:
+At the top of the loaded branch. Note: the per-role status `<div>` below is a **transitional scaffold** for this commit only — Tasks 12 and 13 replace it with **slot-local** error rows (annotation/boundaries errors above the timeline; signals errors above the waveform), which is the final layout. Keep the scaffold here so Task 10e ends in a working compile, then watch it shrink as Tasks 12/13 land.
 
 ```tsx
 const { selection, manifest } = state.data;
@@ -1748,12 +1748,14 @@ return (
         degraded from phase {manifest.pipeline_status.degraded_from_phase}: {manifest.pipeline_status.degrade_reason}
       </div>
     )}
-    {/* rest of the body — measured row + per-role status — stays as in 10d */}
     <div ref={rowRef} className="x-row">
       <div>video placeholder</div>
       <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
       <div>waveform placeholder</div>
     </div>
+    {/* Transitional per-role status — Tasks 12 / 13 will inline these errors
+        next to the timeline (annotation/boundaries) and waveform (signals)
+        slots, so this block goes away. */}
     <div>
       {(["annotation", "boundaries", "signals"] as const).map((role) => {
         const slot = state.data[role];
@@ -1765,6 +1767,17 @@ return (
   </div>
 );
 ```
+
+**Final loaded-branch render order (after Tasks 11–13 land):**
+1. `ChooserBanner` (only when `selection.kind === "multiple"`)
+2. `pipeline_status` banner (only when `degraded_from_phase !== null`)
+3. Measured row (`<div ref={rowRef} className="x-row">`):
+   - `videoError` row OR `<VideoPlayer/>` (Task 11)
+   - `annotation.error` and/or `boundaries.error` rows AND/OR `<Timeline/>` (Task 12)
+   - `signals.error` row AND/OR `<WaveformView/>` (Task 13)
+4. (No standalone per-role status block — slot-local errors live inside the row above.)
+
+This is what spec §5 mandates: a per-artifact failure surfaces a single specific row in place of (or just before) its consumer component, while the others keep rendering.
 
 - [ ] **Step 3: Append CSS**
 
