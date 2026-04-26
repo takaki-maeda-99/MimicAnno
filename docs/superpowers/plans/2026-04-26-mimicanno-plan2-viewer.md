@@ -1799,14 +1799,6 @@ git add frontend/src/components/RunViewer.tsx frontend/src/App.css
 git commit -m "components/RunViewer: chooser banner (5 fields) + pipeline_status banner"
 ```
 
-- [ ] **Step 5: Commit**
-
-```bash
-cd /home/takakimaeda/MimicRec/MimicAnno
-git add frontend/src/components/RunViewer.tsx frontend/src/App.css
-git commit -m "components/RunViewer: data fetch + abort + compat split + state owners"
-```
-
 ---
 
 ## Task 11: `VideoPlayer.tsx`
@@ -2051,25 +2043,32 @@ export default function Timeline({
 }
 ```
 
-- [ ] **Step 3: Wire it into RunViewer (gated on slot.kind === "ok")**
+- [ ] **Step 3: Wire it into RunViewer (gated on slot.kind === "ok"); keep per-role error messages explicit**
 
 In `RunViewer.tsx`:
 - Import: `import Timeline from "./Timeline";`
-- Replace the `<div>timeline placeholder ...</div>` with the gated component. Per spec §5, when `annotation` or `boundaries` is in error, the others must still render — so we gate Timeline on both being ok and otherwise show the per-role error inline:
+- Replace the `<div>timeline placeholder ...</div>` with both (a) the gated Timeline and (b) the explicit per-role error rows. Per spec §5, the user must see the role-specific message (`failed to load <role>: HTTP <code>` or `malformed <role>: <reason>`) — not a generic fallback. Tasks 10c put those exact strings into `slot.message`; this step renders them:
 
 ```tsx
-{state.data.boundaries.kind === "ok" && state.data.annotation.kind === "ok"
-  ? <Timeline
-      widthPx={widthPx}
-      durationSec={state.data.manifest.duration_sec}
-      currentTimeSec={currentTimeSec}
-      candidates={state.data.boundaries.data.candidates}
-      segments={state.data.annotation.data.segments}
-      onSeek={setCurrentTimeSec}
-    />
-  : <div>timeline unavailable (annotation / boundaries error above)</div>
-}
+{state.data.annotation.kind === "error" && (
+  <div className="error">{state.data.annotation.message}</div>
+)}
+{state.data.boundaries.kind === "error" && (
+  <div className="error">{state.data.boundaries.message}</div>
+)}
+{state.data.boundaries.kind === "ok" && state.data.annotation.kind === "ok" && (
+  <Timeline
+    widthPx={widthPx}
+    durationSec={state.data.manifest.duration_sec}
+    currentTimeSec={currentTimeSec}
+    candidates={state.data.boundaries.data.candidates}
+    segments={state.data.annotation.data.segments}
+    onSeek={setCurrentTimeSec}
+  />
+)}
 ```
+
+(Loading slots render nothing here — the row above the timeline already shows `loading…` when the run as a whole has not finished. Once one of annotation/boundaries resolves and the other is still loading, this leaves a brief gap; that is acceptable PoC behavior because the slot resolves within milliseconds in dev.)
 
 - [ ] **Step 4: Type-check**
 
@@ -2186,25 +2185,27 @@ function ChannelRow({
 .waveform-unit { color: #999; }
 ```
 
-- [ ] **Step 3: Wire it into RunViewer (gated on signals.kind === "ok")**
+- [ ] **Step 3: Wire it into RunViewer (gated on signals.kind === "ok"); keep per-role error explicit**
 
 In `RunViewer.tsx`:
 - Import: `import WaveformView from "./WaveformView";`
-- Replace the `<div>waveform placeholder</div>` with the gated component:
+- Replace the `<div>waveform placeholder</div>` with the explicit error row + gated component, matching the pattern Task 12 used for annotation/boundaries:
 
 ```tsx
-{state.data.signals.kind === "ok"
-  ? <WaveformView
-      widthPx={widthPx}
-      durationSec={state.data.manifest.duration_sec}
-      currentTimeSec={currentTimeSec}
-      channels={state.data.signals.data.channels}
-    />
-  : <div>waveform unavailable (signals error above)</div>
-}
+{state.data.signals.kind === "error" && (
+  <div className="error">{state.data.signals.message}</div>
+)}
+{state.data.signals.kind === "ok" && (
+  <WaveformView
+    widthPx={widthPx}
+    durationSec={state.data.manifest.duration_sec}
+    currentTimeSec={currentTimeSec}
+    channels={state.data.signals.data.channels}
+  />
+)}
 ```
 
-The per-role status row from Task 10c can be removed at this point — each component now renders its own degraded fallback when its slot is in error, so the redundant role table no longer adds information.
+At this point the per-role status table from Task 10c is now strictly redundant with the explicit error rows (annotation/boundaries are surfaced by Task 12; signals by Task 13). **Remove the entire Task-10c per-role status block** from the loaded branch — Task 14 step 10 will verify that deleting `boundaries.json` produces `failed to load boundaries: HTTP 404` from these explicit rows, not from a now-deleted role table.
 
 - [ ] **Step 4: Type-check**
 
