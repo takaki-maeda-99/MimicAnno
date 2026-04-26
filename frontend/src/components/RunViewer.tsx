@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  artifactUrl,
+  assertConsumerCapability,
   assertIndexSchema,
+  resolveUrl,
   SUPPORTED_MAJORS,
   type IndexDoc,
   type IndexEntry,
+  type Manifest,
 } from "../lib/manifest";
 import { selectRun, type RunSelection } from "../lib/runSelection";
+import { fetchRetry } from "../lib/fetchRetry";
 
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "no-match"; episodeId: string; runHashShort: string | undefined }
-  | { kind: "selected"; selection: RunSelection; entry: IndexEntry };
+  | {
+      kind: "manifest-loaded";
+      selection: RunSelection;
+      entry: IndexEntry;
+      manifest: Manifest;
+      manifestUrl: string;
+    };
 
 type Props = { episodeId: string; runHashShort: string | undefined };
 
@@ -40,8 +51,18 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           return;
         }
         const entry = selection.kind === "single" ? selection.entry : selection.chosen;
+
+        const manifestUrl = resolveUrl(
+          new URL("/runs/index.json", window.location.origin).toString(),
+          entry.manifest_url,
+        );
+        const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
+        const manifest = (await manifestResp.json()) as Manifest;
+
+        assertConsumerCapability(manifest, SUPPORTED_MAJORS);
+
         if (controller.signal.aborted) return;
-        setState({ kind: "selected", selection, entry });
+        setState({ kind: "manifest-loaded", selection, entry, manifest, manifestUrl });
       } catch (err) {
         if (controller.signal.aborted) return;
         setState({ kind: "error", message: err instanceof Error ? err.message : String(err) });
@@ -67,7 +88,12 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
   }
   return (
     <div className="run-viewer">
-      <div>selected: <code>{state.entry.run_hash_short}</code> ({state.entry.task_text})</div>
+      <div>
+        manifest loaded for <code>{state.entry.run_hash_short}</code>
+        {" "}
+        ({state.manifest.duration_sec.toFixed(2)}s, {state.manifest.fps.toFixed(0)} fps).
+        Loading artifacts…
+      </div>
     </div>
   );
 }
