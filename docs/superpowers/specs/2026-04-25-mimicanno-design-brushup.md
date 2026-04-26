@@ -1,4 +1,4 @@
-# MimicAno Design Brush-up (2026-04-25)
+# MimicAnno Design Brush-up (2026-04-25)
 
 > Status: **DRAFT — pending Codex full-spec review and user review.**
 > This document is intended to **supersede `docs/design.md`** once approved.
@@ -954,7 +954,7 @@ Every abort writes a structured error JSON to stderr (`{"error_code": "...", "me
 ## 12. Package structure
 
 ```
-MimicAno/
+MimicAnno/
   sam3/                           # existing clone (Phase 3+)
   mimicanno/
     __init__.py
@@ -993,7 +993,7 @@ MimicAno/
     .gitkeep
   docs/
     design.md                     # superseded by this brush-up
-    superpowers/specs/2026-04-25-mimicano-design-brushup.md
+    superpowers/specs/2026-04-25-mimicanno-design-brushup.md
   .gitignore                      # runs/, except .gitkeep
   pyproject.toml
   README.md

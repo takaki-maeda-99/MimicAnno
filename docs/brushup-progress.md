@@ -1,4 +1,4 @@
-# MimicAno design.md brush-up progress
+# MimicAnno design.md brush-up progress
 
 Resume with `/superpowers:brainstorming`. Mode: **brush-up of `docs/design.md`** (option A from initial scoping).
 
@@ -107,7 +107,7 @@ Codex round 8-10 reviews pass: verdict "ready for user review".
   - R6: 1 fix — relative-URL resolution rule (`manifest_url` against index dir, `artifact.url` against manifest dir).
   - R7: 1 fix — Phase 5 endpoint name unification (`/api/runs/index.json`).
   - Final verdict: **"ready for user review"**.
-- Spec at `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md`. Pending: user review gate → writing-plans transition.
+- Spec at `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md`. Pending: user review gate → writing-plans transition.
 
 ## Original Q3 description (kept for reference)
 
@@ -143,5 +143,5 @@ Awaiting user choice on A / B-1 / B-2 / B-3 / C.
 ## Process state
 
 - Brainstorming skill checklist: tasks 1–2 done. On task 3 (clarifying questions). Q1 answered (option A: brush up). Q2 answered (B' phase split). Q3 pending.
-- Final spec target path: `docs/superpowers/specs/2026-04-25-mimicano-design-brushup.md` (overwrite/supplant `docs/design.md` once approved).
+- Final spec target path: `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md` (overwrite/supplant `docs/design.md` once approved).
 - Spec review loop, user review gate, and writing-plans transition still pending.
