@@ -52,7 +52,7 @@ frontend/
     App.tsx                    # URL → <RunList> | <RunViewer>
     App.css                    # all visual styling lives here
     lib/
-      manifest.ts              # types + URL/artifact resolvers + assertIndexSchema + assertCompat
+      manifest.ts              # types + URL/artifact resolvers + assertIndexSchema + assertConsumerCapability + assertArtifactSelfConsistent
       runSelection.ts          # pure routing rule (parent-spec §4.4 / §15.1 #9)
       time.ts                  # time ↔ frame helpers
       fetchRetry.ts            # 3× backoff fetch (parent-spec §6.5 publish-gap window)
@@ -107,16 +107,24 @@ RunViewer:
   step 2: resolve manifest_url against /runs/index.json's base URL,
           fetchRetry it (parent-spec §6.5 publish-gap window — 3× 100 ms backoff)
                                             → Manifest
-  step 3: assertCompat(manifest, supportedMajors) BEFORE artifact fetches
-          (consumer-capability check first; an unreadable run must not
-           generate three more 4xx round-trips before the user sees the
-           compat error)
+  step 3: assertConsumerCapability(manifest, supportedMajors) BEFORE artifact
+          fetches — checks each role's MAJOR in `manifest.compat` against
+          `supportedMajors[role]`. This is half of parent-spec §6.6 (the
+          consumer-capability half, applied to the manifest's CLAIMS about
+          its artifacts). Catches "viewer can't read this version" before
+          three more 4xx round-trips.
   step 4: for each artifact role in {annotation, boundaries, signals}:
           resolve artifact.url against manifest's URL → fetch in parallel
                                             → AnnotationResult, BoundariesDoc, SignalsDoc
           (each fetch carries the same AbortController so a URL change while
            in flight cancels the obsolete request — see §5)
-  step 5: render
+  step 5: assertArtifactSelfConsistent(artifact, manifest, role) AFTER each
+          artifact resolves — checks `artifact.schema_version.major === manifest.compat[role]`.
+          This is the OTHER half of parent-spec §6.6 (the producer-internal
+          consistency half) and can only be done once the artifact bytes are
+          in hand. A mismatch means the run directory is internally corrupt;
+          surface a `<div>` error and stop.
+  step 6: render
       │
       ▼
 RunViewer holds:
@@ -196,7 +204,10 @@ Helpers:
 - `artifactUrl(manifest: Manifest, role: "annotation" | "boundaries" | "signals" | "video"): string` — looks up the role and returns its `.url`. Throws if absent.
 - `resolveUrl(baseUrl: string, relative: string): string` — wraps `new URL(relative, baseUrl).toString()`. Used by both index→manifest resolution and manifest→artifact resolution. Same single rule the parent spec mandates (§4.4 URL resolution rule).
 - `assertIndexSchema(doc: { schema_version: SchemaVersion }, supportedMajors: number[])` — applied to `runs/index.json` itself; throws on consumer-capability mismatch (parent-spec §6.6 set membership for external schemas).
-- `assertCompat(manifest: Manifest, supportedMajors: { manifest: number[]; annotation: number[]; boundaries: number[]; signals: number[] })` — both consistency-vs-self and consumer-capability checks (§6.6); throws structured errors on mismatch so the caller renders the `<div>` message. **Called BEFORE artifact fetches** so an unreadable run does not generate three more 4xx round-trips before the user sees the compat error.
+- `assertConsumerCapability(manifest: Manifest, supportedMajors: { manifest: number[]; annotation: number[]; boundaries: number[]; signals: number[] })` — parent-spec §6.6 consumer-capability half: each role's MAJOR in `manifest.compat` must be in `supportedMajors[role]`. Called **before** artifact fetches so an unreadable run does not generate three more 4xx round-trips before the user sees the compat error. Also checks the manifest's own `schema_version.major` against `supportedMajors.manifest`.
+- `assertArtifactSelfConsistent(role: "annotation" | "boundaries" | "signals", artifact: { schema_version: SchemaVersion }, manifest: Manifest)` — parent-spec §6.6 producer-internal-consistency half: `artifact.schema_version.major` must equal `manifest.compat[role]`. Called **after** each artifact resolves; this check can only run once the artifact bytes exist. A mismatch means the run directory is internally corrupt.
+
+The two helpers together implement both checks parent-spec §6.6 mandates. Splitting them lets the consumer-capability error happen before any artifact fetch (good UX) without skipping the producer-internal check (good correctness).
 
 ### 3.4 `lib/runSelection.ts`
 
@@ -267,7 +278,8 @@ PoC-grade — single-line `<div>` messages, no styled error pages.
 | `?run=<id>` 0 matches | `<div>no run for episode_id=<id></div>` |
 | `?run=<id>&hash=<h>` no exact match | `<div>no run for episode_id=<id> hash=<h></div>` |
 | manifest fetch 4xx/5xx after retries | `<div>failed to load manifest: HTTP <code></div>` |
-| compat / consumer-capability check fails (§6.6) | `<div>this run uses schema major <X> for <role>; this viewer reads majors {<Y>}. update viewer.</div>` |
+| consumer-capability fails (§6.6 — `manifest.compat[role]` ∉ `supportedMajors[role]`) | `<div>this run uses schema major <X> for <role>; this viewer reads majors {<Y>}. update viewer.</div>` |
+| producer-internal consistency fails (§6.6 — `artifact.schema_version.major !== manifest.compat[role]`) | `<div><role>.json claims schema major <X> but manifest.compat says <Y>. run directory is internally corrupt.</div>` |
 | `annotation.json` / `boundaries.json` / `signals.json` fetch fails (4xx/5xx) | `<div>failed to load <role>: HTTP <code></div>` (one per failing role; the others still render) |
 | any of those three artifacts fails JSON parse or shape assertion | `<div>malformed <role>: <reason></div>` |
 | `<video>` element fires `error` | `<div>video playback failed</div>` (the rest of the timeline still renders) |
@@ -289,7 +301,8 @@ The publish-gap retry (§3.6) is invisible to the user when it succeeds; only af
   - `resolveUrl("/runs/", "ep_000__abc/manifest.json")` resolves correctly.
   - `resolveUrl("/runs/ep_000__abc/manifest.json", "boundaries.json")` resolves to `/runs/ep_000__abc/boundaries.json`.
   - `assertIndexSchema` passes on supported major and throws on unsupported.
-  - `assertCompat` passes on a valid manifest fixture and throws with both versions present in the message on a mismatched-major fixture.
+  - `assertConsumerCapability` passes on a valid manifest fixture; throws with role + supported-set + actual-major in the message on a mismatched-major fixture.
+  - `assertArtifactSelfConsistent` passes when `artifact.schema_version.major === manifest.compat[role]`; throws with role + manifest-claimed + artifact-actual in the message on mismatch.
   - A real `manifest.json` fixture (committed under `src/lib/__tests__/fixtures/`, sourced from a `runs/` produced by the test suite) parses as `Manifest` and the structural assertions described in §3.3 pass.
 - `lib/runSelection.test.ts`: covers the parent-spec §15.1 exit criterion #9 contract end-to-end as pure logic — 0 matches → `none`; 1 match → `single`; multiple matches without `hash` → newest by `generated_at` and `alternatives` populated; multiple matches with matching `hash` → `single`; multiple matches with non-matching `hash` → `none`; deterministic tie-break on equal `generated_at`.
 - `lib/fetchRetry.test.ts`: with a mocked `fetch` that 404s twice then 200s, returns 200; with three 404s, throws; 500 propagates immediately (no retry).
@@ -322,7 +335,7 @@ These cover parent-spec §15.1 exit criteria #5 (renders without console errors)
 
 Roughly:
 1. Scaffold `frontend/` (package.json, tsconfig, vite.config.ts, index.html, main.tsx, App.tsx empty shell, App.css).
-2. Implement `lib/manifest.ts` (types + `artifactUrl` + `resolveUrl` + `assertIndexSchema` + `assertCompat`) and its tests with a fixture committed from a real `runs/` directory.
+2. Implement `lib/manifest.ts` (types + `artifactUrl` + `resolveUrl` + `assertIndexSchema` + `assertConsumerCapability` + `assertArtifactSelfConsistent`) and its tests with a fixture committed from a real `runs/` directory.
 3. Implement `lib/runSelection.ts` (pure function for the §4 routing rule) and its tests.
 4. Implement `lib/time.ts` and `lib/fetchRetry.ts` with their tests.
 5. Implement `RunList` (handles the empty / 4xx / 5xx / unsupported-major paths from §5).
