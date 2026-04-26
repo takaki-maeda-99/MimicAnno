@@ -15,9 +15,32 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+import yaml  # type: ignore[import-untyped]
+
+from mimicanno.errors import MimicAnnoError
 from mimicanno.hashing import canonical_json, sha256_hex_of_str
+
+DEFAULT_BOUNDARY_WEIGHTS: dict[str, float] = {
+    "gripper": 0.5,
+    "velocity": 0.25,
+    "acceleration": 0.15,
+    "action": 0.1,
+}
+DEFAULT_BOUNDARY_THRESHOLDS: dict[str, float] = {
+    "gripper_delta": 0.30,
+    "velocity_valley": 0.05,
+}
+DEFAULT_MERGE_WINDOW_SEC: float = 0.10
+DEFAULT_SCORE_THRESHOLD: float = 0.30
+
+_VALID_WEIGHT_KEYS: frozenset[str] = frozenset(DEFAULT_BOUNDARY_WEIGHTS)
+_VALID_THRESHOLD_KEYS: frozenset[str] = frozenset(DEFAULT_BOUNDARY_THRESHOLDS)
+_VALID_TOP_KEYS: frozenset[str] = frozenset(
+    {"weights", "thresholds", "merge_window_sec", "score_threshold", "disabled_sources"}
+)
 
 RUN_HASH_DEFAULT_PREFIX_LEN: int = 12
 RUN_HASH_FALLBACK_PREFIX_LEN: int = 16
@@ -39,6 +62,118 @@ class BoundaryConfig:
             "score_threshold": self.score_threshold,
             "disabled_sources": list(self.disabled_sources),
         }
+
+    @classmethod
+    def with_defaults(cls) -> BoundaryConfig:
+        """BoundaryConfig populated with the spec-§4.3 default values."""
+        return cls(
+            weights=dict(DEFAULT_BOUNDARY_WEIGHTS),
+            thresholds=dict(DEFAULT_BOUNDARY_THRESHOLDS),
+            merge_window_sec=DEFAULT_MERGE_WINDOW_SEC,
+            score_threshold=DEFAULT_SCORE_THRESHOLD,
+            disabled_sources=[],
+        )
+
+
+def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
+    """Load a BoundaryConfig YAML, layering supplied fields onto defaults.
+
+    Missing top-level fields fall back to ``BoundaryConfig.with_defaults()``;
+    inside ``weights``/``thresholds`` the user dict fully replaces the default
+    (we don't merge per-key, so a user can intentionally drop a detector by
+    omitting it from ``weights``).
+
+    Raises ``MimicAnnoError`` for unreadable files, non-mapping documents,
+    unknown top-level keys, unknown weight/threshold keys, or wrong-typed
+    values — all routed to ``write_error_json`` by the CLI.
+    """
+    try:
+        text = path.read_text()
+    except OSError as e:
+        raise MimicAnnoError(
+            "boundary_config.unreadable",
+            f"could not read --boundary-config file: {e}",
+            {"path": str(path)},
+        ) from e
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise MimicAnnoError(
+            "boundary_config.invalid_yaml",
+            f"--boundary-config file is not valid YAML: {e}",
+            {"path": str(path)},
+        ) from e
+    if raw is None:
+        return BoundaryConfig.with_defaults()
+    if not isinstance(raw, dict):
+        raise MimicAnnoError(
+            "boundary_config.not_mapping",
+            f"--boundary-config top level must be a mapping; got {type(raw).__name__}",
+            {"path": str(path)},
+        )
+
+    unknown_top = sorted(set(raw) - _VALID_TOP_KEYS)
+    if unknown_top:
+        raise MimicAnnoError(
+            "boundary_config.unknown_key",
+            f"--boundary-config has unknown key(s): {unknown_top!r}; "
+            f"expected any of {sorted(_VALID_TOP_KEYS)!r}",
+            {"path": str(path), "unknown_keys": unknown_top},
+        )
+
+    cfg = BoundaryConfig.with_defaults()
+
+    if "weights" in raw:
+        weights = raw["weights"]
+        if not isinstance(weights, dict):
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                "weights must be a mapping",
+                {"path": str(path)},
+            )
+        unknown_w = sorted(set(weights) - _VALID_WEIGHT_KEYS)
+        if unknown_w:
+            raise MimicAnnoError(
+                "boundary_config.unknown_weight_key",
+                f"weights has unknown key(s): {unknown_w!r}; "
+                f"expected any of {sorted(_VALID_WEIGHT_KEYS)!r}",
+                {"path": str(path), "unknown_keys": unknown_w},
+            )
+        cfg.weights = {k: float(v) for k, v in weights.items()}
+
+    if "thresholds" in raw:
+        thresholds = raw["thresholds"]
+        if not isinstance(thresholds, dict):
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                "thresholds must be a mapping",
+                {"path": str(path)},
+            )
+        unknown_t = sorted(set(thresholds) - _VALID_THRESHOLD_KEYS)
+        if unknown_t:
+            raise MimicAnnoError(
+                "boundary_config.unknown_threshold_key",
+                f"thresholds has unknown key(s): {unknown_t!r}; "
+                f"expected any of {sorted(_VALID_THRESHOLD_KEYS)!r}",
+                {"path": str(path), "unknown_keys": unknown_t},
+            )
+        cfg.thresholds = {k: float(v) for k, v in thresholds.items()}
+
+    if "merge_window_sec" in raw:
+        cfg.merge_window_sec = float(raw["merge_window_sec"])
+    if "score_threshold" in raw:
+        cfg.score_threshold = float(raw["score_threshold"])
+    if "disabled_sources" in raw:
+        ds = raw["disabled_sources"]
+        if not isinstance(ds, list) or not all(isinstance(x, str) for x in ds):
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                "disabled_sources must be a list of strings",
+                {"path": str(path)},
+            )
+        cfg.disabled_sources = list(ds)
+
+    return cfg
 
 
 @dataclass(slots=True)

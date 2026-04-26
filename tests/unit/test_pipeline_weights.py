@@ -64,8 +64,8 @@ def test_annotate_episode_short_weight_keys_yield_candidates(tmp_path: Path):
     candidates = boundaries["candidates"]
     assert len(candidates) >= 1, (
         "Expected at least 1 boundary candidate from a clear gripper transition, "
-        f"but got 0. This likely means the short-key→source-name translation in "
-        f"pipeline.py is missing or broken."
+        "but got 0. This likely means the short-key→source-name translation in "
+        "pipeline.py is missing or broken."
     )
 
 

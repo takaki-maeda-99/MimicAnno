@@ -69,11 +69,15 @@ which is why threshold `0.30` passed the tests but fails on real data.
 **Action items:**
 - Revisit default thresholds against a few more real episodes before declaring
   Phase 1 numerically tuned (the plumbing is fine; the calibration is not).
-- The CLI does not expose detector thresholds — only `--score-threshold`
-  (post-aggregation) and `--merge-window-sec`. `BoundaryConfig.thresholds` is read
-  by `pipeline.py` but there's no path from the CLI to populate it. Add either a
-  `--boundary-config <yaml>` flag or per-detector flags so users can override
-  without editing code.
+- ✅ **Resolved 2026-04-26** — added `--boundary-config <yaml>` to the CLI
+  (`mimicanno/cli.py`, `mimicanno/config.py:load_boundary_config_yaml`). All
+  `BoundaryConfig` fields (`weights`, `thresholds`, `merge_window_sec`,
+  `score_threshold`, `disabled_sources`) are overridable; missing fields fall
+  back to spec §4.3 defaults; per-flag `--score-threshold` and
+  `--merge-window-sec` still win over the file. Re-running this episode with
+  `thresholds.gripper_delta=0.10`, `score_threshold=0.05` produces 12 candidates
+  / 13 segments and correctly localises the gripper close (frame 101) and the
+  open (frames 309–324).
 
 ### Finding 2 — `pyproject.toml` requires Python ≥3.11, but the system default is 3.10
 
@@ -83,9 +87,9 @@ venv (`.venv/bin/python` = 3.11.14) works, but invoking via the system `python`
 silently picks up 3.10 and fails. There is no startup-time Python version guard.
 
 **Action items (low priority):**
-- Either add a runtime check at CLI entry (`sys.version_info >= (3, 11)`) with a
-  friendly message, or replace `datetime.UTC` with `datetime.timezone.utc` so the
-  code runs on 3.10 too. The latter has no downside.
+- ✅ **Resolved 2026-04-26** — added a `sys.version_info >= (3, 11)` guard at
+  CLI entry (`mimicanno/cli.py`). Running with 3.10 now exits 2 with a friendly
+  message instead of crashing on `datetime.UTC`.
 
 ### Finding 3 — Real LeRobot v3.0 datasets exist in two state layouts (informational only)
 

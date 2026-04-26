@@ -48,6 +48,28 @@ Phase 3 re-labels with `label_source = "vlm_with_object_state"`.
 **Structural reframe:**
 - `failure_recovery` is **not a phase** — it's a `failure_flags: list[str]` attribute on a segment whose `phase` is the underlying activity (e.g., `phase="grasp_object", failure_flags=["failed_grasp"]`). This keeps normal-vs-failed trajectories separable downstream.
 
+## Status (2026-04-26 PM — Phase 1 calibration knob shipped)
+
+After the morning's real-data verification (`docs/phase1-real-data-verification.md`)
+exposed two issues, both are now resolved on `phase1-pipeline`:
+
+- **Finding 1 (`gripper_delta=0.30` mis-tuned for real trajectories)** — added
+  `--boundary-config <yaml>` to the CLI plus `load_boundary_config_yaml` in
+  `mimicanno/config.py`. All `BoundaryConfig` fields are overridable via YAML;
+  per-flag `--score-threshold` / `--merge-window-sec` still win over the file.
+  Re-running `lerobot/svla_so100_pickplace` ep0 with `gripper_delta=0.10`,
+  `score_threshold=0.05` produces 12 candidates / 13 segments and correctly
+  localises the gripper close at frame 101 and the open across frames 309–324.
+- **Finding 2 (system Python 3.10 crashes on `datetime.UTC`)** — added a
+  `sys.version_info` guard at CLI entry that exits 2 with a friendly message
+  instead of crashing on import.
+
+Test suite: 178 pass (164 previous + 14 new — 11 unit on the YAML loader, 3
+integration covering the YAML override / per-flag override / structured-error
+paths). `ruff check` + `mypy` both clean. Numerical calibration of default
+thresholds (sweep across more episodes) is still open as a future task — the
+plumbing is now sufficient to do that work without touching code.
+
 ## Status (2026-04-26, after user review round 3 — spec approved, moving to writing-plans)
 
 User review round 3 flagged 1 必須 + 1 強く推奨 + 1 任意:
