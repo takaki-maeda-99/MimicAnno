@@ -44,6 +44,23 @@ type Props = { episodeId: string; runHashShort: string | undefined };
 export default function RunViewer({ episodeId, runHashShort }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const abortRef = useRef<AbortController | null>(null);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [widthPx, setWidthPx] = useState(0);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!rowRef.current) return;
+    const obs = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0) setWidthPx(w);
+    });
+    obs.observe(rowRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setCurrentTimeSec(0);
+  }, [episodeId, runHashShort]);
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -159,6 +176,11 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
   }
   return (
     <div className="run-viewer">
+      <div ref={rowRef} className="x-row">
+        <div>video placeholder</div>
+        <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
+        <div>waveform placeholder</div>
+      </div>
       <div>
         {(["annotation", "boundaries", "signals"] as const).map((role) => {
           const slot = state.data[role];
