@@ -174,13 +174,25 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
       </div>
     );
   }
+  const { selection, manifest } = state.data;
   return (
     <div className="run-viewer">
+      {selection.kind === "multiple" && (
+        <ChooserBanner selection={selection} episodeId={episodeId} />
+      )}
+      {manifest.pipeline_status.degraded_from_phase !== null && (
+        <div className="pipeline-status-banner">
+          degraded from phase {manifest.pipeline_status.degraded_from_phase}: {manifest.pipeline_status.degrade_reason}
+        </div>
+      )}
       <div ref={rowRef} className="x-row">
         <div>video placeholder</div>
         <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
         <div>waveform placeholder</div>
       </div>
+      {/* Transitional per-role status — Tasks 12 / 13 will inline these errors
+          next to the timeline (annotation/boundaries) and waveform (signals)
+          slots, so this block goes away. */}
       <div>
         {(["annotation", "boundaries", "signals"] as const).map((role) => {
           const slot = state.data[role];
@@ -189,6 +201,38 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           return <div key={role}>{role}: ok</div>;
         })}
       </div>
+    </div>
+  );
+}
+
+function ChooserBanner({
+  selection,
+  episodeId,
+}: {
+  selection: Extract<RunSelection, { kind: "multiple" }>;
+  episodeId: string;
+}) {
+  const all = [selection.chosen, ...selection.alternatives];
+  return (
+    <div className="chooser-banner">
+      {all.length} runs exist for this episode. currently:{" "}
+      <code>{selection.chosen.run_hash_short}</code>{" "}
+      <select
+        defaultValue={selection.chosen.run_hash_short}
+        onChange={(e) => {
+          window.location.search = `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}`;
+        }}
+      >
+        {all.map((entry) => (
+          <option key={entry.run_hash_short} value={entry.run_hash_short}>
+            {entry.run_hash_short}
+            {" · cfg "}{entry.config_hash_short}
+            {" · in "}{entry.input_hash_short}
+            {" · "}{entry.generated_at}
+            {" · "}{entry.task_text}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

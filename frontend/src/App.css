@@ -7,3 +7,5 @@ body { margin: 0; font-family: system-ui, sans-serif; color: #111; background: #
 .error { padding: 1rem; color: #991b1b; }
 .run-viewer { padding: 1rem; }
 .x-row { display: flex; flex-direction: column; gap: 0.5rem; }
+.chooser-banner { background: #fef3c7; padding: 0.5rem; margin-bottom: 0.5rem; }
+.pipeline-status-banner { background: #fee2e2; padding: 0.5rem; margin-bottom: 0.5rem; }
