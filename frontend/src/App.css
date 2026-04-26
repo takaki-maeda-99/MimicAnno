@@ -1,1 +1,7 @@
 body { margin: 0; font-family: system-ui, sans-serif; color: #111; background: #fafafa; }
+.run-list { padding: 1rem; }
+.run-list table { border-collapse: collapse; width: 100%; }
+.run-list th, .run-list td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #ddd; }
+.run-list a { color: #1d4ed8; text-decoration: none; }
+.run-list a:hover { text-decoration: underline; }
+.error { padding: 1rem; color: #991b1b; }
