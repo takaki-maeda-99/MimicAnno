@@ -1,0 +1,152 @@
+{
+  "candidates": [
+    {
+      "frame": 85,
+      "id": "b_001",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 2.8333333333333335
+    },
+    {
+      "frame": 101,
+      "id": "b_002",
+      "score": 0.15948579314115696,
+      "scores": {
+        "gripper_transition": 0.3189715862823139
+      },
+      "sources": [
+        "gripper_transition"
+      ],
+      "time": 3.3666666666666667
+    },
+    {
+      "frame": 128,
+      "id": "b_003",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 4.266666666666667
+    },
+    {
+      "frame": 147,
+      "id": "b_004",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 4.9
+    },
+    {
+      "frame": 215,
+      "id": "b_005",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 7.166666666666667
+    },
+    {
+      "frame": 239,
+      "id": "b_006",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 7.966666666666667
+    },
+    {
+      "frame": 284,
+      "id": "b_007",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 9.466666666666667
+    },
+    {
+      "frame": 309,
+      "id": "b_008",
+      "score": 0.12363474284783871,
+      "scores": {
+        "gripper_transition": 0.24726948569567742
+      },
+      "sources": [
+        "gripper_transition"
+      ],
+      "time": 10.3
+    },
+    {
+      "frame": 314,
+      "id": "b_009",
+      "score": 0.13671333989312873,
+      "scores": {
+        "gripper_transition": 0.27342667978625745
+      },
+      "sources": [
+        "gripper_transition"
+      ],
+      "time": 10.466666666666667
+    },
+    {
+      "frame": 324,
+      "id": "b_010",
+      "score": 0.23570130277160564,
+      "scores": {
+        "action_norm_change": 1.0,
+        "gripper_transition": 0.2714026055432113
+      },
+      "sources": [
+        "action_norm_change",
+        "gripper_transition"
+      ],
+      "time": 10.8
+    },
+    {
+      "frame": 366,
+      "id": "b_011",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 12.2
+    },
+    {
+      "frame": 416,
+      "id": "b_012",
+      "score": 0.1,
+      "scores": {
+        "action_norm_change": 1.0
+      },
+      "sources": [
+        "action_norm_change"
+      ],
+      "time": 13.866666666666667
+    }
+  ],
+  "episode_id": "episode_000",
+  "schema_version": "0.1.0"
+}

@@ -1,0 +1,16 @@
+{
+  "runs": [
+    {
+      "config_hash_short": "09bab886",
+      "episode_id": "episode_000",
+      "generated_at": "2026-04-26T12:58:46.764563Z",
+      "input_hash_short": "0e0e99e3",
+      "manifest_url": "episode_000__564ecfc09b7d/manifest.json",
+      "pipeline_phase": 1,
+      "run_hash": "sha256:564ecfc09b7d139144932886aac5434dc7bfe59571eb97ae47d79483fc65d207",
+      "run_hash_short": "564ecfc09b7d",
+      "task_text": "Pick up the cube and place it in the box."
+    }
+  ],
+  "schema_version": "0.1.0"
+}

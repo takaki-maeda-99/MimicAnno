@@ -145,11 +145,11 @@ export interface AnnotationResult {
 }
 
 export const SUPPORTED_MAJORS = {
-  index: [1] as number[],
-  manifest: [1] as number[],
-  annotation: [1] as number[],
-  boundaries: [1] as number[],
-  signals: [1] as number[],
+  index: [0] as number[],
+  manifest: [0] as number[],
+  annotation: [0] as number[],
+  boundaries: [0] as number[],
+  signals: [0] as number[],
 } as const;
 
 export function artifactUrl(
@@ -165,4 +165,60 @@ export function artifactUrl(
 
 export function resolveUrl(baseUrl: string, relative: string): string {
   return new URL(relative, baseUrl).toString();
+}
+
+function major(version: SchemaVersion): number {
+  const m = parseInt(version.split(".")[0], 10);
+  if (Number.isNaN(m)) {
+    throw new Error(
+      `schema_version ${JSON.stringify(version)} has non-integer major`,
+    );
+  }
+  return m;
+}
+
+export function assertIndexSchema(
+  doc: { schema_version: SchemaVersion },
+  supportedMajors: number[],
+): void {
+  const m = major(doc.schema_version);
+  if (!supportedMajors.includes(m)) {
+    throw new Error(
+      `runs/index.json schema major ${m}; viewer reads majors {${supportedMajors.join(",")}}`,
+    );
+  }
+}
+
+export function assertConsumerCapability(
+  manifest: Manifest,
+  supported: typeof SUPPORTED_MAJORS,
+): void {
+  const manifestMajor = major(manifest.schema_version);
+  if (!supported.manifest.includes(manifestMajor)) {
+    throw new Error(
+      `manifest.json schema major ${manifestMajor}; viewer reads majors {${supported.manifest.join(",")}}`,
+    );
+  }
+  for (const role of ["annotation", "boundaries", "signals"] as const) {
+    const claimed = manifest.compat[role];
+    if (!supported[role].includes(claimed)) {
+      throw new Error(
+        `this run uses schema major ${claimed} for ${role}; this viewer reads majors {${supported[role].join(",")}}. update viewer.`,
+      );
+    }
+  }
+}
+
+export function assertArtifactSelfConsistent(
+  role: "annotation" | "boundaries" | "signals",
+  artifact: { schema_version: SchemaVersion },
+  manifest: Manifest,
+): void {
+  const actual = major(artifact.schema_version);
+  const claimed = manifest.compat[role];
+  if (actual !== claimed) {
+    throw new Error(
+      `${role}.json claims schema major ${actual} but manifest.compat says ${claimed}. run directory is internally corrupt.`,
+    );
+  }
 }
