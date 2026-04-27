@@ -7,14 +7,18 @@ later tasks.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict, get_args
+from typing import Callable, Literal, Protocol, TypedDict, get_args
 
 import numpy as np
+
+from mimicanno.config import VLMConfig
+from mimicanno.schema import SubtaskSegment
 
 
 # --- Reject / runtime-fault reason enums (kept as Literal for type-checkers,
@@ -262,3 +266,159 @@ class FixtureVLMLabeler:
             return parse_and_validate(spec["_emit_raw"], set(request["allowed_labels"]))
         as_text = json.dumps(spec)
         return parse_and_validate(as_text, set(request["allowed_labels"]))
+
+
+# ---------------------------------------------------------------------------
+# label_run orchestrator (spec §2.3, §4.4, §4.5)
+# ---------------------------------------------------------------------------
+
+LabelerFactory = Callable[[VLMConfig], "VLMLabeler"]
+
+
+def _build_request(
+    segment: SubtaskSegment,
+    segment_index: int,
+    segment_total: int,
+    *,
+    extractor,
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    keyframes_per_segment: int,
+    episode_meta: dict,
+) -> VLMRequest:
+    """Compose a VLMRequest from a SubtaskSegment and the run-level metadata.
+
+    Keyframe + scalar extraction is delegated to ClipFeatureExtractor (Task 4);
+    this function only reshapes the ClipFeatures into the VLMRequest TypedDict
+    and attaches episode-level fields from `episode_meta`."""
+    feat = extractor.extract(
+        segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+        keyframes_per_segment=keyframes_per_segment,
+    )
+    return VLMRequest(
+        task_text=episode_meta["task_text"],
+        allowed_labels=list(episode_meta["allowed_labels"]),
+        label_version=episode_meta.get("label_version", "manipulation.v1"),
+        robot_type=episode_meta.get("robot_type", "aloha"),
+        fps=episode_meta["fps"],
+        episode_duration_sec=episode_meta["episode_duration_sec"],
+        segment_index=segment_index, segment_total=segment_total,
+        segment_id=segment.segment_id,
+        keyframes=feat.keyframes,
+        keyframe_offsets_sec=feat.keyframe_offsets_sec,
+        robot_state_summary=feat.robot_state_summary,  # type: ignore[typeddict-item]
+    )
+
+
+def _merge_response(
+    seg: SubtaskSegment, resp: VLMResponse, fallback: bool,
+) -> SubtaskSegment:
+    import math
+    seg.phase = resp["phase"]
+    seg.verb = resp["verb"]
+    seg.object = resp["object"]
+    seg.target = resp["target"]
+    seg.label_source = "vlm_robot_state_only"  # §4.4 invariant
+    seg.vlm_confidence = resp["vlm_confidence"]
+    seg.evidence = resp["evidence"]
+    if seg.phase in ("unlabeled", "unknown"):
+        seg.overall_confidence = 0.0
+    else:
+        seg.overall_confidence = math.sqrt(
+            max(seg.boundary_confidence, 0.0) * max(seg.vlm_confidence, 0.0)
+        )
+    seg.object_state_unavailable = True
+    seg.object_track_ids = []
+    return seg
+
+
+def label_run(
+    *,
+    segments: list[SubtaskSegment],
+    extractor,
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    episode_meta: dict,
+    config: VLMConfig,
+    labeler_factory: LabelerFactory,
+) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome]:
+    """Phase 2 labeling lifecycle owner — see spec §2.3 for the contract.
+
+    Constructor failures, vlm_unreachable on first call, and
+    runtime_failure_threshold escalation all return the Phase 1 baseline
+    with a degraded RunOutcome; partial labels never leak.
+
+    `episode_meta` is a flat dict carrying the episode-level fields that
+    populate VLMRequest: task_text, allowed_labels, label_version, robot_type,
+    fps, episode_duration_sec. The pipeline (Task 13) constructs it; tests
+    can build it directly via helpers_phase1.make_synthetic_phase1_run."""
+    baseline = copy.deepcopy(segments)
+    working = copy.deepcopy(segments)
+    attempts: list[LabelAttempt] = []
+
+    try:
+        labeler = labeler_factory(config)
+    except Exception as e:
+        return baseline, [], RunOutcome(
+            kind="degraded", degrade_reason="vlm_init_failed",
+            underlying_error=repr(e),
+        )
+
+    consecutive_runtime_failures = 0
+    n = len(working)
+    for idx, seg in enumerate(working):
+        attempt_log = LabelAttempt(
+            segment_id=seg.segment_id, attempt_count=0, final_status="ok",
+        )
+        attempts.append(attempt_log)
+        request = _build_request(
+            seg, segment_index=idx + 1, segment_total=n,
+            extractor=extractor, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=config.keyframes_per_segment,
+            episode_meta=episode_meta,
+        )
+        last_reject: RejectReason | None = None
+        success = False
+        for attempt in range(1, config.max_retries + 1):
+            attempt_log.attempt_count = attempt
+            try:
+                resp = labeler.label_segment(
+                    request, attempt=attempt,
+                    last_reject_reason=last_reject,
+                )
+                consecutive_runtime_failures = 0
+                _merge_response(seg, resp, fallback=False)
+                attempt_log.final_status = "ok"
+                attempt_log.response = resp
+                success = True
+                break
+            except LabelerError as e:
+                attempt_log.reject_reasons.append(e.reject_reason)
+                last_reject = e.reject_reason
+                continue
+            except LabelerRuntimeError as e:
+                attempt_log.runtime_errors.append(e.reason)
+                if (idx == 0 and attempt == 1
+                        and e.reason in ("model_unreachable", "device_unavailable")):
+                    return baseline, attempts, RunOutcome(
+                        kind="degraded", degrade_reason="vlm_unreachable",
+                        underlying_error=repr(e),
+                    )
+                consecutive_runtime_failures += 1
+                if consecutive_runtime_failures >= config.runtime_failure_threshold:
+                    return baseline, attempts, RunOutcome(
+                        kind="degraded", degrade_reason="vlm_runtime_failed",
+                        underlying_error=repr(e),
+                    )
+                continue
+        if not success:
+            fallback_resp = VLMResponse(
+                phase="unknown", verb=None, object=None, target=None,
+                vlm_confidence=0.0, evidence=None,
+            )
+            _merge_response(seg, fallback_resp, fallback=True)
+            attempt_log.final_status = "unknown_fallback"
+            attempt_log.response = fallback_resp
+
+    return working, attempts, RunOutcome(kind="ok", degrade_reason=None,
+                                          underlying_error=None)
