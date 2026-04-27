@@ -571,13 +571,15 @@ segment ─┬─→ ClipFeatureExtractor.extract(segment, video, signals, parqu
          │
          ├─→ for attempt in 1..max_retries:
          │     │
-         │     ├─ try: response = labeler.label_segment(request, attempt)
+         │     ├─ try: response = labeler.label_segment(
+         │     │       request, attempt, last_reject_reason=last_reject)
          │     │   ├─ consecutive_runtime_failures = 0   (success resets the streak)
          │     │   └─ break (final_status="ok")
          │     │
          │     ├─ except LabelerError as e:
          │     │   reject_reasons.append(e.reject_reason)
-         │     │   continue (with stricter-prompt hint passed via `attempt`)
+         │     │   last_reject = e.reject_reason   # passed to next attempt's label_segment
+         │     │   continue                          # so the labeler can apply §3.3 amendment
          │     │
          │     └─ except LabelerRuntimeError as e:
          │         runtime_errors.append(e.reason)
