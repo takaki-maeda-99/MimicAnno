@@ -16,6 +16,7 @@ import {
 } from "../lib/manifest";
 import { selectRun, type RunSelection } from "../lib/runSelection";
 import { fetchRetry } from "../lib/fetchRetry";
+import VideoPlayer from "./VideoPlayer";
 
 type ArtifactSlot<T> =
   | { kind: "loading" }
@@ -61,6 +62,12 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
   useEffect(() => {
     setCurrentTimeSec(0);
   }, [episodeId, runHashShort]);
+
+  const setVideoError = (message: string) => {
+    setState((prev) =>
+      prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, videoError: message } } : prev,
+    );
+  };
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -186,7 +193,15 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         </div>
       )}
       <div ref={rowRef} className="x-row">
-        <div>video placeholder</div>
+        {state.data.videoError !== null
+          ? <div className="error">{state.data.videoError}</div>
+          : <VideoPlayer
+              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video"))}
+              currentTimeSec={currentTimeSec}
+              onTimeChange={setCurrentTimeSec}
+              onError={setVideoError}
+            />
+        }
         <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
         <div>waveform placeholder</div>
       </div>
