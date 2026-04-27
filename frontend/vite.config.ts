@@ -12,7 +12,20 @@ export default defineConfig({
     {
       name: "serve-runs",
       configureServer(server) {
-        server.middlewares.use("/runs", sirv(runsDir, { dev: true, etag: true }));
+        const sirvHandler = sirv(runsDir, { dev: true, etag: true });
+        server.middlewares.use("/runs", (req, res, next) => {
+          sirvHandler(req, res, () => {
+            // sirv did not find the file. Don't fall through to Vite's
+            // SPA history fallback (which would serve index.html and
+            // mask the missing artifact). Spec §5 contract: missing
+            // artifact must surface as HTTP 404 so RunViewer can render
+            // `failed to load <role>: HTTP 404`.
+            res.statusCode = 404;
+            res.end(`Not found: ${req.url}`);
+            // Suppress the unused next param.
+            void next;
+          });
+        });
       },
     },
   ],
