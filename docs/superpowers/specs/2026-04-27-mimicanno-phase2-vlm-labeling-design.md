@@ -50,7 +50,7 @@ In scope:
 - Pluggable `VLMLabeler` protocol with two implementations: `FixtureVLMLabeler` (test/CI) and `LocalGemmaVLMLabeler` (default real impl; concrete `model_id` deferred to writing-plans).
 - Per-segment, single-call VLM labeling with `K=4` keyframes + 5-scalar robot-state summary + episode-level context.
 - Validation, retry (max 3), segment-level fallback to `phase="unknown"`, and run-level degrade triggers/reasons.
-- MINOR schema bumps for `manifest.json` and `annotation.json` (forwards-compatible; existing Plan 2 viewer keeps working unchanged).
+- No `schema_version` bumps. Phase 2 only starts populating fields already declared in the Phase 1 schemas; the existing Plan 2 viewer needs no version-handling changes (per-field justification in §1.3).
 - Test strategy across 3 layers (unit / integration with `FixtureVLMLabeler` / gated real-VLM smoke).
 
 Non-goals:
@@ -193,16 +193,17 @@ import numpy as np
 class RobotStateSummary(TypedDict):
     duration_sec: float
     mean_eef_speed_mps: float | None  # null when adapter has no EEF (e.g., Koch)
-    gripper_open_fraction: float       # [0.0, 1.0], time-weighted average of normalized gripper signal
-    gripper_transitions: int           # count of threshold crossings (open↔closed)
-    dwell_fraction: float              # fraction of segment time where ‖velocity‖ < dwell_threshold
+    gripper_open_fraction: float       # [0.0, 1.0], time-weighted average of (gripper_signal >= gripper_open_threshold)
+    gripper_transitions: int           # count of threshold crossings of gripper_open_threshold (open↔closed)
+    dwell_fraction: float | None       # fraction of segment time where ‖eef_velocity‖ < dwell_speed_threshold_mps;
+                                       # null when mean_eef_speed_mps is null (no EEF data)
 
 
 class VLMRequest(TypedDict):
     """1-call input to the VLM. Episode-level + Segment-level."""
     # Episode-level (constant across segments in a run)
     task_text: str
-    allowed_labels: list[str]          # e.g. ["idle", "approach_object", ..., "retreat"]
+    allowed_labels: list[str]          # user-supplied set (MUST NOT include reserved "unknown"; see §3.4)
     label_version: str                 # e.g. "manipulation.v1"
     robot_type: str                    # adapter name, e.g. "aloha"
     fps: float
@@ -210,8 +211,9 @@ class VLMRequest(TypedDict):
     segment_index: int                 # 1-based
     segment_total: int
     # Segment-level (per call)
-    keyframes: list[np.ndarray]        # K images, RGB uint8, long edge resized to image_size_px
-    keyframe_offsets_sec: list[float]  # offsets from segment start, len == K
+    keyframes: list[np.ndarray]        # K_effective images, 1 ≤ len ≤ keyframes_per_segment;
+                                       # RGB uint8, long edge resized to image_size_px
+    keyframe_offsets_sec: list[float]  # same length as keyframes
     robot_state_summary: RobotStateSummary
 
 
@@ -230,35 +232,59 @@ class ModelIdentity(TypedDict):
     vlm_checkpoint: str | None         # checkpoint hash / revision, or null
 
 
+RejectReason = Literal[
+    "json_parse_error",
+    "schema_violation",
+    "invalid_label",
+    "out_of_range_confidence",
+    "timeout",
+]
+
+RuntimeFaultReason = Literal[
+    "model_unreachable",
+    "device_unavailable",
+    "cuda_oom",
+    "inference_timeout",
+]
+
+
 class LabelerError(Exception):
-    """Raised by VLMLabeler.label_segment on schema/parse/range failures.
-    Carries reject_reason for the orchestrator to record in LabelAttempt."""
-    reject_reason: Literal[
-        "json_parse_error",
-        "schema_violation",
-        "invalid_label",
-        "out_of_range_confidence",
-        "timeout",
-    ]
+    """Raised by VLMLabeler.label_segment on VLM **output** rejection
+    (parse/schema/range failures). The orchestrator MAY retry."""
+    reject_reason: RejectReason
+
+
+class LabelerRuntimeError(Exception):
+    """Raised by VLMLabeler.label_segment on **inference-infrastructure**
+    failures (network/device/OOM). The orchestrator MAY retry but counts
+    consecutive occurrences against runtime_failure_threshold (§4.3).
+
+    Generic Python RuntimeError is NOT caught by the orchestrator — it is
+    treated as an implementation bug and propagated. LocalGemmaVLMLabeler
+    is responsible for classifying low-level PyTorch / HF exceptions and
+    wrapping them in LabelerRuntimeError with the correct reason."""
+    reason: RuntimeFaultReason
 
 
 class VLMLabeler(Protocol):
     def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse:
-        """One VLM invocation. Returns a schema-valid VLMResponse or raises
-        LabelerError (recoverable, retry-eligible) / RuntimeError (runtime fault,
-        counts toward run-level degrade threshold) / Exception (init-time, raised
-        from __init__ and converted to vlm_init_failed degrade upstream).
+        """One VLM invocation. Returns a schema-valid VLMResponse or raises:
+          - LabelerError(reject_reason)        — recoverable, retry-eligible (Tier 4 → Tier 3)
+          - LabelerRuntimeError(reason)        — infra fault (counts toward Tier 2 threshold)
+          - any other Exception                — implementation bug, propagated and aborts the run
 
         `attempt` is the 1-based attempt counter; the implementation MAY use it
         to apply stricter-prompt phrasing on retry (parent spec §8.2)."""
         ...
 
     def model_identity(self) -> ModelIdentity:
-        """Returns the (vlm_model, vlm_checkpoint) tuple that enters config_hash."""
+        """Returns (config.model_id, config.resolved_checkpoint) — the tuple
+        that already entered config_hash at pre-flight (§2.5). The constructor
+        MUST NOT re-resolve to a possibly-different revision."""
         ...
 ```
 
-**Design note: retry/fallback in the orchestrator, not the labeler.** `label_segment` does one call and either succeeds (returns valid response) or raises (with classified `reject_reason` for `LabelerError`, generic for runtime). The retry loop, segment-level fallback to `"unknown"`, run-level degrade thresholding, and observation-log emission live in `vlm_labeler.label_run`. Rationale: keeps the protocol thin and identical for fixture vs real impls; centralizes the policy.
+**Design note: retry/fallback in the orchestrator, not the labeler.** `label_segment` does one call and either succeeds (returns valid response) or raises one of two classified exceptions (or — very rarely — a generic exception that aborts). The retry loop, segment-level fallback to `"unknown"`, run-level degrade thresholding, and observation-log emission live in `vlm_labeler.label_run`. Rationale: keeps the protocol thin and identical for fixture vs real impls; centralizes the policy.
 
 ### 2.2 Implementations
 
@@ -272,23 +298,29 @@ class FixtureVLMLabeler:
     def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity:
         # vlm_model = "fixture"
-        # vlm_checkpoint = sha256 of the fixture file content
+        # vlm_checkpoint = sha256 of the fixture file content (set by pre-flight, §2.5)
         ...
 
 
 class LocalGemmaVLMLabeler:
-    """Default real implementation. Loads a Gemma 4-family multimodal IT model
-    via HuggingFace transformers and emits structured JSON.
+    """Default real-implementation **class** for production runs. Loads a
+    Gemma 4-family multimodal IT model via HuggingFace transformers and emits
+    structured JSON.
 
-    Concrete model_id is configured via VLMConfig; this spec does not pin it.
-    The init constructor performs model + processor load; failures raise and
-    are converted to vlm_init_failed run-level degrade upstream."""
+    The CLI does NOT supply a default `model_id` value; users MUST pass
+    `--vlm-model <id>` (or supply `VLMConfig.model_id` via a config file)
+    when target_phase ≥ 2. This spec does not pin a concrete `model_id`.
+
+    The constructor performs model + processor load against the
+    pre-flight-resolved revision (§2.5); failures raise and are converted
+    to vlm_init_failed run-level degrade by the labeler factory wrapper
+    in label_run (§2.3)."""
 
     def __init__(self, config: VLMConfig) -> None: ...
     def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity:
         # vlm_model = config.model_id
-        # vlm_checkpoint = HF revision sha (resolved at __init__) or None if not resolvable
+        # vlm_checkpoint = config.resolved_checkpoint (set by pre-flight, §2.5)
         ...
 ```
 
@@ -297,19 +329,38 @@ class LocalGemmaVLMLabeler:
 ### 2.3 Orchestrator contract: `label_run`
 
 ```python
+from typing import Callable
+
+LabelerFactory = Callable[[VLMConfig], VLMLabeler]
+
+
 def label_run(
     segments: list[SubtaskSegment],
     signals: SignalsBundle,
     video_path: Path,
     parquet_path: Path,
     config: VLMConfig,
-    labeler: VLMLabeler,
+    labeler_factory: LabelerFactory,
 ) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome]:
-    """Returns (labeled_segments, attempts_log, outcome).
+    """Owns the full Phase 2 labeling lifecycle, including labeler construction:
 
-    outcome.kind ∈ {"ok", "degraded"}.
-    On degrade, labeled_segments == segments (Phase 1 unchanged) and
-    outcome.degrade_reason is set."""
+    1. Snapshot a Phase 1 baseline copy of `segments` (deep, immutable).
+    2. Try `labeler = labeler_factory(config)`.
+       - If the constructor raises any exception:
+         return (baseline, [], RunOutcome(kind="degraded",
+                                          degrade_reason="vlm_init_failed",
+                                          underlying_error=repr(e)))
+    3. For each segment, run the per-segment retry loop (§3.1) against `labeler`.
+       Mutations are made on a working copy of `segments`, NOT the baseline.
+    4. If a run-level degrade trigger fires mid-run (vlm_unreachable on the first
+       call, or consecutive runtime faults reaching the threshold):
+         return (baseline, attempts_log_so_far, RunOutcome(kind="degraded", ...))
+       — the working copy is **discarded**; partial Phase 2 labels never leak out.
+    5. On full success: return (working_copy, attempts_log, RunOutcome(kind="ok", ...)).
+
+    Transactional invariant: the returned `segments` list is either
+    Phase-1-baseline (degraded) or fully Phase-2-labeled (ok). It is never
+    a partial mix."""
 ```
 
 `LabelAttempt` records per-segment retry observability:
@@ -318,10 +369,11 @@ def label_run(
 @dataclass
 class LabelAttempt:
     segment_id: str
-    attempt_count: int                  # number of VLM calls made (1..max_retries)
+    attempt_count: int                       # number of VLM calls made on this segment (1..max_retries)
     final_status: Literal["ok", "unknown_fallback"]
-    reject_reasons: list[str]           # one per failed attempt; ∈ reject_reason enum
-    response: VLMResponse               # final response (fallback => phase="unknown", confidence=0.0)
+    reject_reasons: list[RejectReason]       # one per failed VLM-output rejection; uses §2.1 enum
+    runtime_errors: list[RuntimeFaultReason] # one per infra fault during this segment's attempts
+    response: VLMResponse                    # final response (fallback => phase="unknown", confidence=0.0)
 
 
 @dataclass
@@ -330,12 +382,26 @@ class RunOutcome:
     degrade_reason: Literal[
         "vlm_init_failed", "vlm_unreachable", "vlm_runtime_failed",
     ] | None
-    underlying_error: str | None        # exception repr for log/notes; never user-facing
+    underlying_error: str | None             # exception repr — emitted ONLY to stderr JSONL log
+                                             # (§4.6); MUST NOT be written into persisted artifacts
+                                             # (manifest.json, annotation.notes, etc.) because it can
+                                             # contain local paths, env state, or secrets.
 ```
 
 ### 2.4 `VLMConfig` (sub-block of `AnnotationConfig`)
 
 ```python
+@dataclass(frozen=True)
+class ClipFeatureConfig:
+    """Thresholds used by clip_features.py to derive the 5-scalar
+    robot_state_summary. All fields enter config_hash via VLMConfig."""
+    gripper_open_threshold: float = 0.5           # gripper signal value ≥ threshold = "open";
+                                                  # signal is the [0,1]-normalized output of the
+                                                  # robot adapter's gripper_signal()
+    dwell_speed_threshold_mps: float = 0.01       # ‖eef_velocity‖ < threshold = "dwelling";
+                                                  # ignored when EEF data is unavailable
+
+
 @dataclass(frozen=True)
 class VLMConfig:
     # User-supplied (set from CLI args / config file)
@@ -350,6 +416,7 @@ class VLMConfig:
     runtime_failure_threshold: int = 3             # consecutive runtime exceptions → run-level degrade
     device: str = "cuda"                           # informational; LocalGemmaVLMLabeler honors it
     dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    clip_features: ClipFeatureConfig = ClipFeatureConfig()
 
     # Pre-flight resolved (populated during CLI argument validation per §2.5;
     # MUST be set before AnnotationConfig is hashed; SerDe-visible).
@@ -371,17 +438,29 @@ Note: `resolved_checkpoint` lives on `VLMConfig` for two reasons. (1) `config_ha
 Parent spec §4.1 pins `model_config (vlm_model+checkpoint)` into `config_hash`. Phase 2 must resolve `vlm_checkpoint` **before** hashing — otherwise the hash and the actually-loaded model can diverge. Resolution happens in a dedicated **pre-flight** step during CLI argument validation:
 
 ```
-mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> ...
+mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> [--offline] ...
   │
   ├─ [Pre-flight, Tier-1-eligible]
   │     1. Parse --vlm-model: split on "@" → (model_id, revision_or_None).
-  │     2. HF lookup (huggingface_hub.HfApi.model_info) → resolve revision
-  │        to a commit sha. If the user supplied "<id>" only, take the
-  │        latest commit on the default revision; if "<id>@<rev>", resolve
-  │        that revision. Network failure or 404 → Tier 1 abort with
-  │        error_code="vlm_model_not_found".
+  │
+  │     2. Resolve revision to a canonical commit sha:
+  │
+  │        Case A: revision matches /^[0-9a-f]{40}$/ (full HF/git sha)
+  │          → accept as-is, no HF API lookup needed (offline-safe).
+  │
+  │        Case B: revision is a tag/branch name OR revision is None
+  │          → must call huggingface_hub.HfApi.model_info(model_id, revision=...)
+  │            to resolve to commit sha.
+  │            - If --offline is set: Tier 1 abort with error_code=
+  │              "vlm_model_not_found" and message "explicit 40-hex commit sha
+  │              required after '@' for --offline runs".
+  │            - If network failure or 404: Tier 1 abort with same error_code.
+  │
+  │        Case C (FixtureVLMLabeler, --vlm-model fixture://<path>):
+  │          → no HF lookup. resolved_checkpoint = sha256(fixture file content).
+  │            Missing fixture file → Tier 1 abort, "vlm_model_not_found".
+  │
   │     3. Fix the resolved tuple as VLMConfig.{model_id, resolved_checkpoint}.
-  │        resolved_checkpoint is the canonical commit sha string.
   │
   ├─ AnnotationConfig assembled — VLMConfig.model_id and
   │     VLMConfig.resolved_checkpoint both enter the canonical-JSON
@@ -391,6 +470,8 @@ mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> ...
   │
   └─ ... (rest of pipeline as in §1.1)
 ```
+
+**Offline / air-gapped operation.** Case A above is the primary offline path: the user pins `--vlm-model google/gemma-4-...-it@<40-hex-sha>` and pre-flight succeeds without any network call. This is the recommended form for reproducibility-critical runs. `--offline` exists as a defense-in-depth flag that forbids any HF API call during pre-flight (fail-fast if the user accidentally omits the `@<sha>`).
 
 **Hash-input contract:** the pair `(VLMConfig.model_id, VLMConfig.resolved_checkpoint)` is fed into `config_hash`. Both are user-determined-at-config-time (after pre-flight); neither depends on the actual model load succeeding. A `VLMLabeler.__init__` failure (CUDA OOM at weight load, transient device fault, etc.) does **not** change the already-computed hash — the run dir is keyed by the configuration the user requested, not by whether the model successfully loaded. This is what allows §4.3 run-level degrade to publish a hash-stable run dir even on init failure.
 
@@ -406,6 +487,10 @@ The `vlm` sub-block written into `manifest.json` is a JSON object containing eve
 "pipeline_params": {
   "boundary": { ... existing Phase 1 sub-block ... },
   "vlm": {
+    "clip_features": {
+      "dwell_speed_threshold_mps": 0.01,
+      "gripper_open_threshold": 0.5
+    },
     "device": "cuda",
     "dtype": "bfloat16",
     "image_size_px": 224,
@@ -440,17 +525,24 @@ class ClipFeatures:
 
 Keyframe selection rule:
 
-```
+```python
 K_effective = min(config.keyframes_per_segment, end_frame - start_frame + 1)
-offsets_frames = [start_frame + round(i * (end_frame - start_frame) / (K_effective - 1))
-                  for i in range(K_effective)]   # K_effective == 1 case: [start_frame]
+if K_effective == 1:
+    offsets_frames = [start_frame]
+else:
+    offsets_frames = [
+        start_frame + round(i * (end_frame - start_frame) / (K_effective - 1))
+        for i in range(K_effective)
+    ]
 ```
 
-`K_effective = 1` arises only for sub-frame-resolution segments which Phase 1 already drops via `epsilon_sec` (parent spec §5.6 step 5); included for defense-in-depth.
+`K_effective = 1` arises only for sub-frame-resolution segments which Phase 1 already drops via `epsilon_sec` (parent spec §5.6 step 5); the explicit branch is defense-in-depth (the formula is undefined for `K_effective = 1` because the denominator is 0).
 
 ## 3. Data flow
 
 ### 3.1 Per-segment flow
+
+The orchestrator (§2.3) holds a Phase 1 baseline copy and a working copy of `segments`; the per-segment loop mutates only the working copy.
 
 ```
 segment ─┬─→ ClipFeatureExtractor.extract(segment, video, signals, parquet) → ClipFeatures
@@ -460,19 +552,26 @@ segment ─┬─→ ClipFeatureExtractor.extract(segment, video, signals, parqu
          ├─→ for attempt in 1..max_retries:
          │     │
          │     ├─ try: response = labeler.label_segment(request, attempt)
+         │     │   ├─ consecutive_runtime_failures = 0   (success resets the streak)
          │     │   └─ break (final_status="ok")
          │     │
          │     ├─ except LabelerError as e:
          │     │   reject_reasons.append(e.reject_reason)
          │     │   continue (with stricter-prompt hint passed via `attempt`)
          │     │
-         │     └─ except RuntimeError as e:
+         │     └─ except LabelerRuntimeError as e:
+         │         runtime_errors.append(e.reason)
          │         consecutive_runtime_failures += 1
          │         if consecutive_runtime_failures >= config.runtime_failure_threshold:
-         │             raise RunDegrade("vlm_runtime_failed", e)
+         │             raise RunDegrade("vlm_runtime_failed", underlying_error=repr(e))
+         │             # bubbles to label_run, which DISCARDS the working copy and
+         │             # returns the baseline (§2.3 transactional invariant)
          │         else:
-         │             reject_reasons.append("runtime_error")  # not part of LabelerError enum;
-         │             continue                                # tracked separately in log
+         │             continue   # retry within this segment's max_retries budget
+         │
+         │     # Note: any other Exception (incl. plain RuntimeError) propagates
+         │     # without being caught. The orchestrator does NOT swallow generic
+         │     # runtime errors — those are implementation bugs and abort the run.
          │
          └─→ if all attempts exhausted (attempt_count == max_retries and no break):
                response = VLMResponse(phase="unknown", verb=None, object=None, target=None,
@@ -480,7 +579,9 @@ segment ─┬─→ ClipFeatureExtractor.extract(segment, video, signals, parqu
                final_status = "unknown_fallback"
 ```
 
-A successful call in any attempt resets `consecutive_runtime_failures` to 0. Only **consecutive** runtime exceptions trigger run-level degrade — a run that recovers between flaky calls completes normally.
+A successful call in any attempt resets `consecutive_runtime_failures` to 0. Only **consecutive** `LabelerRuntimeError` instances trigger run-level degrade — a run that recovers between flaky infra calls completes normally.
+
+**Special case (`vlm_unreachable`):** if the **first** `label_segment` call across the entire run raises `LabelerRuntimeError(reason="model_unreachable" or "device_unavailable")`, the orchestrator immediately escalates to run-level degrade with `degrade_reason="vlm_unreachable"` (rather than counting toward the `runtime_failure_threshold`). The intent is to fail fast when the inference path is fundamentally unreachable, before consuming retries on every segment.
 
 ### 3.2 Segment merge
 
@@ -523,7 +624,7 @@ Robot-state summary for this segment:
   mean_eef_speed_mps: {mean_eef_speed_mps}     # null = no EEF data, ignore
   gripper_open_fraction: {gripper_open_fraction}
   gripper_transitions: {gripper_transitions}
-  dwell_fraction: {dwell_fraction}
+  dwell_fraction: {dwell_fraction}             # null when mean_eef_speed_mps is null
 
 USER:
 {K_effective keyframes inline, in temporal order, captioned with offset_sec}
@@ -550,7 +651,10 @@ The "phase" field MUST be one of: {allowed_labels} or "unknown".
 ### 3.4 Validation pipeline
 
 ```python
-def parse_and_validate(raw_text: str, allowed_labels: set[str]) -> VLMResponse:
+EVIDENCE_DISPLAY_HINT_CHARS = 80  # SOFT — see truncation note below
+
+
+def parse_and_validate(raw_text: str, user_allowed_labels: set[str]) -> VLMResponse:
     # 1. Strip optional markdown fences ```json ... ```
     text = strip_markdown_fences(raw_text)
 
@@ -568,24 +672,39 @@ def parse_and_validate(raw_text: str, allowed_labels: set[str]) -> VLMResponse:
         if field in obj and obj[field] is not None and not isinstance(obj[field], str):
             raise LabelerError("schema_violation")
 
-    # 4. phase ∈ allowed_labels ∪ {"unknown"}
-    if obj["phase"] not in allowed_labels | {"unknown"}:
+    # 4. phase ∈ user_allowed_labels ∪ {"unknown"}
+    #    The reserved "unknown" is appended INTERNALLY here. Callers MUST NOT
+    #    include "unknown" in user_allowed_labels (parent §8.4); the labels
+    #    YAML loader rejects any user file that defines an id of "unknown" or
+    #    "unlabeled" at load time. Ditto for "unlabeled" — neither reserved
+    #    phase is ever a valid Phase 2 VLM output (see also §3.2 segment merge
+    #    invariants).
+    if obj["phase"] not in user_allowed_labels | {"unknown"}:
         raise LabelerError("invalid_label")
 
     # 5. vlm_confidence ∈ [0.0, 1.0]
     if not 0.0 <= float(obj["vlm_confidence"]) <= 1.0:
         raise LabelerError("out_of_range_confidence")
 
-    # 6. Coerce missing optional fields to None; ignore unknown extra fields (forwards-compat)
+    # 6. Truncate evidence at write time (SOFT contract — see note).
+    evidence = obj.get("evidence")
+    if isinstance(evidence, str) and len(evidence) > EVIDENCE_DISPLAY_HINT_CHARS:
+        evidence = evidence[:EVIDENCE_DISPLAY_HINT_CHARS]
+
+    # 7. Coerce missing optional fields to None; ignore unknown extra fields (forwards-compat)
     return VLMResponse(
         phase=obj["phase"],
         verb=obj.get("verb"),
         object=obj.get("object"),
         target=obj.get("target"),
         vlm_confidence=float(obj["vlm_confidence"]),
-        evidence=obj.get("evidence"),
+        evidence=evidence,
     )
 ```
+
+**Length contract for `evidence`:** `EVIDENCE_DISPLAY_HINT_CHARS = 80` is a **soft** cap. Over-length evidence is **truncated at validation**, not rejected — rejecting on length would burn retries for a purely cosmetic problem. The prompt asks for `≤80 chars` as guidance to keep the field usable in viewer chooser banners; the validator enforces the bound by truncation so consumers see at most 80 chars regardless. Producers MAY choose to log the original length to stderr for diagnostics.
+
+**Allowed-labels enforcement:** the producer accepts the user's labels YAML (parent §8.1) and constructs the validator's check set as `user_allowed_labels ∪ {"unknown"}`. Per parent §8.4, the labels YAML loader rejects user-supplied `unknown` / `unlabeled` ids at load time; the spec relies on that pre-condition rather than re-checking it here.
 
 The spec mandates running this validator on every VLM response, regardless of any model-side structured-output enforcement (HF `response_schema`, JSON mode, grammar-constrained decoding, etc.). Model-side enforcement is an implementation optimization — it MAY reduce the retry rate, but MUST NOT replace producer-side validation, because the contract must hold across model swaps with potentially different enforcement capabilities.
 
@@ -603,7 +722,7 @@ On run-level degrade:
 "vlm_labeler: degraded to Phase 1 output (degrade_reason={reason}); 0/{N} segments labeled."
 ```
 
-Per-attempt detail goes to structured stderr logs (§4.3); `notes` only carries the aggregate.
+Per-attempt detail and the `underlying_error` exception repr go to structured **stderr logs only** (§4.6); `notes` carries the aggregate and `degrade_reason` only. Exception reprs MUST NOT be persisted into any artifact (manifest, annotation, index) because they may contain local file paths, environment state, HF tokens, or CUDA device strings.
 
 ## 4. Error and degrade contract
 
@@ -644,9 +763,9 @@ Tier 2 covers failures **after** pre-flight passes — i.e., the configuration w
 
 | Trigger | Detection | `degrade_reason` |
 |---|---|---|
-| VLM constructor raises (CUDA OOM at weight load, transient device fault, weight file corruption surfaced after pre-flight, etc.) | `LocalGemmaVLMLabeler.__init__` exception | `vlm_init_failed` |
-| First call cannot reach the model service / device | first `label_segment` raises `ConnectionError` or device-unavailable `RuntimeError` | `vlm_unreachable` |
-| Consecutive runtime failures (e.g., GPU OOM during inference) | `consecutive_runtime_failures >= runtime_failure_threshold` (default 3) | `vlm_runtime_failed` |
+| Labeler factory (constructor) raises any exception | `labeler_factory(config)` call inside `label_run` raises (caught at the factory boundary per §2.3) | `vlm_init_failed` |
+| Inference path is fundamentally unreachable on the **very first call** | first `label_segment` raises `LabelerRuntimeError(reason ∈ {"model_unreachable", "device_unavailable"})` | `vlm_unreachable` |
+| Consecutive `LabelerRuntimeError` instances during inference | `consecutive_runtime_failures >= runtime_failure_threshold` (default 3) | `vlm_runtime_failed` |
 
 **Note:** video decode failures are governed by the existing parent spec §11 row ("Video decode error | abort with the failing path; no partial run directory") — they remain a **Tier 1 abort**, not a Phase 2 degrade. Phase 2 inherits this behavior unchanged from Phase 1.
 
@@ -666,7 +785,7 @@ Run-level degrade output:
   - `vlm_confidence = null`
   - `verb = object = target = evidence = null`
   - `overall_confidence = boundary_confidence` (parent §6.4 Phase 1 branch)
-- `annotation.notes = "vlm_labeler: degraded to Phase 1 output (degrade_reason=..., underlying_error=...); 0/N segments labeled."`
+- `annotation.notes = "vlm_labeler: degraded to Phase 1 output (degrade_reason=...); 0/N segments labeled."` (`underlying_error` MUST NOT appear here — see §3.5)
 - exit 0
 
 **Why segment-level fields revert to Phase 1 baseline on degrade:** the parent spec §11 idiom is explicit — "Degrade to Phase N mode for the whole run". Phase 2-specific values (`label_source="vlm_robot_state_only"`, `vlm_confidence=0.0`, `phase="unknown"`) signal *attempted Phase 2 labeling* on a per-segment basis; degrade signals *no Phase 2 labeling occurred at all*. Mixing the two would make `label_source` ambiguous between "VLM ran on this segment but failed" and "VLM never ran". The unambiguous-meaning rule: **`label_source="vlm_robot_state_only"` ⟺ `VLMLabeler.label_segment` was invoked at least once on this segment**.
@@ -698,7 +817,7 @@ The run completes normally; `pipeline_status.degraded_from_phase = null`. `label
 | `out_of_range_confidence` | `vlm_confidence` outside `[0.0, 1.0]` | restate the range constraint |
 | `timeout` | `vlm.timeout_sec` exceeded | none (retry as-is) |
 
-Attempts are tracked in `LabelAttempt.reject_reasons`. The runtime-error case is **not** part of `reject_reason` enum; it is logged separately and counted toward the run-level threshold.
+Attempts are tracked in `LabelAttempt.reject_reasons` (uses the `RejectReason` enum from §2.1). Infrastructure faults are tracked **separately** in `LabelAttempt.runtime_errors` (uses the `RuntimeFaultReason` enum from §2.1) and counted toward the run-level threshold (§4.3). Implementation note: the two lists are intentionally disjoint by type so consumers can filter "VLM-output rejections" vs "infra incidents" without parsing strings.
 
 ### 4.6 Structured observation log (stderr JSONL)
 
@@ -716,7 +835,13 @@ On segment-level fallback:
 {"event":"vlm_segment_fallback","segment_id":"s_005","attempts":3,"reject_reasons":["schema_violation","invalid_label","schema_violation"],"ts":"..."}
 ```
 
-On run-level degrade:
+On segment infra-fault (separate from rejection):
+
+```jsonl
+{"event":"vlm_runtime_fault","segment_id":"s_007","attempt":2,"reason":"cuda_oom","ts":"..."}
+```
+
+On run-level degrade (the **only** place `underlying_error` exception repr is written; never persisted to artifacts):
 
 ```jsonl
 {"event":"vlm_run_degrade","degrade_reason":"vlm_init_failed","trigger_segment":null,"underlying_error":"<exception repr>","ts":"..."}
@@ -761,10 +886,10 @@ Driven by the existing pytest harness pattern (`env -u PYTHONPATH -u ROS_DISTRO 
   - `annotation.notes` matches the aggregate format.
 - Degrade integration test — `FixtureVLMLabeler.__init__` raises → run dir still published with `degraded_from_phase=2`, `degrade_reason="vlm_init_failed"`; all segments retain `phase="unlabeled"`, `label_source="signals_only"`.
 - Rerun idempotency — running the same command twice produces the same `run_hash` and short-circuits per parent spec §4.4 step 2 (no rewrite). `--force` re-publishes byte-equivalent artifacts modulo `generated_at` and degrade observability fields.
-- Hash distinctness — running with `--keyframes 4` then `--keyframes 6` produces two different run dirs in the same `runs/index.json`.
+- Hash distinctness — running with `--vlm-keyframes 4` then `--vlm-keyframes 6` produces two different run dirs in the same `runs/index.json`.
 - CLI abort test — `--target-phase=2` without `--vlm-model` exits non-zero with structured `error_code=vlm_model_required` JSON on stderr; no run dir.
 
-The `fixture://<path>` URI scheme is a Phase 2-only test convenience supported by the CLI parser; it is not part of any persistent contract and not documented as a user-facing feature.
+The `fixture://<path>` URI scheme is a **test-only** URI scheme accepted by the CLI parser. It is **not** part of the stable public CLI contract — it is documented here for implementer / test-author awareness but MUST NOT be referenced from user-facing documentation, MimicRec integration, or any persisted artifact (the fixture's resolved checkpoint = `sha256(file content)` does end up in `model_versions.vlm`, but a downstream consumer encountering that string can simply treat it as opaque).
 
 ### 5.4 Real-VLM smoke (Layer 3)
 
@@ -812,7 +937,7 @@ Loads `LocalGemmaVLMLabeler` with the writing-plans-pinned default `model_id`, r
     },
     "s_003": {
       "scenario": "runtime_error",
-      "_raise_each_attempt": "RuntimeError(\"fake GPU OOM\")"
+      "_raise_each_attempt": "LabelerRuntimeError(reason=\"cuda_oom\", message=\"fake OOM\")"
     }
   }
 }
@@ -820,9 +945,9 @@ Loads `LocalGemmaVLMLabeler` with the writing-plans-pinned default `model_id`, r
 
 `FixtureVLMLabeler` interprets each entry's `responses[attempt - 1]`:
 
-- A dict with a top-level `_emit_raw` key — the implementation passes that string directly into `parse_and_validate`, exercising the validator's reject paths.
+- A dict with a top-level `_emit_raw` key — the implementation passes that string directly into `parse_and_validate`, exercising the validator's reject paths (this raises `LabelerError` with the correct `RejectReason`).
 - A dict matching `VLMResponse` shape — returned as-is (after passing validation).
-- A scenario with `_raise_each_attempt` — the implementation raises the named exception type with the given message on every call.
+- A scenario with `_raise_each_attempt` — the implementation parses the spec-defined exception form and raises the corresponding `LabelerRuntimeError(reason=...)` (or `LabelerError(reject_reason=...)`) on every attempt. The fixture deliberately exercises classified exceptions only; uncaught generic `RuntimeError` is not a fixture-supported scenario (those represent implementation bugs, not infra failures, and are the responsibility of LocalGemmaVLMLabeler unit tests).
 
 The `init_should_raise` field, when non-null, makes `FixtureVLMLabeler.__init__` raise the named exception, exercising the `vlm_init_failed` degrade path.
 
