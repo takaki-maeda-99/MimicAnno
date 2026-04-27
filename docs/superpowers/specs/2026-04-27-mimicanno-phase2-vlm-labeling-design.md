@@ -487,7 +487,7 @@ mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> [--offline] ...
 
 **`model_identity()` consistency:** `LocalGemmaVLMLabeler.model_identity()` returns the same `(vlm_model, vlm_checkpoint)` that pre-flight wrote into `VLMConfig`. The constructor MUST NOT re-resolve to a possibly-different revision; it loads the pre-resolved sha. If HF API has changed the model between pre-flight and load (rare, but possible), the constructor either succeeds against the resolved sha or raises (which becomes Tier 2 `vlm_init_failed`).
 
-**`FixtureVLMLabeler` lifecycle:** pre-flight is skipped for fixture URIs (`fixture://<path>`). The fixture's declared `model_identity` (read from the JSON file) is used directly; `resolved_checkpoint` becomes the sha256 of the fixture file content. Fixture file not found at pre-flight → Tier 1 abort with `error_code="vlm_model_not_found"`.
+**`FixtureVLMLabeler` lifecycle:** pre-flight runs for fixture URIs (`fixture://<path>`) but takes the dedicated **Case C** path — no HF API call, the fixture file is read from disk and `resolved_checkpoint = sha256(file content)`. The resolved `(model_id="fixture", resolved_checkpoint=<sha>)` then enters `config_hash` exactly like a real model. Fixture file not found → Tier 1 abort with `error_code="vlm_model_not_found"`. The fixture file path itself is carried out-of-band on the runtime-only `VLMConfig.fixture_path` field (excluded from `to_dict` / hash) so identical fixture content at different absolute paths produces identical run hashes.
 
 ### 2.6 `manifest.pipeline_params.vlm` on-disk shape
 

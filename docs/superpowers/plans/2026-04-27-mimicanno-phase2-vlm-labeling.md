@@ -2154,9 +2154,7 @@ _FIXT_RUNTIME_PATTERN = _re.compile(
 
 class FixtureVLMLabeler:
     """Test/CI implementation that replays scenarios from a fixture JSON
-    (spec §5.5). label_segment is signature-extended with `segment_id` so
-    the fixture can route per segment; the protocol-level signature is
-    backward-compatible because real impls take `**_` for extra kwargs."""
+    (spec §5.5). Routing per segment uses `request["segment_id"]` (spec §2.1)."""
 
     def __init__(self, fixture_path: Path) -> None:
         self._fixture_path = Path(fixture_path)
@@ -2644,7 +2642,7 @@ def label_run(
                                           underlying_error=None)
 ```
 
-(Also: extend `VLMLabeler` Protocol with `segment_id: str` kwarg, since FixtureVLMLabeler/Local need it. Use `**_` for forward compatibility.)
+(The `VLMLabeler` Protocol signature stays as in spec §2.1: `label_segment(self, request, attempt, last_reject_reason=None)`. FixtureVLMLabeler routes by `request["segment_id"]`; LocalGemmaVLMLabeler ignores it apart from logging.)
 
 - [ ] **Step 5: Run tests.**
 
@@ -2730,7 +2728,7 @@ def test_init_should_raise_returns_baseline_and_degrade() -> None:
 
 class _FirstCallUnreachable:
     """Minimal labeler that raises model_unreachable on every call."""
-    def label_segment(self, request, attempt, segment_id, **_):
+    def label_segment(self, request, attempt, last_reject_reason=None):
         raise LabelerRuntimeError("model_unreachable")
     def model_identity(self):
         return ModelIdentity(vlm_model="fake", vlm_checkpoint="x")
@@ -2775,7 +2773,7 @@ def test_runtime_failures_reset_on_success() -> None:
     class _FlakyThenOK:
         def __init__(self) -> None:
             self.calls = 0
-        def label_segment(self, request, attempt, segment_id, **_):
+        def label_segment(self, request, attempt, last_reject_reason=None):
             self.calls += 1
             # Pattern: cuda_oom (segment 0 attempt 1)
             #          cuda_oom (segment 0 attempt 2)
@@ -2953,7 +2951,10 @@ class LocalGemmaVLMLabeler:
         )
 
     def label_segment(
-        self, request: VLMRequest, attempt: int, segment_id: str
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
         # Body added in Task 12 (with exception classification).
         raise NotImplementedError("LocalGemmaVLMLabeler.label_segment lands in Task 12")
@@ -3176,10 +3177,11 @@ git commit -m "feat(vlm_labeler): LocalGemmaVLMLabeler.label_segment + exception
 
 Wire the orchestrator into the existing pipeline's run flow. Specifically:
 1. After Phase 1 segment bracketing, branch on `target_phase >= 2`.
-2. Compose a `signals` dict (existing `SignalsBundle` repackaged + episode-level extras like `task_text`, `allowed_labels`, `_keyframes_for_segment` callback that uses `io_video.extract_frames`).
-3. Call `vlm_labeler.label_run(...)` with a labeler factory determined by `--vlm-model`.
-4. Populate `manifest.model_versions.vlm`, `manifest.pipeline_status.degraded_from_phase / degrade_reason`, `manifest.pipeline_params.vlm`, `annotation.notes`.
-5. Emit structured `vlm_attempt` / `vlm_segment_fallback` / `vlm_run_degrade` JSONL events to stderr.
+2. Construct a `ClipFeatureExtractor` bound to the run's video path + fps + `vlm_config.clip_features` + `vlm_config.image_size_px`.
+3. Build the flat `episode_meta` dict (`task_text`, `allowed_labels`, `label_version`, `robot_type`, `fps`, `episode_duration_sec`).
+4. Call `apply_phase2_labeling(segments, extractor, gripper, eef_velocity, episode_meta, vlm_config)` (Task 13 helper) which dispatches to `vlm_labeler.label_run` with a labeler factory chosen by `_make_labeler_factory(vlm_config)`.
+5. Populate `manifest.model_versions.vlm`, `manifest.pipeline_status.degraded_from_phase / degrade_reason`, `manifest.pipeline_params.vlm`, `annotation.notes`.
+6. Emit structured `vlm_attempt` / `vlm_runtime_fault` / `vlm_segment_fallback` / `vlm_run_degrade` JSONL events to stderr.
 
 - [ ] **Step 1: Read the existing pipeline.py to understand the structure.**
 
