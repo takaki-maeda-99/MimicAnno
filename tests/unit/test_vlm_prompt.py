@@ -4,8 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import pytest
-
 from mimicanno.vlm_prompt import build_prompt
 from mimicanno.vlm_labeler import VLMRequest
 
@@ -26,6 +24,7 @@ def _request() -> VLMRequest:
         episode_duration_sec=15.13,
         segment_index=3,
         segment_total=8,
+        segment_id="s_003",
         keyframes=[np.zeros((4, 4, 3), dtype=np.uint8)],
         keyframe_offsets_sec=[0.0, 0.5, 1.0, 1.5],
         robot_state_summary={

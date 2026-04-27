@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mimicanno.vlm_labeler import RejectReason, VLMRequest
+from mimicanno.vlm_labeler import REJECT_REASONS, RejectReason, VLMRequest
 
-_REJECT_AMENDMENT_BY_REASON = {
+_REJECT_AMENDMENT_BY_REASON: dict[RejectReason, str] = {
     "json_parse_error": (
         "Re-emit the JSON object only. No prose, no markdown fences."
     ),
@@ -27,6 +27,11 @@ _REJECT_AMENDMENT_BY_REASON = {
     ),
     "timeout": "",  # no copy change; just retry
 }
+assert set(_REJECT_AMENDMENT_BY_REASON) == set(REJECT_REASONS), (
+    "_REJECT_AMENDMENT_BY_REASON keys must match RejectReason exhaustively"
+)
+
+KEYFRAMES_MARKER = "[KEYFRAMES]"
 
 
 def _fmt_optional_float(v: Optional[float]) -> str:
@@ -68,7 +73,7 @@ def build_prompt(
         f"  dwell_fraction: {_fmt_optional_float(rs.get('dwell_fraction'))}\n"
         "\n"
         "USER:\n"
-        "[KEYFRAMES]\n"
+        f"{KEYFRAMES_MARKER}\n"
         "\n"
         "Respond with ONE JSON object, no prose, no markdown fences:\n"
         "{\n"
