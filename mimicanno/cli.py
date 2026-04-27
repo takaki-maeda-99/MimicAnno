@@ -116,30 +116,22 @@ def annotate(
     # Phase 2 prerequisites: resolve --vlm-model via pre-flight (§2.5).
     vlm_config: VLMConfig | None = None
     if target_phase >= 2:
-        if vlm_model is None:
-            try:
-                raise VLMModelRequired(target_phase=target_phase)
-            except MimicAnnoError as e:
-                write_error_json(e)
-                raise typer.Exit(code=2) from None
         try:
+            if vlm_model is None:
+                raise VLMModelRequired(target_phase=target_phase)
             preflight = resolve_vlm_model(vlm_model, offline=offline)
+            vlm_config = VLMConfig(
+                model_id=preflight.model_id,
+                resolved_checkpoint=preflight.resolved_checkpoint,
+                fixture_path=preflight.fixture_path,
+                keyframes_per_segment=vlm_keyframes,
+                max_retries=vlm_max_retries,
+            )
+            if vlm_config.keyframes_per_segment < 1:
+                raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
         except MimicAnnoError as e:
             write_error_json(e)
             raise typer.Exit(code=2) from None
-        vlm_config = VLMConfig(
-            model_id=preflight.model_id,
-            resolved_checkpoint=preflight.resolved_checkpoint,
-            fixture_path=preflight.fixture_path,
-            keyframes_per_segment=vlm_keyframes,
-            max_retries=vlm_max_retries,
-        )
-        if vlm_config.keyframes_per_segment < 1:
-            try:
-                raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
-            except MimicAnnoError as e:
-                write_error_json(e)
-                raise typer.Exit(code=2) from None
 
     cfg = AnnotationConfig(
         boundary=boundary,
