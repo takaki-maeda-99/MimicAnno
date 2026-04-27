@@ -423,3 +423,64 @@ def label_run(
 
     return working, attempts, RunOutcome(kind="ok", degrade_reason=None,
                                           underlying_error=None)
+
+
+# ---------------------------------------------------------------------------
+# LocalGemmaVLMLabeler (spec §2.2, §8 #1)
+# ---------------------------------------------------------------------------
+
+DEFAULT_LOCAL_GEMMA_MODEL_ID = "google/gemma-4-E2B-it"
+
+
+def _hf_load_model_and_processor(
+    *, model_id: str, revision: str, device: str, dtype: str,
+) -> tuple[object, object]:
+    """Load the HF model + processor at the pre-flight-resolved revision.
+    Isolated for monkeypatching in unit tests."""
+    import torch
+    from transformers import AutoModelForVision2Seq, AutoProcessor
+    torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
+                   "float32": torch.float32}[dtype]
+    model = AutoModelForVision2Seq.from_pretrained(
+        model_id, revision=revision, torch_dtype=torch_dtype,
+    ).to(device).eval()
+    processor = AutoProcessor.from_pretrained(model_id, revision=revision)
+    return model, processor
+
+
+class LocalGemmaVLMLabeler:
+    """Default real implementation — Gemma 4-family multimodal IT loaded via
+    HuggingFace transformers (spec §2.2). Documented default:
+    `google/gemma-4-E2B-it`.
+
+    The constructor loads the model + processor against the pre-flight-resolved
+    revision (§2.5); it never re-resolves. Failures propagate unwrapped — the
+    label_run orchestrator catches them at the labeler-factory boundary and
+    converts to vlm_init_failed degrade.
+    """
+
+    def __init__(self, config: VLMConfig) -> None:
+        if config.resolved_checkpoint is None:
+            raise ValueError("resolved_checkpoint must be set by pre-flight (§2.5)")
+        self._config = config
+        self._model, self._processor = _hf_load_model_and_processor(
+            model_id=config.model_id,
+            revision=config.resolved_checkpoint,
+            device=config.device,
+            dtype=config.dtype,
+        )
+
+    def model_identity(self) -> ModelIdentity:
+        return ModelIdentity(
+            vlm_model=self._config.model_id,
+            vlm_checkpoint=self._config.resolved_checkpoint or "",
+        )
+
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse:
+        # Body added in Task 12 (with exception classification).
+        raise NotImplementedError("LocalGemmaVLMLabeler.label_segment lands in Task 12")
