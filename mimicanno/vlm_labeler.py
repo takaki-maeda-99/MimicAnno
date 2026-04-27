@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -311,9 +312,8 @@ def _build_request(
 
 
 def _merge_response(
-    seg: SubtaskSegment, resp: VLMResponse, fallback: bool,
+    seg: SubtaskSegment, resp: VLMResponse,
 ) -> SubtaskSegment:
-    import math
     seg.phase = resp["phase"]
     seg.verb = resp["verb"]
     seg.object = resp["object"]
@@ -387,13 +387,14 @@ def label_run(
                     last_reject_reason=last_reject,
                 )
                 consecutive_runtime_failures = 0
-                _merge_response(seg, resp, fallback=False)
+                _merge_response(seg, resp)
                 attempt_log.final_status = "ok"
                 attempt_log.response = resp
                 success = True
                 break
             except LabelerError as e:
                 attempt_log.reject_reasons.append(e.reject_reason)
+                # Only rejects update the hint; runtime faults preserve the last reject.
                 last_reject = e.reject_reason
                 continue
             except LabelerRuntimeError as e:
@@ -416,7 +417,7 @@ def label_run(
                 phase="unknown", verb=None, object=None, target=None,
                 vlm_confidence=0.0, evidence=None,
             )
-            _merge_response(seg, fallback_resp, fallback=True)
+            _merge_response(seg, fallback_resp)
             attempt_log.final_status = "unknown_fallback"
             attempt_log.response = fallback_resp
 
