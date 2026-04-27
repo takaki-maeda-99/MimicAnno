@@ -305,7 +305,12 @@ class FixtureVLMLabeler:
     exercise retry / fallback / degrade paths without a real model."""
 
     def __init__(self, fixture_path: Path) -> None: ...
-    def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse: ...
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity:
         # vlm_model = "fixture"
         # vlm_checkpoint = sha256 of the fixture file content (set by pre-flight, §2.5)
@@ -327,7 +332,12 @@ class LocalGemmaVLMLabeler:
     in label_run (§2.3)."""
 
     def __init__(self, config: VLMConfig) -> None: ...
-    def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse: ...
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity:
         # vlm_model = config.model_id
         # vlm_checkpoint = config.resolved_checkpoint (set by pre-flight, §2.5)
