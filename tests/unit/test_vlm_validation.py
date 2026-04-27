@@ -75,6 +75,22 @@ def test_schema_violation_verb_wrong_type() -> None:
     assert ei.value.reject_reason == "schema_violation"
 
 
+def test_schema_violation_confidence_string() -> None:
+    """vlm_confidence as a string MUST be rejected, not coerced."""
+    raw = '{"phase": "idle", "vlm_confidence": "0.5"}'
+    with pytest.raises(LabelerError) as ei:
+        parse_and_validate(raw, ALLOWED)
+    assert ei.value.reject_reason == "schema_violation"
+
+
+def test_schema_violation_confidence_bool() -> None:
+    """vlm_confidence as a bool MUST be rejected — bool is an int subclass."""
+    raw = '{"phase": "idle", "vlm_confidence": true}'
+    with pytest.raises(LabelerError) as ei:
+        parse_and_validate(raw, ALLOWED)
+    assert ei.value.reject_reason == "schema_violation"
+
+
 def test_invalid_label() -> None:
     raw = '{"phase": "made_up", "vlm_confidence": 0.5}'
     with pytest.raises(LabelerError) as ei:
