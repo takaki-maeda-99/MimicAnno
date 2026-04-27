@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from imageio_ffmpeg import get_ffmpeg_exe  # type: ignore[import-untyped]
 
 from mimicanno.hashing import sha256_file
@@ -113,3 +114,58 @@ def materialize_video(src: Path, run_dir: Path, *, link: bool) -> Path:
     if link:
         return symlink_video(src, dest)
     return copy_video(src, dest)
+
+
+def extract_frames_at_indices(
+    video_path: Path,
+    frame_indices: list[int],
+    *,
+    long_edge_px: int | None = None,
+) -> list[np.ndarray]:
+    """Extract a set of frames from a video by frame index.
+
+    Uses ffmpeg's ``select=eq(n,<index>)`` filter. Returns RGB uint8 arrays
+    in the same order as ``frame_indices``. If ``long_edge_px`` is set, frames
+    are letterbox-resized so the long edge equals ``long_edge_px`` (preserving
+    aspect ratio).
+
+    This implementation is purposely simple — it issues one ffmpeg call per
+    frame index for clarity. K=4 per segment × N=8 segments = 32 ffmpeg calls
+    per Phase 2 run, which is well within the §13 performance budget.
+    """
+    if not frame_indices:
+        return []
+    out: list[np.ndarray] = []
+    ffmpeg = get_ffmpeg_exe()
+    probe = probe_video(video_path)
+    w, h = probe.width, probe.height
+    if long_edge_px is not None:
+        if w >= h:
+            tw = long_edge_px
+            th = int(round(h * (long_edge_px / w)))
+        else:
+            th = long_edge_px
+            tw = int(round(w * (long_edge_px / h)))
+        # Align to even dims so libx264 / rgb24 reshape stays consistent.
+        if tw % 2:
+            tw -= 1
+        if th % 2:
+            th -= 1
+        scale_filter = f",scale={tw}:{th}"
+    else:
+        tw, th = w, h
+        scale_filter = ""
+
+    for idx in frame_indices:
+        cmd = [
+            ffmpeg, "-loglevel", "error", "-nostdin", "-y",
+            "-i", str(video_path),
+            "-vf", f"select=eq(n\\,{idx}){scale_filter}",
+            "-vframes", "1",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, check=True)
+        arr = np.frombuffer(proc.stdout, dtype=np.uint8).reshape(th, tw, 3)
+        out.append(arr.copy())
+    return out
