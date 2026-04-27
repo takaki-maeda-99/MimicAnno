@@ -17,6 +17,7 @@ import {
 import { selectRun, type RunSelection } from "../lib/runSelection";
 import { fetchRetry } from "../lib/fetchRetry";
 import VideoPlayer from "./VideoPlayer";
+import Timeline from "./Timeline";
 
 type ArtifactSlot<T> =
   | { kind: "loading" }
@@ -202,7 +203,22 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
               onError={setVideoError}
             />
         }
-        <div>timeline placeholder (widthPx={widthPx}, t={currentTimeSec.toFixed(3)})</div>
+        {state.data.annotation.kind === "error" && (
+          <div className="error">{state.data.annotation.message}</div>
+        )}
+        {state.data.boundaries.kind === "error" && (
+          <div className="error">{state.data.boundaries.message}</div>
+        )}
+        {state.data.boundaries.kind === "ok" && state.data.annotation.kind === "ok" && (
+          <Timeline
+            widthPx={widthPx}
+            durationSec={state.data.manifest.duration_sec}
+            currentTimeSec={currentTimeSec}
+            candidates={state.data.boundaries.data.candidates}
+            segments={state.data.annotation.data.segments}
+            onSeek={setCurrentTimeSec}
+          />
+        )}
         <div>waveform placeholder</div>
       </div>
       {/* Transitional per-role status — Tasks 12 / 13 will inline these errors
