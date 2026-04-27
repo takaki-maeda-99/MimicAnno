@@ -6,6 +6,38 @@ Supersedes: nothing — new sub-plan.
 Parent spec: [`2026-04-25-mimicanno-design-brushup.md`](./2026-04-25-mimicanno-design-brushup.md) (§3 Phase 2 deliverable, §4.1 hashing, §4.3 manifest schema, §6.1–§6.4 SubtaskSegment / confidence, §8.1–§8.4 allowed-labels enforcement, §11 error handling, §12 package structure, §15.2 Phase 2 exit criteria).
 Sibling: [`2026-04-26-mimicanno-plan2-viewer-design.md`](./2026-04-26-mimicanno-plan2-viewer-design.md) (Plan 2 viewer; Phase 2 changes are purely semantic — see §1.3 — and require no viewer-side version-handling work).
 
+## Reviewer context
+
+(For reviewers unfamiliar with the parent spec — skip if you've already read it.)
+
+### What is MimicAnno?
+
+MimicAnno is a **robot-episode subtask annotation tool**. Given a robot manipulation episode (video + parquet of action/proprio time series + a natural-language task instruction such as "pick the red block and place it in the bin"), it produces a **structured annotation** that splits the episode into temporal **segments**, each tagged with one of a fixed set of subtask labels (`approach_object`, `grasp_object`, `lift_object`, `move_to_target`, …). The output is consumed downstream by MimicRec (a separate tool for VLA training / replay / evaluation), where the segment labels become supervision signals or replay markers.
+
+MimicAnno is an **independent Python package** (`mimicanno`), not coupled to any particular VLA model or training framework. Its only persistent contract with downstream consumers is a versioned **run directory** on disk (`runs/<canonical_name>/{manifest.json, annotation.json, boundaries.json, signals.json, video.mp4}`) and a Plan 2 React/Vite read-only viewer that renders those artifacts for human inspection.
+
+### How the work is staged
+
+The full pipeline is split into 5 phases — each phase produces a runnable, testable artifact, and Phase N+1 is allowed to *change* (not just add) Phase N's contract under explicit schema versioning:
+
+```
+Phase 1: signals-based boundary detection + read-only viewer        ← SHIPPED
+Phase 2: provisional VLM labeling (no object-tracking)              ← THIS SPEC
+Phase 3: SAM3 object tracking + object-aware boundaries + relabel
+Phase 4: temporal smoothing / Viterbi
+Phase 5: human-edit UI + export to MimicRec + evaluation harness
+```
+
+Phase 1 is in `main` (commit `3312547`) — the CLI detects segment boundaries from gripper / EEF / action signals and emits one `phase="unlabeled"` segment per bracketed clip; the viewer renders video + waveforms + boundary markers. Phase 1 produced no semantic labels — every segment is `"unlabeled"`.
+
+### What Phase 2 (this spec) does
+
+Phase 2 replaces every `"unlabeled"` segment with **one of the allowed labels** (or the reserved `"unknown"` if labeling fails) by calling a **VLM** (vision-language model) with `task_text + keyframes + a robot-state summary` per segment. SAM3-based object tracking is **not yet** in scope (that's Phase 3); Phase 2 deliberately works without object identity.
+
+Phase 2's deliverable is **the contract** — the VLM-call protocol, the JSON output schema, the allowed-label enforcement rule, the retry / fallback / degrade contract — *not* the labeling quality. Quality is a Phase 3+ concern. The chosen VLM (a Gemma 4-family multimodal instruction-tuned model) is treated as a pluggable adapter; the specific model identifier is configuration, not contract, and is pinned during the implementation-plan phase that follows this spec.
+
+If you're a reviewer evaluating this spec, the question is: **could a competent engineering team take this document and produce an implementation that (a) satisfies parent-spec exit criteria §15.2 #12 and #13, (b) does not violate the parent-spec invariants on hashing / atomicity / schema versioning / error idiom, and (c) leaves Phase 3+ work unobstructed?**
+
 ## 0. Scope and intent
 
 This spec covers **Phase 2**: the **provisional VLM labeling** stage that converts every Phase 1 `unlabeled` segment into one of the allowed labels (or the reserved `"unknown"`), without object-state tracking (SAM3 enters in Phase 3).
