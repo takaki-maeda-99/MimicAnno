@@ -114,7 +114,18 @@ runindex.py, scavenger.py, locks.py, io_parquet.py, io_video.py, errors.py
 | `annotation.segments[].overall_confidence` | `boundary_confidence` | `sqrt(boundary_confidence × vlm_confidence)` per parent §6.4 |
 | `annotation.notes` | `null` | aggregate 1-line summary (e.g. `"vlm_labeler: 8/8 segments labeled; 2 needed retry; 0 fell back to unknown."`) |
 
-Schema versioning: `manifest.json` and `annotation.json` MINOR-bump (`1.0.0 → 1.1.0`). New fields are additive; existing consumers ignore them per parent spec §6.6 forwards-compatibility within MAJOR.
+**Schema versioning: NO bumps required.** Current artifact `schema_version`s in the repo are all `0.1.0` (`mimicanno/schema_versions.py`). Phase 2 changes are entirely **semantic** — every field listed above is **already declared** in the Phase 1 schema:
+
+- `SubtaskSegment.phase`, `verb`, `object`, `target`, `evidence`, `failure_flags` — parent §6.1 schema declares them with permissive types; Phase 2 only changes the value space (e.g., `"unlabeled"` → allowed-labels member).
+- `SubtaskSegment.label_source` — parent §6.1 already lists `"vlm_robot_state_only"` in the `Literal` set; Phase 2 just starts emitting that value.
+- `SubtaskSegment.vlm_confidence` — already typed as `float | None`; Phase 2 fills the float case.
+- `SubtaskSegment.overall_confidence` — formula in parent §6.4 already handles the `vlm_confidence != None` branch.
+- `manifest.pipeline_params` — declared as a free-form nested dict in parent §4.3; the new `vlm` sub-key (§2.6) is opaque-dict content, not a schema-level addition.
+- `manifest.pipeline_status.degrade_reason` — already typed as `string | null` in parent §4.3; new enum values (`vlm_init_failed` / `vlm_unreachable` / `vlm_runtime_failed`) are content, not schema.
+
+Therefore `schema_version` stays `0.1.0` for `manifest.json`, `annotation.json`, `boundaries.json`, `signals.json`, and `COMPAT_BLOCK` is unchanged. Plan 2 viewer requires no version-handling changes.
+
+If a future change forces a structural schema modification (rename, type change, removed field), parent §6.6 mandates a MAJOR bump (independent per artifact). This spec does not introduce any such structural change.
 
 ### 1.4 Why per-segment, not whole-episode batched
 
@@ -316,7 +327,66 @@ class AnnotationConfig:
 
 Hash inclusion: every `VLMConfig` field enters `config_hash` (via canonical-JSON serialization of `AnnotationConfig`). Changing `keyframes_per_segment` or `image_size_px` produces a distinct `run_hash` and therefore a distinct run directory — runs cannot silently mix VLM configurations.
 
-### 2.5 `ClipFeatures` (output of `clip_features.py`)
+### 2.5 Pre-flight model resolution and hashing lifecycle
+
+Parent spec §4.1 pins `model_config (vlm_model+checkpoint)` into `config_hash`. Phase 2 must resolve `vlm_checkpoint` **before** hashing — otherwise the hash and the actually-loaded model can diverge. Resolution happens in a dedicated **pre-flight** step during CLI argument validation:
+
+```
+mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> ...
+  │
+  ├─ [Pre-flight, Tier-1-eligible]
+  │     1. Parse --vlm-model: split on "@" → (model_id, revision_or_None).
+  │     2. HF lookup (huggingface_hub.HfApi.model_info) → resolve revision
+  │        to a commit sha. If the user supplied "<id>" only, take the
+  │        latest commit on the default revision; if "<id>@<rev>", resolve
+  │        that revision. Network failure or 404 → Tier 1 abort with
+  │        error_code="vlm_model_not_found".
+  │     3. Fix the resolved tuple as VLMConfig.{model_id, _resolved_checkpoint}.
+  │        _resolved_checkpoint is the canonical commit sha string.
+  │
+  ├─ AnnotationConfig assembled — VLMConfig.model_id and
+  │     VLMConfig._resolved_checkpoint both enter the canonical-JSON
+  │     serialization that drives config_hash.
+  │
+  ├─ run_hash, canonical_name resolved.
+  │
+  └─ ... (rest of pipeline as in §1.1)
+```
+
+**Hash-input contract:** the pair `(VLMConfig.model_id, VLMConfig._resolved_checkpoint)` is fed into `config_hash`. Both are user-determined-at-config-time (after pre-flight); neither depends on the actual model load succeeding. A `VLMLabeler.__init__` failure (CUDA OOM at weight load, transient device fault, etc.) does **not** change the already-computed hash — the run dir is keyed by the configuration the user requested, not by whether the model successfully loaded. This is what allows §4.3 run-level degrade to publish a hash-stable run dir even on init failure.
+
+**`model_identity()` consistency:** `LocalGemmaVLMLabeler.model_identity()` returns the same `(vlm_model, vlm_checkpoint)` that pre-flight wrote into `VLMConfig`. The constructor MUST NOT re-resolve to a possibly-different revision; it loads the pre-resolved sha. If HF API has changed the model between pre-flight and load (rare, but possible), the constructor either succeeds against the resolved sha or raises (which becomes Tier 2 `vlm_init_failed`).
+
+**`FixtureVLMLabeler` lifecycle:** pre-flight is skipped for fixture URIs (`fixture://<path>`). The fixture's declared `model_identity` (read from the JSON file) is used directly; `_resolved_checkpoint` becomes the sha256 of the fixture file content. Fixture file not found at pre-flight → Tier 1 abort with `error_code="vlm_model_not_found"`.
+
+### 2.6 `manifest.pipeline_params.vlm` on-disk shape
+
+The `vlm` sub-block written into `manifest.json` is a JSON object containing exactly the user-visible `VLMConfig` fields (the leading-underscore `_resolved_checkpoint` is stored separately under `manifest.model_versions.vlm`, not in `pipeline_params.vlm`):
+
+```jsonc
+"pipeline_params": {
+  "boundary": { ... existing Phase 1 sub-block ... },
+  "vlm": {
+    "model_id": "google/gemma-4-...-it",
+    "keyframes_per_segment": 4,
+    "keyframe_strategy": "uniform",
+    "image_size_px": 224,
+    "max_retries": 3,
+    "temperature": 0.0,
+    "max_output_tokens": 256,
+    "timeout_sec": 30.0,
+    "runtime_failure_threshold": 3,
+    "device": "cuda",
+    "dtype": "bfloat16"
+  }
+}
+```
+
+Field order is canonical-JSON sorted (lexicographic by key) at write time so byte-equivalent re-emission per parent §6.5 holds. The `model_versions.vlm` field carries the `<model_id>:<resolved_checkpoint_sha>` composition; the `pipeline_params.vlm` block carries the configuration knobs only.
+
+When `target_phase == 1`, `pipeline_params.vlm` is **absent** (not `null`) — preserving Phase 1 manifest byte-equivalence.
+
+### 2.7 `ClipFeatures` (output of `clip_features.py`)
 
 ```python
 @dataclass
@@ -510,11 +580,13 @@ Tiers 1–4 are mutually exclusive per event; an error escalates from Tier 4 →
 
 ### 4.2 Tier 1 — CLI / config (abort)
 
+Tier 1 covers errors detectable **before** any model weight is loaded into memory or any segment is processed. These reflect user / configuration mistakes that the system can identify deterministically and report cleanly.
+
 | Condition | exit | `error_code` |
 |---|---|---|
 | `--target-phase ≥ 2` and `--vlm-model` not provided | 2 | `vlm_model_required` |
-| `target_phase ≥ 2` and `AnnotationConfig.vlm` is `None` or invalid | 2 | `vlm_config_invalid` |
-| `--vlm-model` value cannot be resolved at startup (HF lookup fails before any inference call) | 2 | `vlm_model_not_found` |
+| `target_phase ≥ 2` and `AnnotationConfig.vlm` is `None` or invalid (e.g., `keyframes_per_segment < 1`) | 2 | `vlm_config_invalid` |
+| Pre-flight model lookup fails (HF API 404, network unreachable, fixture file missing) | 2 | `vlm_model_not_found` |
 
 Structured stderr per parent §11:
 
@@ -528,12 +600,17 @@ No run directory is created. Idempotent re-run with the same broken config produ
 
 ### 4.3 Tier 2 — Run-level degrade
 
+Tier 2 covers failures **after** pre-flight passes — i.e., the configuration was valid, but the actual VLM execution could not proceed. Per parent spec §11 ("Degrade to Phase N mode for the whole run"), these failures degrade the run to **Phase 1-equivalent output** with degrade flags set in `pipeline_status`.
+
 | Trigger | Detection | `degrade_reason` |
 |---|---|---|
-| VLM constructor raises | `LocalGemmaVLMLabeler.__init__` exception | `vlm_init_failed` |
+| VLM constructor raises (CUDA OOM at weight load, transient device fault, weight file corruption surfaced after pre-flight, etc.) | `LocalGemmaVLMLabeler.__init__` exception | `vlm_init_failed` |
 | First call cannot reach the model service / device | first `label_segment` raises `ConnectionError` or device-unavailable `RuntimeError` | `vlm_unreachable` |
-| Consecutive runtime failures (e.g., GPU OOM) | `consecutive_runtime_failures >= runtime_failure_threshold` (default 3) | `vlm_runtime_failed` |
-| Video decode fails 3 segments in a row | (existing Phase 1 path; out of scope for Phase 2 to redefine) | `video_decode_failed` |
+| Consecutive runtime failures (e.g., GPU OOM during inference) | `consecutive_runtime_failures >= runtime_failure_threshold` (default 3) | `vlm_runtime_failed` |
+
+**Note:** video decode failures are governed by the existing parent spec §11 row ("Video decode error | abort with the failing path; no partial run directory") — they remain a **Tier 1 abort**, not a Phase 2 degrade. Phase 2 inherits this behavior unchanged from Phase 1.
+
+**Tier 1 vs Tier 2 boundary, in one sentence:** if the failure is detectable from configuration alone (without loading model weights or executing inference) it is Tier 1 abort; once weights begin to load or `label_segment` is first invoked, in-process failures become Tier 2 degrade.
 
 Run-level degrade output:
 
@@ -541,7 +618,8 @@ Run-level degrade output:
 - `manifest.pipeline_status.degraded_from_phase = 2`
 - `manifest.pipeline_status.degrade_reason = <reason>`
 - `manifest.pipeline_status.object_state_available = false`
-- `manifest.model_versions.vlm = <vlm_model>:<vlm_checkpoint>` (recorded even if init failed, when resolvable; otherwise the model_id only)
+- `manifest.model_versions.vlm = "<vlm_model>:<resolved_checkpoint_sha>"` (always populated; resolved at pre-flight per §2.5)
+- `manifest.pipeline_params.vlm = { ... }` (the configured `VLMConfig` per §2.6, regardless of degrade — the run was *configured* for Phase 2)
 - Every `annotation.segments[*]`:
   - `phase = "unlabeled"` (Phase 1 baseline)
   - `label_source = "signals_only"`
@@ -551,7 +629,9 @@ Run-level degrade output:
 - `annotation.notes = "vlm_labeler: degraded to Phase 1 output (degrade_reason=..., underlying_error=...); 0/N segments labeled."`
 - exit 0
 
-The run dir IS published. Reusable, discoverable, and visible in the viewer's `pipeline_status` banner.
+**Why segment-level fields revert to Phase 1 baseline on degrade:** the parent spec §11 idiom is explicit — "Degrade to Phase N mode for the whole run". Phase 2-specific values (`label_source="vlm_robot_state_only"`, `vlm_confidence=0.0`, `phase="unknown"`) signal *attempted Phase 2 labeling* on a per-segment basis; degrade signals *no Phase 2 labeling occurred at all*. Mixing the two would make `label_source` ambiguous between "VLM ran on this segment but failed" and "VLM never ran". The unambiguous-meaning rule: **`label_source="vlm_robot_state_only"` ⟺ `VLMLabeler.label_segment` was invoked at least once on this segment**.
+
+The run dir IS published — reusable, discoverable, and visible in the viewer's `pipeline_status` banner. Re-running the same command after fixing the underlying issue produces a different `run_hash` only if the user changed the configuration; otherwise the existing degraded run is short-circuited per parent §4.4 step 2 (so the user must pass `--force` to re-attempt).
 
 ### 4.4 Tier 3 — Segment-level fallback
 
@@ -718,11 +798,13 @@ Snapshot updates are reviewed manually; CI fails on drift. This guards against s
 
 ## 6. Exit criteria mapping (parent spec §15.2)
 
+**Scope of "Phase 2 exit criteria":** parent §15.2 #12 and #13 describe what a **completed Phase 2 run** must look like. By parent §11 idiom ("Degrade to Phase N mode for the whole run"), a degraded run is **not a Phase 2 run** for purposes of these criteria — it is a Phase-1-equivalent run published with degrade flags so the failure is observable. Exit criteria therefore apply to runs where `manifest.pipeline_status.degraded_from_phase == null` AND `manifest.generator.pipeline_phase == 2`. This split is consistent with how parent §15.3 phrases SAM3's Phase 3 criteria (#14 success vs #15 the explicit synthetic-degrade test).
+
 | Parent criterion | Phase 2 spec satisfaction |
 |---|---|
-| #12 — VLM labels every Phase 1 clip with one of the allowed labels | §3.2 (segment merge invariant), §4.4 (segment-level fallback to `"unknown"` ∈ allowed reserved set), §5.3 integration test asserting `phase ∈ allowed_labels ∪ {"unknown"}` for all segments. |
-| #12 — rejection retries are observable in logs | §4.6 structured `event=vlm_attempt` JSONL on stderr; §5.3 integration test asserting these events appear for the `ok_after_2_retries` fixture scenario. |
-| #13 — `label_source = "vlm_robot_state_only"` on all segments | §3.2 segment merge sets this unconditionally on the success path; §4.4 keeps it on the segment-level fallback path. The only case where `label_source = "signals_only"` is run-level degrade (§4.3), which is by spec design — the run did not complete Phase 2. |
+| #12 — VLM labels every Phase 1 clip with one of the allowed labels | §3.2 segment merge invariant; §4.4 segment-level fallback to the reserved `"unknown"` (parent §8.4 explicitly admits `unknown` as a valid label-set member for Phase 2/3). §5.3 integration test asserts `phase ∈ allowed_labels ∪ {"unknown"}` for every segment of every non-degraded run. |
+| #12 — rejection retries are observable in logs | §4.6 structured `event=vlm_attempt` JSONL on stderr; §5.3 integration test asserts these events appear for the `ok_after_2_retries` fixture scenario. |
+| #13 — `label_source = "vlm_robot_state_only"` on all segments | §3.2 segment merge sets this on the success path; §4.4 keeps it on the segment-level fallback path. Equivalent rule (parent's intent): for any non-degraded Phase 2 run, every segment had `VLMLabeler.label_segment` called on it. Degraded runs are out of scope per the section header above; they emit Phase 1 baseline (`label_source="signals_only"`) and are observed via `pipeline_status.degraded_from_phase=2`. The §5.3 integration test asserts the criterion conditional on non-degrade; the degrade integration test asserts the **negation** path explicitly (so the dual is also verified). |
 
 ## 7. Future work / explicitly out of scope
 
