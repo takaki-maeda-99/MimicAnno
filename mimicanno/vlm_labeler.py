@@ -201,7 +201,7 @@ class FixtureVLMLabeler:
         body = json.loads(self._fixture_path.read_text(encoding="utf-8"))
         init_raise = body.get("init_should_raise")
         if init_raise is not None:
-            if init_raise.startswith("RuntimeError"):
+            if init_raise.startswith("RuntimeError("):
                 raise RuntimeError(init_raise)
             raise Exception(init_raise)
         self._segments: dict[str, dict] = body.get("segments", {})
@@ -232,17 +232,29 @@ class FixtureVLMLabeler:
             m = _FIXT_RUNTIME_PATTERN.match(raise_each)
             if m:
                 reason = m.group("reason")
+                if reason not in RUNTIME_FAULT_REASONS:
+                    raise RuntimeError(
+                        f"fixture uses unknown runtime fault reason: {reason!r} "
+                        f"(allowed: {RUNTIME_FAULT_REASONS})"
+                    )
                 raise LabelerRuntimeError(reason)  # type: ignore[arg-type]
             m2 = re.match(r"^LabelerError\(([a-z_]+)\)$", raise_each)
             if m2:
-                raise LabelerError(m2.group(1))  # type: ignore[arg-type]
+                reject = m2.group(1)
+                if reject not in REJECT_REASONS:
+                    raise RuntimeError(
+                        f"fixture uses unknown reject reason: {reject!r} "
+                        f"(allowed: {REJECT_REASONS})"
+                    )
+                raise LabelerError(reject)  # type: ignore[arg-type]
             raise RuntimeError(f"unparseable _raise_each_attempt: {raise_each!r}")
 
         responses = scen.get("responses", [])
         idx = attempt - 1
         if idx >= len(responses):
             raise RuntimeError(
-                f"fixture exhausted: segment_id={request['segment_id']!r} attempt={attempt}"
+                f"fixture exhausted: fixture={self._fixture_path} "
+                f"segment_id={request['segment_id']!r} attempt={attempt}"
             )
         spec = responses[idx]
 
