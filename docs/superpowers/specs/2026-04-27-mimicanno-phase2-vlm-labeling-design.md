@@ -4,7 +4,7 @@ Status: **draft**, awaiting review (Codex).
 Author: brainstorming session 2026-04-27.
 Supersedes: nothing — new sub-plan.
 Parent spec: [`2026-04-25-mimicanno-design-brushup.md`](./2026-04-25-mimicanno-design-brushup.md) (§3 Phase 2 deliverable, §4.1 hashing, §4.3 manifest schema, §6.1–§6.4 SubtaskSegment / confidence, §8.1–§8.4 allowed-labels enforcement, §11 error handling, §12 package structure, §15.2 Phase 2 exit criteria).
-Sibling: [`2026-04-26-mimicanno-plan2-viewer-design.md`](./2026-04-26-mimicanno-plan2-viewer-design.md) (Plan 2 viewer; Phase 2 changes the artifacts it consumes via MINOR schema bumps only).
+Sibling: [`2026-04-26-mimicanno-plan2-viewer-design.md`](./2026-04-26-mimicanno-plan2-viewer-design.md) (Plan 2 viewer; Phase 2 changes are purely semantic — see §1.3 — and require no viewer-side version-handling work).
 
 ## 0. Scope and intent
 
@@ -105,7 +105,7 @@ runindex.py, scavenger.py, locks.py, io_parquet.py, io_video.py, errors.py
 | CLI flag `--vlm-max-retries` | absent | optional override (default 3) |
 | `manifest.generator.pipeline_phase` | `1` | `2` |
 | `manifest.model_versions.vlm` | `null` | `"<vlm_model>:<vlm_checkpoint>"` |
-| `manifest.pipeline_params.vlm` | absent | new sub-block (§2.4) |
+| `manifest.pipeline_params.vlm` | absent | new sub-block (on-disk shape: §2.6) |
 | `manifest.pipeline_status.degrade_reason` value space | `null` only | adds `vlm_init_failed` / `vlm_unreachable` / `vlm_runtime_failed` |
 | `annotation.segments[].phase` | `"unlabeled"` | allowed_labels member or `"unknown"` (degrade: still `"unlabeled"`) |
 | `annotation.segments[].label_source` | `"signals_only"` | `"vlm_robot_state_only"` (degrade: `"signals_only"`) |
@@ -306,7 +306,8 @@ class RunOutcome:
 ```python
 @dataclass(frozen=True)
 class VLMConfig:
-    model_id: str                                  # e.g. "google/gemma-4-...-it"
+    # User-supplied (set from CLI args / config file)
+    model_id: str                                  # e.g. "google/gemma-4-...-it" (may include "@<rev>")
     keyframes_per_segment: int = 4
     keyframe_strategy: Literal["uniform"] = "uniform"  # extension point; only "uniform" in Phase 2
     image_size_px: int = 224                       # long-edge resize before VLM
@@ -318,6 +319,10 @@ class VLMConfig:
     device: str = "cuda"                           # informational; LocalGemmaVLMLabeler honors it
     dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
 
+    # Pre-flight resolved (populated during CLI argument validation per §2.5;
+    # MUST be set before AnnotationConfig is hashed; SerDe-visible).
+    resolved_checkpoint: str | None = None         # canonical commit sha (or sha256 of fixture file)
+
 
 @dataclass(frozen=True)
 class AnnotationConfig:
@@ -325,7 +330,9 @@ class AnnotationConfig:
     vlm: VLMConfig | None = None                   # required when target_phase >= 2; null otherwise
 ```
 
-Hash inclusion: every `VLMConfig` field enters `config_hash` (via canonical-JSON serialization of `AnnotationConfig`). Changing `keyframes_per_segment` or `image_size_px` produces a distinct `run_hash` and therefore a distinct run directory — runs cannot silently mix VLM configurations.
+Hash inclusion: every `VLMConfig` field — including `resolved_checkpoint` — enters `config_hash` (via canonical-JSON serialization of `AnnotationConfig`). Changing `keyframes_per_segment` or `image_size_px` produces a distinct `run_hash` and therefore a distinct run directory — runs cannot silently mix VLM configurations. The `resolved_checkpoint` is populated **before** hashing per the pre-flight contract (§2.5); attempting to hash with `resolved_checkpoint=None` while `target_phase >= 2` is a producer bug.
+
+Note: `resolved_checkpoint` lives on `VLMConfig` for two reasons. (1) `config_hash` covers `AnnotationConfig` end-to-end, and `resolved_checkpoint` MUST be in the hash per parent §4.1's `(vlm_model+checkpoint)` rule. (2) Keeping it on the config (rather than in a side-channel structure) makes the data-flow auditable: every artifact written by the run sees the same `resolved_checkpoint`, and `model_versions.vlm` (§2.6) is the canonical projection `f"{model_id}:{resolved_checkpoint}"`.
 
 ### 2.5 Pre-flight model resolution and hashing lifecycle
 
@@ -341,11 +348,11 @@ mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> ...
   │        latest commit on the default revision; if "<id>@<rev>", resolve
   │        that revision. Network failure or 404 → Tier 1 abort with
   │        error_code="vlm_model_not_found".
-  │     3. Fix the resolved tuple as VLMConfig.{model_id, _resolved_checkpoint}.
-  │        _resolved_checkpoint is the canonical commit sha string.
+  │     3. Fix the resolved tuple as VLMConfig.{model_id, resolved_checkpoint}.
+  │        resolved_checkpoint is the canonical commit sha string.
   │
   ├─ AnnotationConfig assembled — VLMConfig.model_id and
-  │     VLMConfig._resolved_checkpoint both enter the canonical-JSON
+  │     VLMConfig.resolved_checkpoint both enter the canonical-JSON
   │     serialization that drives config_hash.
   │
   ├─ run_hash, canonical_name resolved.
@@ -353,36 +360,37 @@ mimicanno annotate --target-phase 2 --vlm-model <id_or_id@rev> ...
   └─ ... (rest of pipeline as in §1.1)
 ```
 
-**Hash-input contract:** the pair `(VLMConfig.model_id, VLMConfig._resolved_checkpoint)` is fed into `config_hash`. Both are user-determined-at-config-time (after pre-flight); neither depends on the actual model load succeeding. A `VLMLabeler.__init__` failure (CUDA OOM at weight load, transient device fault, etc.) does **not** change the already-computed hash — the run dir is keyed by the configuration the user requested, not by whether the model successfully loaded. This is what allows §4.3 run-level degrade to publish a hash-stable run dir even on init failure.
+**Hash-input contract:** the pair `(VLMConfig.model_id, VLMConfig.resolved_checkpoint)` is fed into `config_hash`. Both are user-determined-at-config-time (after pre-flight); neither depends on the actual model load succeeding. A `VLMLabeler.__init__` failure (CUDA OOM at weight load, transient device fault, etc.) does **not** change the already-computed hash — the run dir is keyed by the configuration the user requested, not by whether the model successfully loaded. This is what allows §4.3 run-level degrade to publish a hash-stable run dir even on init failure.
 
 **`model_identity()` consistency:** `LocalGemmaVLMLabeler.model_identity()` returns the same `(vlm_model, vlm_checkpoint)` that pre-flight wrote into `VLMConfig`. The constructor MUST NOT re-resolve to a possibly-different revision; it loads the pre-resolved sha. If HF API has changed the model between pre-flight and load (rare, but possible), the constructor either succeeds against the resolved sha or raises (which becomes Tier 2 `vlm_init_failed`).
 
-**`FixtureVLMLabeler` lifecycle:** pre-flight is skipped for fixture URIs (`fixture://<path>`). The fixture's declared `model_identity` (read from the JSON file) is used directly; `_resolved_checkpoint` becomes the sha256 of the fixture file content. Fixture file not found at pre-flight → Tier 1 abort with `error_code="vlm_model_not_found"`.
+**`FixtureVLMLabeler` lifecycle:** pre-flight is skipped for fixture URIs (`fixture://<path>`). The fixture's declared `model_identity` (read from the JSON file) is used directly; `resolved_checkpoint` becomes the sha256 of the fixture file content. Fixture file not found at pre-flight → Tier 1 abort with `error_code="vlm_model_not_found"`.
 
 ### 2.6 `manifest.pipeline_params.vlm` on-disk shape
 
-The `vlm` sub-block written into `manifest.json` is a JSON object containing exactly the user-visible `VLMConfig` fields (the leading-underscore `_resolved_checkpoint` is stored separately under `manifest.model_versions.vlm`, not in `pipeline_params.vlm`):
+The `vlm` sub-block written into `manifest.json` is a JSON object containing every `VLMConfig` field — including `resolved_checkpoint` so the on-disk form mirrors the dataclass exactly (one source of truth):
 
 ```jsonc
 "pipeline_params": {
   "boundary": { ... existing Phase 1 sub-block ... },
   "vlm": {
-    "model_id": "google/gemma-4-...-it",
-    "keyframes_per_segment": 4,
-    "keyframe_strategy": "uniform",
-    "image_size_px": 224,
-    "max_retries": 3,
-    "temperature": 0.0,
-    "max_output_tokens": 256,
-    "timeout_sec": 30.0,
-    "runtime_failure_threshold": 3,
     "device": "cuda",
-    "dtype": "bfloat16"
+    "dtype": "bfloat16",
+    "image_size_px": 224,
+    "keyframe_strategy": "uniform",
+    "keyframes_per_segment": 4,
+    "max_output_tokens": 256,
+    "max_retries": 3,
+    "model_id": "google/gemma-4-...-it",
+    "resolved_checkpoint": "abc123def456...",
+    "runtime_failure_threshold": 3,
+    "temperature": 0.0,
+    "timeout_sec": 30.0
   }
 }
 ```
 
-Field order is canonical-JSON sorted (lexicographic by key) at write time so byte-equivalent re-emission per parent §6.5 holds. The `model_versions.vlm` field carries the `<model_id>:<resolved_checkpoint_sha>` composition; the `pipeline_params.vlm` block carries the configuration knobs only.
+Field order is canonical-JSON sorted (lexicographic by key) at write time so byte-equivalent re-emission per parent §6.5 holds. `manifest.model_versions.vlm` is the canonical human-readable projection — `f"{model_id}:{resolved_checkpoint}"` — provided for parent-spec §4.3 alignment and for log/diff convenience; the authoritative copy of `resolved_checkpoint` for hashing and audit purposes is in `pipeline_params.vlm`.
 
 When `target_phase == 1`, `pipeline_params.vlm` is **absent** (not `null`) — preserving Phase 1 manifest byte-equivalence.
 
