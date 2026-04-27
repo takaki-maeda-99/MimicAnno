@@ -18,6 +18,7 @@ import { selectRun, type RunSelection } from "../lib/runSelection";
 import { fetchRetry } from "../lib/fetchRetry";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
+import WaveformView from "./WaveformView";
 
 type ArtifactSlot<T> =
   | { kind: "loading" }
@@ -219,18 +220,17 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
             onSeek={setCurrentTimeSec}
           />
         )}
-        <div>waveform placeholder</div>
-      </div>
-      {/* Transitional per-role status — Tasks 12 / 13 will inline these errors
-          next to the timeline (annotation/boundaries) and waveform (signals)
-          slots, so this block goes away. */}
-      <div>
-        {(["annotation", "boundaries", "signals"] as const).map((role) => {
-          const slot = state.data[role];
-          if (slot.kind === "loading") return <div key={role}>{role}: loading…</div>;
-          if (slot.kind === "error") return <div key={role} className="error">{slot.message}</div>;
-          return <div key={role}>{role}: ok</div>;
-        })}
+        {state.data.signals.kind === "error" && (
+          <div className="error">{state.data.signals.message}</div>
+        )}
+        {state.data.signals.kind === "ok" && (
+          <WaveformView
+            widthPx={widthPx}
+            durationSec={state.data.manifest.duration_sec}
+            currentTimeSec={currentTimeSec}
+            channels={state.data.signals.data.channels}
+          />
+        )}
       </div>
     </div>
   );
