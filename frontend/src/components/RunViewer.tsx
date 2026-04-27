@@ -9,7 +9,6 @@ import {
   type AnnotationResult,
   type BoundariesDoc,
   type IndexDoc,
-  type IndexEntry,
   type Manifest,
   type SchemaVersion,
   type SignalsDoc,
@@ -27,7 +26,6 @@ type ArtifactSlot<T> =
 
 type Loaded = {
   selection: RunSelection;
-  entry: IndexEntry;
   manifest: Manifest;
   manifestUrl: string;
   annotation: ArtifactSlot<AnnotationResult>;
@@ -105,7 +103,6 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         if (controller.signal.aborted) return;
         const initial: Loaded = {
           selection,
-          entry,
           manifest,
           manifestUrl,
           annotation: { kind: "loading" },

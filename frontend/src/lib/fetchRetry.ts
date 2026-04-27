@@ -2,7 +2,6 @@ const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = 100;
 
 export async function fetchRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  let lastStatus: number | null = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Network errors and AbortError propagate immediately — no retry.
     // This is intentional: 5xx and network failures indicate real bugs in
@@ -10,7 +9,6 @@ export async function fetchRetry(input: RequestInfo | URL, init?: RequestInit): 
     // caller has already moved on (URL change race in RunViewer).
     const r = await fetch(input, init);
     if (r.status === 404) {
-      lastStatus = 404;
       if (attempt < MAX_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS));
         continue;
@@ -22,5 +20,5 @@ export async function fetchRetry(input: RequestInfo | URL, init?: RequestInit): 
     }
     return r;
   }
-  throw new Error(`fetchRetry: exhausted (last=${lastStatus})`);
+  throw new Error("fetchRetry: unreachable");
 }
