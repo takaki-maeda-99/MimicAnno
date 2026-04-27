@@ -482,5 +482,65 @@ class LocalGemmaVLMLabeler:
         attempt: int,
         last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
-        # Body added in Task 12 (with exception classification).
-        raise NotImplementedError("LocalGemmaVLMLabeler.label_segment lands in Task 12")
+        from mimicanno.vlm_prompt import build_prompt
+
+        prompt = build_prompt(request, attempt=attempt,
+                              last_reject_reason=last_reject_reason)
+        try:
+            inputs = self._processor(
+                text=prompt, images=request["keyframes"], return_tensors="pt"
+            ).to(self._config.device)
+            with self._timeout_guard():
+                tokens = self._model.generate(
+                    **inputs,
+                    do_sample=False,
+                    temperature=self._config.temperature,
+                    max_new_tokens=self._config.max_output_tokens,
+                )
+            decoded = self._processor.batch_decode(
+                tokens, skip_special_tokens=True
+            )[0]
+        except Exception as e:
+            self._raise_classified(e)
+            raise  # unreachable; helps static analysis
+
+        if decoded.startswith(prompt):
+            decoded = decoded[len(prompt):]
+
+        return parse_and_validate(decoded.strip(),
+                                  set(request["allowed_labels"]))
+
+    def _timeout_guard(self):  # type: ignore[return]
+        import contextlib
+        import signal
+
+        @contextlib.contextmanager  # type: ignore[misc]
+        def _gm():  # type: ignore[return]
+            def _handler(signum, frame):  # type: ignore[no-untyped-def]
+                raise TimeoutError(
+                    f"inference exceeded {self._config.timeout_sec}s"
+                )
+            old = signal.signal(signal.SIGALRM, _handler)
+            signal.setitimer(signal.ITIMER_REAL, self._config.timeout_sec)
+            try:
+                yield
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, old)
+        return _gm()
+
+    def _raise_classified(self, e: Exception) -> None:
+        """Map low-level PyTorch / HF exceptions into LabelerRuntimeError(reason)."""
+        try:
+            import torch
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise LabelerRuntimeError("cuda_oom") from e
+        except ImportError:
+            pass
+        if isinstance(e, TimeoutError):
+            raise LabelerRuntimeError("inference_timeout") from e
+        if isinstance(e, ConnectionError) or "connection" in str(e).lower():
+            raise LabelerRuntimeError("model_unreachable") from e
+        if isinstance(e, RuntimeError) and "device" in str(e).lower():
+            raise LabelerRuntimeError("device_unavailable") from e
+        raise e
