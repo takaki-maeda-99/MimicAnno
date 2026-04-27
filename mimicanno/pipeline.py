@@ -98,7 +98,11 @@ def _make_labeler_factory(vlm_config: VLMConfig) -> LabelerFactory:
 
 
 def _emit_vlm_log(event: dict) -> None:
-    _sys.stderr.write(_json.dumps(event, ensure_ascii=False) + "\n")
+    enriched = {
+        "ts": dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z"),
+        **event,
+    }
+    _sys.stderr.write(_json.dumps(enriched, ensure_ascii=False) + "\n")
     _sys.stderr.flush()
 
 
@@ -159,7 +163,7 @@ def apply_phase2_labeling(
     n_fallback = sum(1 for a in attempts if a.final_status == "unknown_fallback")
     n_retried = sum(1 for a in attempts if a.attempt_count > 1)
     notes = (
-        f"vlm_labeler: {n_ok + n_fallback}/{len(segments)} segments labeled; "
+        f"vlm_labeler: {n_ok}/{len(segments)} segments labeled; "
         f"{n_retried} needed retry; {n_fallback} fell back to unknown."
     )
     return labeled, outcome, notes
@@ -222,6 +226,14 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 1) Resolve label set.
     labels_path = req.labels_path or Path(default_labels_path("manipulation"))
     label_set = load_label_set(labels_path)
+
+    # Phase 2 requires a VLMConfig; without it, refuse early.
+    if req.config.target_phase >= 2 and req.config.vlm is None:
+        raise MimicAnnoError(
+            "vlm.model_required",
+            "target_phase >= 2 requires a vlm_config; got None.",
+            {"target_phase": req.config.target_phase},
+        )
 
     # 2) Adapter selection + adapter-config sha for input_hash.
     adapter = _select_adapter(req.robot_adapter_name, req.robot_adapter_config_path)
@@ -436,8 +448,10 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     model_versions: dict = {"sam3": None, "vlm": None}
     if req.config.target_phase >= 2 and req.config.vlm is not None:
-        vlm_cp = req.config.vlm.resolved_checkpoint or "unresolved"
-        model_versions["vlm"] = f"{req.config.vlm.model_id}:{vlm_cp}"
+        assert req.config.vlm.resolved_checkpoint is not None, (
+            "pre-flight (§2.5) must populate vlm.resolved_checkpoint before annotate_episode"
+        )
+        model_versions["vlm"] = f"{req.config.vlm.model_id}:{req.config.vlm.resolved_checkpoint}"
 
     manifest = Manifest(
         schema_version=ARTIFACT_SCHEMA_VERSIONS["manifest"],
