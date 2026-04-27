@@ -7,6 +7,8 @@ later tasks.
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypedDict, get_args
 
@@ -117,3 +119,64 @@ class VLMLabeler(Protocol):
         last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity: ...
+
+
+# --- parse_and_validate (spec §3.4) -----------------------------------------
+
+EVIDENCE_DISPLAY_HINT_CHARS = 80
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
+
+
+def _strip_markdown_fences(text: str) -> str:
+    m = _FENCE_RE.match(text)
+    return m.group(1) if m else text
+
+
+def parse_and_validate(raw_text: str, user_allowed_labels: set[str]) -> VLMResponse:
+    """Validate a VLM response string against the spec §3.4 contract.
+
+    On any failure raises LabelerError(reject_reason=...). On success returns
+    a VLMResponse with optional fields coerced to None and evidence truncated
+    to EVIDENCE_DISPLAY_HINT_CHARS (soft cap).
+
+    `user_allowed_labels` MUST NOT include 'unknown' or 'unlabeled' (parent
+    §8.4 — labels YAML loader rejects these). Validator internally accepts
+    'unknown' as a valid VLM output; 'unlabeled' is always rejected.
+    """
+    text = _strip_markdown_fences(raw_text)
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise LabelerError("json_parse_error") from e
+    if not isinstance(obj, dict):
+        raise LabelerError("schema_violation")
+
+    if "phase" not in obj or not isinstance(obj["phase"], str):
+        raise LabelerError("schema_violation")
+    if "vlm_confidence" not in obj or not isinstance(obj["vlm_confidence"], (int, float)) \
+            or isinstance(obj["vlm_confidence"], bool):
+        raise LabelerError("schema_violation")
+    for field_name in ("verb", "object", "target", "evidence"):
+        if field_name in obj and obj[field_name] is not None and not isinstance(obj[field_name], str):
+            raise LabelerError("schema_violation")
+
+    if obj["phase"] not in user_allowed_labels | {"unknown"}:
+        raise LabelerError("invalid_label")
+
+    if not 0.0 <= float(obj["vlm_confidence"]) <= 1.0:
+        raise LabelerError("out_of_range_confidence")
+
+    evidence = obj.get("evidence")
+    if isinstance(evidence, str) and len(evidence) > EVIDENCE_DISPLAY_HINT_CHARS:
+        evidence = evidence[:EVIDENCE_DISPLAY_HINT_CHARS]
+
+    return VLMResponse(
+        phase=obj["phase"],
+        verb=obj.get("verb"),
+        object=obj.get("object"),
+        target=obj.get("target"),
+        vlm_confidence=float(obj["vlm_confidence"]),
+        evidence=evidence,
+    )
