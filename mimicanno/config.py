@@ -75,6 +75,68 @@ class BoundaryConfig:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ClipFeatureConfig:
+    """Thresholds used by clip_features.py (spec §2.4)."""
+    gripper_open_threshold: float = 0.5
+    dwell_speed_threshold_mps: float = 0.01
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "gripper_open_threshold": self.gripper_open_threshold,
+            "dwell_speed_threshold_mps": self.dwell_speed_threshold_mps,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class VLMConfig:
+    """Phase 2 VLM-pipeline configuration (spec §2.4).
+
+    `resolved_checkpoint` MUST be populated by pre-flight (§2.5) before this
+    config is fed into AnnotationConfig and hashed. It is `None` only during
+    construction-time defaults; at hash-time of a target_phase >= 2 run, a
+    None value is a producer bug.
+
+    `fixture_path` is a runtime-only locator used when `model_id == "fixture"`.
+    It is intentionally EXCLUDED from `to_dict()` and therefore from
+    `config_hash` — a fixture file at `/tmp/x.json` and `/home/u/x.json`
+    with the same content MUST produce the same run_hash (the content sha
+    is already in `resolved_checkpoint`).
+    """
+    model_id: str
+    keyframes_per_segment: int = 4
+    keyframe_strategy: str = "uniform"  # extension point; only "uniform" supported in Phase 2
+    image_size_px: int = 224
+    max_retries: int = 3
+    temperature: float = 0.0
+    max_output_tokens: int = 256
+    timeout_sec: float = 30.0
+    runtime_failure_threshold: int = 3
+    device: str = "cuda"
+    dtype: str = "bfloat16"
+    clip_features: ClipFeatureConfig = ClipFeatureConfig()
+    resolved_checkpoint: str | None = None
+    fixture_path: Path | None = None  # runtime-only; NOT in to_dict / config_hash
+
+    def to_dict(self) -> dict[str, Any]:
+        # NB: fixture_path is deliberately omitted (see class docstring).
+        return {
+            "clip_features": self.clip_features.to_dict(),
+            "device": self.device,
+            "dtype": self.dtype,
+            "image_size_px": self.image_size_px,
+            "keyframe_strategy": self.keyframe_strategy,
+            "keyframes_per_segment": self.keyframes_per_segment,
+            "max_output_tokens": self.max_output_tokens,
+            "max_retries": self.max_retries,
+            "model_id": self.model_id,
+            "resolved_checkpoint": self.resolved_checkpoint,
+            "runtime_failure_threshold": self.runtime_failure_threshold,
+            "temperature": self.temperature,
+            "timeout_sec": self.timeout_sec,
+        }
+
+
 def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
     """Load a BoundaryConfig YAML, layering supplied fields onto defaults.
 
@@ -197,10 +259,14 @@ class AnnotationConfig:
     boundary: BoundaryConfig
     target_phase: int
     model_config: ModelConfig
+    vlm: VLMConfig | None = None  # required iff target_phase >= 2
 
     def to_dict(self) -> dict[str, Any]:
+        ann_inner: dict[str, Any] = {"boundary": self.boundary.to_dict()}
+        if self.vlm is not None:
+            ann_inner["vlm"] = self.vlm.to_dict()
         return {
-            "annotation_config": {"boundary": self.boundary.to_dict()},
+            "annotation_config": ann_inner,
             "target_phase": self.target_phase,
             "model_config": self.model_config.to_dict(),
         }
