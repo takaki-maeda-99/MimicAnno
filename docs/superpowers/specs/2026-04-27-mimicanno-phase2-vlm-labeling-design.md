@@ -210,6 +210,8 @@ class VLMRequest(TypedDict):
     episode_duration_sec: float
     segment_index: int                 # 1-based
     segment_total: int
+    segment_id: str                    # SubtaskSegment.segment_id (e.g. "s_007"), needed by
+                                       # FixtureVLMLabeler for routing and by structured logs
     # Segment-level (per call)
     keyframes: list[np.ndarray]        # K_effective images, 1 ≤ len ≤ keyframes_per_segment;
                                        # RGB uint8, long edge resized to image_size_px
@@ -267,14 +269,22 @@ class LabelerRuntimeError(Exception):
 
 
 class VLMLabeler(Protocol):
-    def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse:
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse:
         """One VLM invocation. Returns a schema-valid VLMResponse or raises:
           - LabelerError(reject_reason)        — recoverable, retry-eligible (Tier 4 → Tier 3)
           - LabelerRuntimeError(reason)        — infra fault (counts toward Tier 2 threshold)
           - any other Exception                — implementation bug, propagated and aborts the run
 
-        `attempt` is the 1-based attempt counter; the implementation MAY use it
-        to apply stricter-prompt phrasing on retry (parent spec §8.2)."""
+        `attempt` is the 1-based attempt counter; on attempts > 1 the orchestrator
+        passes `last_reject_reason` (the reason of the most recent rejection in
+        this segment's loop) so the labeler can apply the stricter-prompt
+        amendment from §3.3. `last_reject_reason` is `None` when `attempt == 1`
+        or after a `LabelerRuntimeError` (which is not a rejection)."""
         ...
 
     def model_identity(self) -> ModelIdentity:

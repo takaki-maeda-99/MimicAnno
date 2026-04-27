@@ -210,6 +210,28 @@ def test_annotation_config_to_dict_omits_vlm_when_none() -> None:
     )
     d = cfg.to_dict()
     assert "vlm" not in d["annotation_config"]
+
+
+def test_vlm_config_fixture_path_excluded_from_to_dict_and_hash() -> None:
+    """fixture_path is runtime-only — same content at different paths must
+    produce identical config_hash."""
+    from pathlib import Path
+    boundary = BoundaryConfig.with_defaults()
+    model = ModelConfig(vlm_model="fixture", vlm_checkpoint="abc",
+                        sam3_model=None, sam3_checkpoint=None)
+
+    a = VLMConfig(model_id="fixture", resolved_checkpoint="abc",
+                  fixture_path=Path("/tmp/a.json"))
+    b = VLMConfig(model_id="fixture", resolved_checkpoint="abc",
+                  fixture_path=Path("/home/u/b.json"))
+    assert "fixture_path" not in a.to_dict()
+    assert a.to_dict() == b.to_dict()
+
+    cfg_a = AnnotationConfig(boundary=boundary, target_phase=2,
+                             model_config=model, vlm=a)
+    cfg_b = AnnotationConfig(boundary=boundary, target_phase=2,
+                             model_config=model, vlm=b)
+    assert compute_config_hash(cfg_a) == compute_config_hash(cfg_b)
 ```
 
 - [ ] **Step 3: Run test to verify it fails.**
@@ -247,6 +269,12 @@ class VLMConfig:
     config is fed into AnnotationConfig and hashed. It is `None` only during
     construction-time defaults; at hash-time of a target_phase >= 2 run, a
     None value is a producer bug.
+
+    `fixture_path` is a runtime-only locator used when `model_id == "fixture"`.
+    It is intentionally EXCLUDED from `to_dict()` and therefore from
+    `config_hash` — a fixture file at `/tmp/x.json` and `/home/u/x.json`
+    with the same content MUST produce the same run_hash (the content sha
+    is already in `resolved_checkpoint`).
     """
     model_id: str
     keyframes_per_segment: int = 4
@@ -261,8 +289,10 @@ class VLMConfig:
     dtype: str = "bfloat16"
     clip_features: ClipFeatureConfig = ClipFeatureConfig()
     resolved_checkpoint: str | None = None
+    fixture_path: Path | None = None  # runtime-only; NOT in to_dict / config_hash
 
     def to_dict(self) -> dict[str, Any]:
+        # NB: fixture_path is deliberately omitted (see class docstring).
         return {
             "clip_features": self.clip_features.to_dict(),
             "device": self.device,
@@ -279,6 +309,8 @@ class VLMConfig:
             "timeout_sec": self.timeout_sec,
         }
 ```
+
+(Add `from pathlib import Path` to the existing import group at the top of `mimicanno/config.py` if it isn't already imported.)
 
 Then extend `AnnotationConfig` (≈ line 196):
 
@@ -549,6 +581,7 @@ def test_resolve_fixture_uri(tmp_path: Path) -> None:
     r = resolve_vlm_model(f"fixture://{p}", offline=True)
     assert r.model_id == "fixture"
     assert r.resolved_checkpoint == expected_sha
+    assert r.fixture_path == p.resolve()
 
 
 def test_resolve_fixture_uri_missing_file_aborts(tmp_path: Path) -> None:
@@ -597,6 +630,7 @@ FIXTURE_URI_PREFIX = "fixture://"
 class PreflightResult:
     model_id: str
     resolved_checkpoint: str
+    fixture_path: Path | None = None  # populated only for fixture:// URIs
 
 
 def _hf_model_info(model_id: str, revision: Optional[str]) -> str:
@@ -619,14 +653,16 @@ def _split_model_at_revision(arg: str) -> tuple[str, Optional[str]]:
 
 
 def _resolve_fixture(path_str: str) -> PreflightResult:
-    p = Path(path_str)
+    p = Path(path_str).resolve()
     if not p.is_file():
         raise VLMModelNotFound(
             model_id="fixture",
             reason=f"fixture file does not exist: {p}",
         )
     sha = hashlib.sha256(p.read_bytes()).hexdigest()
-    return PreflightResult(model_id="fixture", resolved_checkpoint=sha)
+    return PreflightResult(
+        model_id="fixture", resolved_checkpoint=sha, fixture_path=p,
+    )
 
 
 def resolve_vlm_model(arg: str, *, offline: bool) -> PreflightResult:
@@ -683,17 +719,21 @@ git commit -m "feat(preflight): VLM model resolution with fixture/sha/HF/offline
 
 ---
 
-## Task 4: ClipFeatureExtractor (`mimicanno/clip_features.py`)
+## Task 4: ClipFeatureExtractor (`mimicanno/clip_features.py`) + frame extraction
 
 **Spec refs:** §2.7, §3.1.
 
 **Files:**
+- Modify: `mimicanno/io_video.py` (add `extract_frames_at_indices`)
 - Create: `mimicanno/clip_features.py`
 - Create: `tests/unit/test_clip_features.py`
+- Modify: `tests/unit/test_io_video.py` (add frame-extraction tests)
 
-This module is **pure** (no I/O beyond what the existing video / signals modules already provide). It owns:
-1. Keyframe selection (uniform K, K_effective branching).
-2. The 5-scalar `RobotStateSummary` computation per spec §3.1.
+The module owns three responsibilities, in roughly this layering:
+1. **Frame extraction primitive** in `io_video.py` — `extract_frames_at_indices(video_path, indices) -> list[np.ndarray]` — uses `imageio_ffmpeg` (existing dep). Lives in `io_video.py` because it's I/O.
+2. **Keyframe selection** (uniform K, K_effective branching) — pure function in `clip_features.py`.
+3. **Robot-state summary** — pure function in `clip_features.py`.
+4. **`ClipFeatureExtractor.extract(segment, video_path, signals)`** — class in `clip_features.py` that composes (1)+(2)+(3) and returns a `ClipFeatures` dataclass. The orchestrator (Task 9) calls this method per segment.
 
 - [ ] **Step 1: Write failing tests for keyframe offsets.**
 
@@ -923,11 +963,244 @@ env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH \
 
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 4.5: Expose a `synthesize_minimal_mp4` helper in `tests/fixtures/synthesize.py`.**
+
+The existing module has `synthesize_aloha_episode` (full episode + parquet) and a private `_write_mp4`. We expose a thin public wrapper for tests that only need a video:
+
+```python
+def synthesize_minimal_mp4(
+    out_dir: Path, n_frames: int, *, width: int = 64, height: int = 48,
+    fps: float = 30.0,
+) -> Path:
+    """Render an n_frames mp4 using the same _write_mp4 helper used by the
+    full-episode synthesizer. Returns the file path."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "minimal.mp4"
+    return _write_mp4(path, n_frames=n_frames, fps=fps,
+                      width=width, height=height)
+```
+
+Note: the existing `_write_mp4` may need a small extension to accept `width` / `height` kwargs (currently hardcoded). Check its signature first; extend if needed (no contract change for existing callers since they don't pass these kwargs).
+
+- [ ] **Step 5: Add frame extraction to `mimicanno/io_video.py`.**
+
+```python
+# Append to mimicanno/io_video.py
+
+import subprocess as _subprocess
+import numpy as _np
+
+
+def extract_frames_at_indices(
+    video_path: Path,
+    frame_indices: list[int],
+    *,
+    long_edge_px: int | None = None,
+) -> list[_np.ndarray]:
+    """Extract a set of frames from a video by frame index.
+
+    Uses ffmpeg's `select=eq(n,<index>)` filter. Returns RGB uint8 arrays
+    in the same order as `frame_indices`. If `long_edge_px` is set, frames
+    are letterbox-resized so the long edge equals `long_edge_px` (preserving
+    aspect ratio).
+
+    This implementation is purposely simple — it issues one ffmpeg call per
+    frame index for clarity. K=4 per segment × N=8 segments = 32 ffmpeg calls
+    per Phase 2 run, which is well within the §13 performance budget.
+    """
+    if not frame_indices:
+        return []
+    out: list[_np.ndarray] = []
+    ffmpeg = get_ffmpeg_exe()
+    for idx in frame_indices:
+        # Use the `-vf "select=eq(n\\,IDX),scale=..."` form. We pipe rawvideo
+        # rgb24 frames to stdout and wrap with a known size. The simplest
+        # safe path: probe the video first to get width/height, then run
+        # ffmpeg with the selected frame piped as rgb24, read with numpy.
+        probe = probe_video(video_path)
+        w, h = probe.width, probe.height
+        if long_edge_px is not None:
+            scale = (
+                f",scale=if(gt(iw\\,ih)\\,{long_edge_px}\\,-2):"
+                f"if(gt(iw\\,ih)\\,-2\\,{long_edge_px})"
+            )
+            # Compute the output W/H ahead of time — for letterbox we use
+            # ffmpeg's automatic aspect-preserving scale.
+        else:
+            scale = ""
+        cmd = [
+            ffmpeg, "-loglevel", "error", "-nostdin", "-y",
+            "-i", str(video_path),
+            "-vf", f"select=eq(n\\,{idx}){scale}",
+            "-vframes", "1",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-",
+        ]
+        proc = _subprocess.run(cmd, capture_output=True, check=True)
+        # Decode based on output dimensions. With scale, we don't know W/H
+        # exactly without re-probing the resulting frame. Simpler: when
+        # long_edge_px is set, compute target dims from input aspect ratio.
+        if long_edge_px is None:
+            arr = _np.frombuffer(proc.stdout, dtype=_np.uint8)
+            arr = arr.reshape(h, w, 3)
+        else:
+            if w >= h:
+                tw = long_edge_px
+                th = int(round(h * (long_edge_px / w)))
+                if th % 2:  # ffmpeg scale pads odd dims; align to be safe
+                    th -= 1
+            else:
+                th = long_edge_px
+                tw = int(round(w * (long_edge_px / h)))
+                if tw % 2:
+                    tw -= 1
+            arr = _np.frombuffer(proc.stdout, dtype=_np.uint8)
+            arr = arr.reshape(th, tw, 3)
+        out.append(arr.copy())
+    return out
+```
+
+Add `tests/unit/test_io_video.py` additions:
+
+```python
+def test_extract_frames_at_indices_returns_correct_count(tmp_path: Path) -> None:
+    """Smoke: synthesize a 30-frame video, request frames [0, 10, 29]."""
+    from mimicanno.io_video import extract_frames_at_indices
+    # Use the existing tests/fixtures/synthesize.py helper to make a tiny mp4.
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+    video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
+    frames = extract_frames_at_indices(video, [0, 10, 29])
+    assert len(frames) == 3
+    assert all(f.shape == (48, 64, 3) for f in frames)
+    assert all(f.dtype == np.uint8 for f in frames)
+
+
+def test_extract_frames_with_long_edge_resize(tmp_path: Path) -> None:
+    from mimicanno.io_video import extract_frames_at_indices
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+    video = synthesize_minimal_mp4(tmp_path, n_frames=10, width=128, height=96)
+    frames = extract_frames_at_indices(video, [0, 5], long_edge_px=64)
+    assert len(frames) == 2
+    # Long edge 128 → resized to 64; short edge 96 → 48.
+    for f in frames:
+        assert max(f.shape[:2]) == 64
+```
+
+Run:
+```
+env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH \
+  .venv/bin/pytest tests/unit/test_io_video.py -k extract_frames -v
+```
+
+Expected: 2 passed.
+
+- [ ] **Step 6: Add `ClipFeatureExtractor` class to `mimicanno/clip_features.py` that composes everything.**
+
+```python
+# Append to mimicanno/clip_features.py
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from mimicanno.io_video import extract_frames_at_indices
+from mimicanno.schema import SubtaskSegment
+
+
+@dataclass(slots=True)
+class ClipFeatures:
+    keyframes: list[np.ndarray]
+    keyframe_offsets_sec: list[float]
+    robot_state_summary: RobotStateSummary
+
+
+class ClipFeatureExtractor:
+    """Composes keyframe extraction + scalar summary for one segment.
+
+    Stateless — each call to `.extract()` is independent. The caller
+    (orchestrator §2.3) constructs one extractor per run."""
+
+    def __init__(
+        self, video_path: Path, fps: float,
+        clip_features_config: ClipFeatureConfig, image_size_px: int,
+    ) -> None:
+        self._video_path = video_path
+        self._fps = fps
+        self._cfg = clip_features_config
+        self._image_size_px = image_size_px
+
+    def extract(
+        self, segment: SubtaskSegment,
+        gripper: np.ndarray, eef_velocity: Optional[np.ndarray],
+        keyframes_per_segment: int,
+    ) -> ClipFeatures:
+        offsets_frames = compute_keyframe_offsets(
+            segment.start_frame, segment.end_frame, keyframes_per_segment,
+        )
+        frames = extract_frames_at_indices(
+            self._video_path, offsets_frames, long_edge_px=self._image_size_px,
+        )
+        offsets_sec = [(f - segment.start_frame) / self._fps for f in offsets_frames]
+        summary = compute_robot_state_summary(
+            start_frame=segment.start_frame, end_frame=segment.end_frame,
+            fps=self._fps, gripper=gripper, eef_velocity=eef_velocity,
+            cfg=self._cfg,
+        )
+        return ClipFeatures(
+            keyframes=frames,
+            keyframe_offsets_sec=offsets_sec,
+            robot_state_summary=summary,
+        )
+```
+
+Add corresponding test (in `tests/unit/test_clip_features.py`):
+
+```python
+def test_clip_feature_extractor_composes(tmp_path: Path) -> None:
+    """ClipFeatureExtractor.extract() returns frames + summary."""
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+    from mimicanno.clip_features import ClipFeatureExtractor
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+    video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
+    seg = SubtaskSegment(
+        segment_id="s_000", episode_id="ep", start_frame=0, end_frame=29,
+        start_time=0.0, end_time=1.0, phase="unlabeled",
+        verb=None, object=None, target=None, failure_flags=[],
+        label_source="signals_only", object_state_unavailable=True,
+        object_track_ids=[], label_version="manipulation.v1",
+        start_boundary=BoundaryRef(None, 0.0, ["episode_start"], 1.0),
+        end_boundary=BoundaryRef(None, 1.0, ["episode_end"], 1.0),
+        boundary_confidence=1.0, vlm_confidence=None,
+        overall_confidence=1.0, evidence=None, reviewed=False, reviewer_id=None,
+    )
+    extractor = ClipFeatureExtractor(
+        video_path=video, fps=30.0,
+        clip_features_config=ClipFeatureConfig(),
+        image_size_px=64,
+    )
+    feat = extractor.extract(
+        segment=seg,
+        gripper=np.zeros(30, dtype=np.float64),
+        eef_velocity=None,
+        keyframes_per_segment=4,
+    )
+    assert len(feat.keyframes) == 4
+    assert feat.keyframe_offsets_sec[0] == pytest.approx(0.0)
+    assert feat.robot_state_summary["mean_eef_speed_mps"] is None
+```
+
+Run:
+```
+env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH \
+  .venv/bin/pytest tests/unit/test_clip_features.py -v
+```
+
+Expected: 8 passed (7 from earlier steps + new ClipFeatureExtractor test).
+
+- [ ] **Step 7: Commit.**
 
 ```bash
-git add mimicanno/clip_features.py tests/unit/test_clip_features.py
-git commit -m "feat(clip_features): keyframe offsets + 5-scalar robot-state summary (Phase 2 §3.1)"
+git add mimicanno/clip_features.py mimicanno/io_video.py tests/unit/test_clip_features.py tests/unit/test_io_video.py
+git commit -m "feat(clip_features): keyframe offsets + 5-scalar summary + ClipFeatureExtractor (§3.1, §2.7)"
 ```
 
 ---
@@ -1121,8 +1394,9 @@ class VLMRequest(TypedDict):
     robot_type: str
     fps: float
     episode_duration_sec: float
-    segment_index: int
+    segment_index: int          # 1-based ordinal in the episode
     segment_total: int
+    segment_id: str             # SubtaskSegment.segment_id (e.g. "s_007"); spec §2.1
     keyframes: list[np.ndarray]
     keyframe_offsets_sec: list[float]
     robot_state_summary: dict   # see clip_features.RobotStateSummary
@@ -1153,7 +1427,12 @@ class RunOutcome:
 # --- Protocol ---------------------------------------------------------------
 
 class VLMLabeler(Protocol):
-    def label_segment(self, request: VLMRequest, attempt: int) -> VLMResponse: ...
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse: ...
     def model_identity(self) -> ModelIdentity: ...
 ```
 
@@ -1793,36 +2072,37 @@ def _req(segment_index: int = 1) -> VLMRequest:
 def test_ok_first_try() -> None:
     lab = FixtureVLMLabeler(FIXT / "ok_first_try.json")
     req = _req()
-    r = lab.label_segment(req, attempt=1, segment_id="s_000")
+    req["segment_id"] = "s_000"
+    r = lab.label_segment(req, attempt=1)
     assert r["phase"] == "approach_object"
 
 
 def test_retry_then_ok_first_attempt_raises_then_succeeds() -> None:
     lab = FixtureVLMLabeler(FIXT / "retry_then_ok.json")
-    req = _req()
+    req = _req(); req["segment_id"] = "s_001"
     with pytest.raises(LabelerError) as ei:
-        lab.label_segment(req, attempt=1, segment_id="s_001")
+        lab.label_segment(req, attempt=1)
     assert ei.value.reject_reason == "json_parse_error"
     with pytest.raises(LabelerError) as ei:
-        lab.label_segment(req, attempt=2, segment_id="s_001")
+        lab.label_segment(req, attempt=2, last_reject_reason="json_parse_error")
     assert ei.value.reject_reason == "invalid_label"
-    r = lab.label_segment(req, attempt=3, segment_id="s_001")
+    r = lab.label_segment(req, attempt=3, last_reject_reason="invalid_label")
     assert r["phase"] == "grasp_object"
 
 
 def test_fallback_unknown_three_attempts_all_raise() -> None:
     lab = FixtureVLMLabeler(FIXT / "fallback_unknown.json")
-    req = _req()
+    req = _req(); req["segment_id"] = "s_002"
     for attempt in (1, 2, 3):
         with pytest.raises(LabelerError):
-            lab.label_segment(req, attempt=attempt, segment_id="s_002")
+            lab.label_segment(req, attempt=attempt)
 
 
 def test_runtime_oom_raises_labeler_runtime_error() -> None:
     lab = FixtureVLMLabeler(FIXT / "runtime_oom.json")
-    req = _req()
+    req = _req(); req["segment_id"] = "s_007"
     with pytest.raises(LabelerRuntimeError) as ei:
-        lab.label_segment(req, attempt=1, segment_id="s_007")
+        lab.label_segment(req, attempt=1)
     assert ei.value.reason == "cuda_oom"
 
 
@@ -1843,7 +2123,8 @@ def test_model_identity_uses_file_sha256() -> None:
 def test_wildcard_segment_match() -> None:
     """Star-key '*' applies to any segment_id not explicitly listed."""
     lab = FixtureVLMLabeler(FIXT / "ok_first_try.json")
-    r = lab.label_segment(_req(), attempt=1, segment_id="any_segment_id_at_all")
+    req = _req(); req["segment_id"] = "any_segment_id_at_all"
+    r = lab.label_segment(req, attempt=1)
     assert r["phase"] == "approach_object"
 ```
 
@@ -1888,8 +2169,6 @@ class FixtureVLMLabeler:
                 else Exception(init_raise)
         self._segments: dict[str, dict] = body.get("segments", {})
         self._sha256 = hashlib.sha256(self._fixture_path.read_bytes()).hexdigest()
-        # Per-segment, per-attempt cursor state when scenario uses _emit_raw lists.
-        self._cursors: dict[str, int] = {}
 
     def model_identity(self) -> ModelIdentity:
         return ModelIdentity(vlm_model="fixture", vlm_checkpoint=self._sha256)
@@ -1902,9 +2181,15 @@ class FixtureVLMLabeler:
         raise KeyError(f"fixture has no scenario for segment_id={segment_id!r} and no '*' wildcard")
 
     def label_segment(
-        self, request: VLMRequest, attempt: int, segment_id: str
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
-        scen = self._route(segment_id)
+        # FixtureVLMLabeler routes via request["segment_id"] (spec §2.1).
+        # last_reject_reason is accepted but unused in fixture mode — the
+        # fixture file dictates each attempt's response.
+        scen = self._route(request["segment_id"])
 
         # runtime_error scenario: raise classified runtime fault on every call.
         raise_each = scen.get("_raise_each_attempt")
@@ -1990,9 +2275,7 @@ from mimicanno.vlm_labeler import (
     LabelAttempt,
     label_run,
 )
-from tests.unit.helpers_phase1 import (   # NEW thin helper, see Step 3
-    make_synthetic_segments_aloha,
-)
+from tests.unit.helpers_phase1 import make_synthetic_phase1_run
 
 FIXT = Path(__file__).resolve().parents[1] / "fixtures" / "vlm"
 
@@ -2005,16 +2288,14 @@ def _vlm_config(model_id: str = "fixture") -> VLMConfig:
 
 
 def test_happy_path_all_segments_labeled() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=4)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=4)
     cfg = _vlm_config()
-
     factory = lambda c: FixtureVLMLabeler(FIXT / "ok_first_try.json")
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals,
-        video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor,
+        gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
-
     assert outcome.kind == "ok"
     assert outcome.degrade_reason is None
     assert all(s.phase == "approach_object" for s in labeled)
@@ -2024,16 +2305,15 @@ def test_happy_path_all_segments_labeled() -> None:
 
 
 def test_retry_then_success() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=2)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=2)
     # Force the second segment to be s_001 so it matches the fixture's
     # explicit per-segment scenario.
     segs[1].segment_id = "s_001"
     cfg = _vlm_config()
     factory = lambda c: FixtureVLMLabeler(FIXT / "retry_then_ok.json")
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals,
-        video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
     assert outcome.kind == "ok"
     a1 = next(a for a in attempts if a.segment_id == "s_001")
@@ -2043,14 +2323,13 @@ def test_retry_then_success() -> None:
 
 
 def test_segment_level_fallback_to_unknown() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=3)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=3)
     segs[1].segment_id = "s_002"
     cfg = _vlm_config()
     factory = lambda c: FixtureVLMLabeler(FIXT / "fallback_unknown.json")
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals,
-        video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
     assert outcome.kind == "ok", "segment fallback must NOT trigger run-level degrade"
     a = next(a for a in attempts if a.segment_id == "s_002")
@@ -2066,14 +2345,13 @@ def test_segment_level_fallback_to_unknown() -> None:
 
 def test_baseline_isolation_phase_does_not_leak_back() -> None:
     """Mutations on the working copy MUST NOT alter the caller's segments."""
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=2)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=2)
     snapshot = copy.deepcopy(segs)
     cfg = _vlm_config()
     factory = lambda c: FixtureVLMLabeler(FIXT / "ok_first_try.json")
     label_run(
-        segments=segs, signals=signals,
-        video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
     for before, after in zip(snapshot, segs):
         assert before.phase == after.phase
@@ -2098,18 +2376,68 @@ import numpy as np
 from mimicanno.schema import BoundaryRef, SubtaskSegment
 
 
-def make_synthetic_segments_aloha(
+_DEFAULT_ALLOWED_LABELS = [
+    "idle", "approach_object", "align_gripper", "grasp_object",
+    "lift_object", "move_to_target", "align_to_target",
+    "place_object", "release_object", "retreat",
+]
+
+
+class StubClipFeatureExtractor:
+    """Test-only ClipFeatureExtractor that returns 4x4 zero-RGB keyframes
+    instead of reading a real video. Computed scalars are real (uses the
+    production compute_robot_state_summary)."""
+
+    def __init__(self, fps: float, cfg: ClipFeatureConfig) -> None:
+        self._fps = fps
+        self._cfg = cfg
+
+    def extract(
+        self, *, segment, gripper, eef_velocity, keyframes_per_segment,
+    ):
+        from mimicanno.clip_features import (
+            ClipFeatures, compute_keyframe_offsets, compute_robot_state_summary,
+        )
+        offsets = compute_keyframe_offsets(
+            segment.start_frame, segment.end_frame, keyframes_per_segment,
+        )
+        offsets_sec = [(o - segment.start_frame) / self._fps for o in offsets]
+        frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in offsets]
+        summary = compute_robot_state_summary(
+            start_frame=segment.start_frame, end_frame=segment.end_frame,
+            fps=self._fps, gripper=gripper, eef_velocity=eef_velocity, cfg=self._cfg,
+        )
+        return ClipFeatures(
+            keyframes=frames, keyframe_offsets_sec=offsets_sec,
+            robot_state_summary=summary,
+        )
+
+
+def make_synthetic_phase1_run(
     n_segments: int = 4, fps: float = 30.0, frames_per_seg: int = 30,
-) -> Tuple[list[SubtaskSegment], dict, Path, Path]:
-    """Produce n_segments unlabeled SubtaskSegments + a small SignalsBundle-like
-    dict + dummy video/parquet paths. Phase 2 tests can use this without
-    running boundary detection."""
+    *, allowed_labels: list[str] | None = None,
+    task_text: str = "pick the red block and place in white bin",
+    robot_type: str = "aloha", label_version: str = "manipulation.v1",
+):
+    """Produce n_segments unlabeled SubtaskSegments + the signal arrays + a
+    StubClipFeatureExtractor + episode_meta dict — everything needed to
+    invoke `label_run(...)` without spinning up a real video / pipeline.
+
+    Returns (segments, gripper, eef_velocity, extractor, episode_meta)."""
+    from mimicanno.config import ClipFeatureConfig
+
     total_frames = n_segments * frames_per_seg
+    duration = total_frames / fps
     gripper = np.tile(np.linspace(0.0, 1.0, frames_per_seg), n_segments).astype(np.float64)
-    signals = {
-        "gripper": gripper,
-        "eef_velocity": np.zeros((total_frames, 3), dtype=np.float64),
+    eef_velocity = np.zeros((total_frames, 3), dtype=np.float64)
+    extractor = StubClipFeatureExtractor(fps=fps, cfg=ClipFeatureConfig())
+    episode_meta = {
+        "task_text": task_text,
+        "allowed_labels": allowed_labels or list(_DEFAULT_ALLOWED_LABELS),
+        "label_version": label_version,
+        "robot_type": robot_type,
         "fps": fps,
+        "episode_duration_sec": duration,
     }
     segments: list[SubtaskSegment] = []
     for i in range(n_segments):
@@ -2133,7 +2461,7 @@ def make_synthetic_segments_aloha(
             vlm_confidence=None, overall_confidence=1.0,
             evidence=None, reviewed=False, reviewer_id=None,
         ))
-    return segments, signals, Path("/tmp/_unused.mp4"), Path("/tmp/_unused.parquet")
+    return segments, gripper, eef_velocity, extractor, episode_meta
 ```
 
 - [ ] **Step 3: Run failing tests.**
@@ -2166,36 +2494,37 @@ LabelerFactory = Callable[[VLMConfig], "VLMLabeler"]
 
 
 def _build_request(
-    segment: SubtaskSegment, segment_index: int, segment_total: int,
-    signals: dict, video_path: Path, config: VLMConfig,
+    segment: SubtaskSegment,
+    segment_index: int,
+    segment_total: int,
+    *,
+    extractor: "ClipFeatureExtractor",
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    keyframes_per_segment: int,
+    episode_meta: dict,
 ) -> VLMRequest:
-    """Build a VLMRequest by extracting K_effective keyframes and computing
-    the robot-state summary. Keyframe extraction itself happens in the
-    pipeline (Task 13) — for orchestrator unit tests we attach an empty
-    keyframes list when called via this helper without real video."""
-    offs = compute_keyframe_offsets(
-        segment.start_frame, segment.end_frame, config.keyframes_per_segment,
+    """Compose a VLMRequest from a SubtaskSegment and the run-level metadata.
+
+    Keyframe + scalar extraction is delegated to ClipFeatureExtractor (Task 4);
+    this function only reshapes the ClipFeatures into the VLMRequest TypedDict
+    and attaches episode-level fields from `episode_meta`."""
+    feat = extractor.extract(
+        segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+        keyframes_per_segment=keyframes_per_segment,
     )
-    fps = signals.get("fps", 30.0)
-    summary = compute_robot_state_summary(
-        start_frame=segment.start_frame, end_frame=segment.end_frame, fps=fps,
-        gripper=signals["gripper"],
-        eef_velocity=signals.get("eef_velocity"),
-        cfg=config.clip_features,
-    )
-    keyframes_offsets_sec = [(o - segment.start_frame) / fps for o in offs]
-    keyframes = signals.get("_keyframes_for_segment", lambda _seg, _offs: [])(segment, offs)
     return VLMRequest(
-        task_text=signals.get("task_text", ""),
-        allowed_labels=list(signals.get("allowed_labels", [])),
-        label_version=signals.get("label_version", "manipulation.v1"),
-        robot_type=signals.get("robot_type", "aloha"),
-        fps=fps,
-        episode_duration_sec=signals.get("episode_duration_sec", 0.0),
+        task_text=episode_meta["task_text"],
+        allowed_labels=list(episode_meta["allowed_labels"]),
+        label_version=episode_meta.get("label_version", "manipulation.v1"),
+        robot_type=episode_meta.get("robot_type", "aloha"),
+        fps=episode_meta["fps"],
+        episode_duration_sec=episode_meta["episode_duration_sec"],
         segment_index=segment_index, segment_total=segment_total,
-        keyframes=keyframes,
-        keyframe_offsets_sec=keyframes_offsets_sec,
-        robot_state_summary=summary,  # type: ignore[typeddict-item]
+        segment_id=segment.segment_id,
+        keyframes=feat.keyframes,
+        keyframe_offsets_sec=feat.keyframe_offsets_sec,
+        robot_state_summary=feat.robot_state_summary,  # type: ignore[typeddict-item]
     )
 
 
@@ -2224,9 +2553,10 @@ def _merge_response(
 def label_run(
     *,
     segments: list[SubtaskSegment],
-    signals: dict,
-    video_path: Path,
-    parquet_path: Path,
+    extractor: "ClipFeatureExtractor",
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    episode_meta: dict,
     config: VLMConfig,
     labeler_factory: LabelerFactory,
 ) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome]:
@@ -2234,7 +2564,12 @@ def label_run(
 
     Constructor failures, vlm_unreachable on first call, and
     runtime_failure_threshold escalation all return the Phase 1 baseline
-    with a degraded RunOutcome; partial labels never leak."""
+    with a degraded RunOutcome; partial labels never leak.
+
+    `episode_meta` is a flat dict carrying the episode-level fields that
+    populate VLMRequest: task_text, allowed_labels, label_version, robot_type,
+    fps, episode_duration_sec. The pipeline (Task 13) constructs it; tests
+    can build it directly via helpers_phase1.make_synthetic_phase1_run."""
     baseline = copy.deepcopy(segments)
     working = copy.deepcopy(segments)
     attempts: list[LabelAttempt] = []
@@ -2255,15 +2590,21 @@ def label_run(
             segment_id=seg.segment_id, attempt_count=0, final_status="ok",
         )
         attempts.append(attempt_log)
-        request = _build_request(seg, segment_index=idx + 1, segment_total=n,
-                                  signals=signals, video_path=video_path, config=config)
+        request = _build_request(
+            seg, segment_index=idx + 1, segment_total=n,
+            extractor=extractor, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=config.keyframes_per_segment,
+            episode_meta=episode_meta,
+        )
         last_reject: RejectReason | None = None
         success = False
         for attempt in range(1, config.max_retries + 1):
             attempt_log.attempt_count = attempt
             try:
-                resp = labeler.label_segment(request, attempt=attempt,
-                                             segment_id=seg.segment_id)  # type: ignore[call-arg]
+                resp = labeler.label_segment(
+                    request, attempt=attempt,
+                    last_reject_reason=last_reject,
+                )
                 consecutive_runtime_failures = 0
                 _merge_response(seg, resp, fallback=False)
                 attempt_log.final_status = "ok"
@@ -2353,7 +2694,7 @@ from mimicanno.vlm_labeler import (
     label_run,
     ModelIdentity,
 )
-from tests.unit.helpers_phase1 import make_synthetic_segments_aloha
+from tests.unit.helpers_phase1 import make_synthetic_phase1_run
 
 
 FIXT = Path(__file__).resolve().parents[1] / "fixtures" / "vlm"
@@ -2367,13 +2708,13 @@ def _vlm_config(rt_thresh: int = 3) -> VLMConfig:
 # ---- vlm_init_failed ------------------------------------------------------
 
 def test_init_should_raise_returns_baseline_and_degrade() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=3)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=3)
     snapshot = copy.deepcopy(segs)
     cfg = _vlm_config()
     factory = lambda c: FixtureVLMLabeler(FIXT / "init_should_raise.json")
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals, video_path=video,
-        parquet_path=parquet, config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
     assert outcome.kind == "degraded"
     assert outcome.degrade_reason == "vlm_init_failed"
@@ -2396,12 +2737,12 @@ class _FirstCallUnreachable:
 
 
 def test_first_call_unreachable_short_circuits() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=5)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=5)
     snapshot = copy.deepcopy(segs)
     cfg = _vlm_config()
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals, video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=lambda c: _FirstCallUnreachable(),
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=lambda c: _FirstCallUnreachable(),
     )
     assert outcome.degrade_reason == "vlm_unreachable"
     # Only segment 0 was attempted, and the very first call escalated.
@@ -2415,13 +2756,13 @@ def test_first_call_unreachable_short_circuits() -> None:
 # ---- vlm_runtime_failed (consecutive threshold) --------------------------
 
 def test_consecutive_runtime_failures_trigger_degrade() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=5)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=5)
     snapshot = copy.deepcopy(segs)
     cfg = _vlm_config(rt_thresh=3)
     factory = lambda c: FixtureVLMLabeler(FIXT / "runtime_oom.json")
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals, video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=factory,
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=factory,
     )
     assert outcome.degrade_reason == "vlm_runtime_failed"
     # Baseline preserved on every segment.
@@ -2449,11 +2790,11 @@ def test_runtime_failures_reset_on_success() -> None:
         def model_identity(self):
             return ModelIdentity(vlm_model="x", vlm_checkpoint="y")
 
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=3)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=3)
     cfg = _vlm_config(rt_thresh=3)
     labeled, attempts, outcome = label_run(
-        segments=segs, signals=signals, video_path=video, parquet_path=parquet,
-        config=cfg, labeler_factory=lambda c: _FlakyThenOK(),
+        segments=segs, extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=cfg, labeler_factory=lambda c: _FlakyThenOK(),
     )
     assert outcome.kind == "ok", "non-consecutive faults must NOT degrade"
     assert all(s.phase == "idle" for s in labeled)
@@ -2655,11 +2996,11 @@ def test_label_segment_classifies_cuda_oom(load_mock: MagicMock) -> None:
     model.generate.side_effect = torch.cuda.OutOfMemoryError("CUDA OOM")
     cfg = _cfg()
     lab = LocalGemmaVLMLabeler(cfg)
-    request = _minimal_request()  # NEW helper, defined in this test file
+    request = _minimal_request(segment_id="s_000")
 
     from mimicanno.vlm_labeler import LabelerRuntimeError
     with pytest.raises(LabelerRuntimeError) as ei:
-        lab.label_segment(request, attempt=1, segment_id="s_000")
+        lab.label_segment(request, attempt=1)
     assert ei.value.reason == "cuda_oom"
 
 
@@ -2674,7 +3015,7 @@ def test_label_segment_classifies_timeout(load_mock: MagicMock) -> None:
 
     from mimicanno.vlm_labeler import LabelerRuntimeError
     with pytest.raises(LabelerRuntimeError) as ei:
-        lab.label_segment(_minimal_request(), attempt=1, segment_id="s_000")
+        lab.label_segment(_minimal_request(segment_id="s_000"), attempt=1)
     assert ei.value.reason == "inference_timeout"
 
 
@@ -2691,11 +3032,54 @@ def test_label_segment_returns_validated_response_on_clean_decode(
     ]
     cfg = _cfg()
     lab = LocalGemmaVLMLabeler(cfg)
-    r = lab.label_segment(_minimal_request(), attempt=1, segment_id="s_000")
+    r = lab.label_segment(_minimal_request(segment_id="s_000"), attempt=1)
     assert r["phase"] == "idle"
+
+
+@patch("mimicanno.vlm_labeler._hf_load_model_and_processor")
+def test_label_segment_includes_retry_amendment_on_attempt_2(
+    load_mock: MagicMock,
+) -> None:
+    """Spec §3.3: when attempt > 1 and last_reject_reason is provided, the
+    prompt MUST include the retry-strict amendment."""
+    model = MagicMock()
+    processor = MagicMock()
+    load_mock.return_value = (model, processor)
+    captured_prompts: list[str] = []
+    def _capture(text, images, return_tensors):
+        captured_prompts.append(text)
+        return MagicMock(to=lambda d: MagicMock())
+    processor.side_effect = _capture
+    model.generate.return_value = MagicMock()
+    processor.batch_decode.return_value = [
+        '{"phase": "idle", "vlm_confidence": 0.5}'
+    ]
+    cfg = _cfg()
+    lab = LocalGemmaVLMLabeler(cfg)
+    lab.label_segment(_minimal_request(segment_id="s_000"), attempt=2,
+                      last_reject_reason="invalid_label")
+    assert any("reject_reason=invalid_label" in p for p in captured_prompts)
 ```
 
-Add `_minimal_request` helper in the same file.
+`_minimal_request` helper to add at the top of the test file:
+
+```python
+def _minimal_request(segment_id: str = "s_000") -> "VLMRequest":
+    from mimicanno.vlm_labeler import VLMRequest
+    import numpy as np
+    return VLMRequest(
+        task_text="t", allowed_labels=["idle"], label_version="manipulation.v1",
+        robot_type="aloha", fps=30.0, episode_duration_sec=1.0,
+        segment_index=1, segment_total=1, segment_id=segment_id,
+        keyframes=[np.zeros((4, 4, 3), dtype=np.uint8)],
+        keyframe_offsets_sec=[0.0],
+        robot_state_summary={
+            "duration_sec": 1.0, "mean_eef_speed_mps": None,
+            "gripper_open_fraction": 0.0, "gripper_transitions": 0,
+            "dwell_fraction": None,
+        },
+    )
+```
 
 - [ ] **Step 2: Run failing tests.**
 
@@ -2705,13 +3089,16 @@ Expected: NotImplementedError or AttributeError on the new tests.
 
 ```python
     def label_segment(
-        self, request: VLMRequest, attempt: int, segment_id: str
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
         from mimicanno.vlm_prompt import build_prompt
 
         # Build prompt + assemble multimodal inputs via the processor.
-        last_reject = None  # caller's responsibility; for v1 we keep prompt static per attempt
-        prompt = build_prompt(request, attempt=attempt, last_reject_reason=last_reject)
+        prompt = build_prompt(request, attempt=attempt,
+                              last_reject_reason=last_reject_reason)
         try:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"
@@ -2818,14 +3205,21 @@ from mimicanno.vlm_labeler import (
 )
 
 
-def _make_labeler_factory(vlm_config: VLMConfig):
+def _make_labeler_factory(vlm_config: VLMConfig) -> LabelerFactory:
+    """Choose the right labeler implementation based on VLMConfig.
+
+    `model_id == "fixture"` is set by pre-flight (§2.5 Case C); the original
+    fixture file path lives on `vlm_config.fixture_path` (Task 1 — runtime-only,
+    excluded from to_dict / config_hash). For real adapters we instantiate
+    `LocalGemmaVLMLabeler` against the pre-flight-resolved revision."""
     if vlm_config.model_id == "fixture":
-        # Fixture URI was resolved by pre-flight; we recover the path from
-        # resolved_checkpoint by storing the original path on the config
-        # at CLI parse time (Task 14 wires this).
-        # For now, accept VLMConfig.model_id == "fixture" + a fixture_path
-        # smuggled in via `device` (a hack for test code paths only).
-        ...   # see Task 14 for the proper implementation
+        if vlm_config.fixture_path is None:
+            raise ValueError(
+                "VLMConfig.model_id == 'fixture' but fixture_path is None — "
+                "pre-flight (§2.5 Case C) must populate fixture_path."
+            )
+        path = vlm_config.fixture_path
+        return lambda c: FixtureVLMLabeler(path)
     return lambda c: LocalGemmaVLMLabeler(c)
 
 
@@ -2837,17 +3231,19 @@ def _emit_vlm_log(event: dict) -> None:
 def apply_phase2_labeling(
     *,
     segments: list[SubtaskSegment],
-    signals: dict,
-    video_path: Path,
-    parquet_path: Path,
+    extractor: ClipFeatureExtractor,
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    episode_meta: dict,
     vlm_config: VLMConfig,
     labeler_factory_override: LabelerFactory | None = None,
 ) -> tuple[list[SubtaskSegment], RunOutcome, str | None]:
     """Phase 2 wrapper. Returns (labeled_segments, outcome, notes_aggregate)."""
     factory = labeler_factory_override or _make_labeler_factory(vlm_config)
     labeled, attempts, outcome = label_run(
-        segments=segments, signals=signals, video_path=video_path,
-        parquet_path=parquet_path, config=vlm_config, labeler_factory=factory,
+        segments=segments, extractor=extractor,
+        gripper=gripper, eef_velocity=eef_velocity,
+        episode_meta=episode_meta, config=vlm_config, labeler_factory=factory,
     )
     # Emit per-attempt observation log.
     for a in attempts:
@@ -2921,12 +3317,13 @@ Add to `tests/unit/test_label_run_success.py` or a new `test_pipeline_phase2.py`
 
 ```python
 def test_apply_phase2_labeling_aggregates_notes() -> None:
-    segs, signals, video, parquet = make_synthetic_segments_aloha(n_segments=2)
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(n_segments=2)
     cfg = _vlm_config()
     factory = lambda c: FixtureVLMLabeler(FIXT / "ok_first_try.json")
     from mimicanno.pipeline import apply_phase2_labeling
     _, outcome, notes = apply_phase2_labeling(
-        segments=segs, signals=signals, video_path=video, parquet_path=parquet,
+        segments=segs, extractor=extractor,
+        gripper=gripper, eef_velocity=eef, episode_meta=meta,
         vlm_config=cfg, labeler_factory_override=factory,
     )
     assert outcome.kind == "ok"
@@ -2986,14 +3383,16 @@ def annotate(
     if target_phase >= 2:
         if vlm_model is None:
             raise VLMModelRequired(target_phase=target_phase)
-        # Pre-flight (§2.5)
+        # Pre-flight (§2.5) — resolves to a stable (model_id, sha [, fixture_path])
         from mimicanno.preflight import resolve_vlm_model
         result = resolve_vlm_model(vlm_model, offline=offline)
-        # Build VLMConfig
+        # Build VLMConfig. fixture_path is excluded from to_dict/config_hash
+        # by the dataclass's to_dict (see Task 1).
         from mimicanno.config import VLMConfig
         vlm_config: VLMConfig | None = VLMConfig(
             model_id=result.model_id,
             resolved_checkpoint=result.resolved_checkpoint,
+            fixture_path=result.fixture_path,
             keyframes_per_segment=vlm_keyframes,
             max_retries=vlm_max_retries,
         )
@@ -3445,6 +3844,7 @@ def test_real_vlm_labels_one_segment_to_a_valid_phase() -> None:
         ],
         label_version="manipulation.v1", robot_type="aloha",
         fps=30.0, episode_duration_sec=2.0, segment_index=1, segment_total=1,
+        segment_id="s_000",
         keyframes=[np.zeros((224, 224, 3), dtype=np.uint8)] * 4,
         keyframe_offsets_sec=[0.0, 0.5, 1.0, 1.5],
         robot_state_summary={
@@ -3453,7 +3853,7 @@ def test_real_vlm_labels_one_segment_to_a_valid_phase() -> None:
             "dwell_fraction": 0.3,
         },
     )
-    resp = lab.label_segment(req, attempt=1, segment_id="s_000")
+    resp = lab.label_segment(req, attempt=1)
     assert resp["phase"] in set(req["allowed_labels"]) | {"unknown"}
     assert 0.0 <= resp["vlm_confidence"] <= 1.0
 ```
