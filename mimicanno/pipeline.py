@@ -1,9 +1,11 @@
 # mimicanno/pipeline.py
-"""End-to-end Phase 1 pipeline orchestrator."""
+"""End-to-end Phase 1 + Phase 2 pipeline orchestrator."""
 
 from __future__ import annotations
 
 import datetime as dt
+import json as _json
+import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +29,7 @@ from mimicanno.config import (
     RUN_HASH_FALLBACK_PREFIX_LEN,
     AnnotationConfig,
     InputBundle,
+    VLMConfig,
     compose_run_hash,
     compute_config_hash,
     compute_input_hash,
@@ -48,6 +51,7 @@ from mimicanno.schema import (
     InputRef,
     Manifest,
     PipelineStatus,
+    SubtaskSegment,
     TaskInfo,
 )
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS, COMPAT_BLOCK
@@ -57,6 +61,13 @@ from mimicanno.signals import (
     gaussian_smooth_1d,
     smoothing_sigma_for_fps,
 )
+from mimicanno.vlm_labeler import (
+    FixtureVLMLabeler,
+    LabelerFactory,
+    LocalGemmaVLMLabeler,
+    RunOutcome,
+    label_run,
+)
 from mimicanno.writers import (
     write_annotation_json,
     write_boundaries_json,
@@ -64,6 +75,97 @@ from mimicanno.writers import (
     write_signals_json,
 )
 
+# ---------------------------------------------------------------------------
+# Phase 2 helpers
+# ---------------------------------------------------------------------------
+
+def _make_labeler_factory(vlm_config: VLMConfig) -> LabelerFactory:
+    """Choose the right labeler implementation based on VLMConfig.
+
+    `model_id == "fixture"` is set by pre-flight (§2.5 Case C); the original
+    fixture file path lives on `vlm_config.fixture_path` (Task 1 — runtime-only,
+    excluded from to_dict / config_hash). For real adapters we instantiate
+    `LocalGemmaVLMLabeler` against the pre-flight-resolved revision."""
+    if vlm_config.model_id == "fixture":
+        if vlm_config.fixture_path is None:
+            raise ValueError(
+                "VLMConfig.model_id == 'fixture' but fixture_path is None — "
+                "pre-flight (§2.5 Case C) must populate fixture_path."
+            )
+        path = vlm_config.fixture_path
+        return lambda c: FixtureVLMLabeler(path)
+    return lambda c: LocalGemmaVLMLabeler(c)
+
+
+def _emit_vlm_log(event: dict) -> None:
+    _sys.stderr.write(_json.dumps(event, ensure_ascii=False) + "\n")
+    _sys.stderr.flush()
+
+
+def apply_phase2_labeling(
+    *,
+    segments: list[SubtaskSegment],
+    extractor,
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    episode_meta: dict,
+    vlm_config: VLMConfig,
+    labeler_factory_override: LabelerFactory | None = None,
+) -> tuple[list[SubtaskSegment], RunOutcome, str | None]:
+    """Phase 2 wrapper. Returns (labeled_segments, outcome, notes_aggregate)."""
+    factory = labeler_factory_override or _make_labeler_factory(vlm_config)
+    labeled, attempts, outcome = label_run(
+        segments=segments, extractor=extractor,
+        gripper=gripper, eef_velocity=eef_velocity,
+        episode_meta=episode_meta, config=vlm_config, labeler_factory=factory,
+    )
+    for a in attempts:
+        for i, reason in enumerate(a.reject_reasons, start=1):
+            _emit_vlm_log({
+                "event": "vlm_attempt", "segment_id": a.segment_id,
+                "attempt": i, "status": "rejected", "reject_reason": reason,
+            })
+        for i, reason in enumerate(a.runtime_errors, start=1):
+            _emit_vlm_log({
+                "event": "vlm_runtime_fault", "segment_id": a.segment_id,
+                "attempt": i, "reason": reason,
+            })
+        if a.final_status == "ok":
+            _emit_vlm_log({
+                "event": "vlm_attempt", "segment_id": a.segment_id,
+                "attempt": a.attempt_count, "status": "ok",
+                "vlm_confidence": a.response["vlm_confidence"],
+            })
+        else:
+            _emit_vlm_log({
+                "event": "vlm_segment_fallback", "segment_id": a.segment_id,
+                "attempts": a.attempt_count,
+                "reject_reasons": list(a.reject_reasons),
+            })
+
+    if outcome.kind == "degraded":
+        _emit_vlm_log({
+            "event": "vlm_run_degrade",
+            "degrade_reason": outcome.degrade_reason,
+            "underlying_error": outcome.underlying_error,
+        })
+        notes = (
+            f"vlm_labeler: degraded to Phase 1 output "
+            f"(degrade_reason={outcome.degrade_reason}); 0/{len(segments)} segments labeled."
+        )
+        return labeled, outcome, notes
+
+    n_ok = sum(1 for a in attempts if a.final_status == "ok")
+    n_fallback = sum(1 for a in attempts if a.final_status == "unknown_fallback")
+    n_retried = sum(1 for a in attempts if a.attempt_count > 1)
+    notes = (
+        f"vlm_labeler: {n_ok + n_fallback}/{len(segments)} segments labeled; "
+        f"{n_retried} needed retry; {n_fallback} fell back to unknown."
+    )
+    return labeled, outcome, notes
+
+
+# ---------------------------------------------------------------------------
 # Maps BoundaryConfig.weights short keys (spec §4.3 manifest example)
 # to the detector source names emitted by RawEvent.source in boundaries.py.
 _WEIGHT_KEY_TO_SOURCE: dict[str, str] = {
@@ -259,8 +361,38 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         duration_sec=duration_sec,
     )
 
+    # Phase 2: VLM labeling (only if target_phase >= 2 and vlm config present).
+    phase2_outcome: RunOutcome | None = None
+    phase2_notes: str | None = None
+    if req.config.target_phase >= 2 and req.config.vlm is not None:
+        from mimicanno.clip_features import ClipFeatureExtractor
+
+        vlm_cfg = req.config.vlm
+        extractor = ClipFeatureExtractor(
+            video_path=req.video,
+            fps=fps,
+            clip_features_config=vlm_cfg.clip_features,
+            image_size_px=vlm_cfg.image_size_px,
+        )
+        episode_meta = {
+            "task_text": req.task,
+            "allowed_labels": list(label_set.label_ids()),
+            "label_version": label_set.schema_version,
+            "robot_type": req.robot_adapter_name,
+            "fps": fps,
+            "episode_duration_sec": duration_sec,
+        }
+        segments, phase2_outcome, phase2_notes = apply_phase2_labeling(
+            segments=segments,
+            extractor=extractor,
+            gripper=gripper,
+            eef_velocity=eef_vel,
+            episode_meta=episode_meta,
+            vlm_config=vlm_cfg,
+        )
+
     # 10) Build pipeline_params for manifest (records what was actually used).
-    pipeline_params = {
+    pipeline_params: dict = {
         "boundary": {
             "weights": dict(bcfg.weights),
             "thresholds": dict(bcfg.thresholds),
@@ -269,6 +401,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             "disabled_sources": disabled,
         },
     }
+    if req.config.target_phase >= 2 and req.config.vlm is not None:
+        pipeline_params["vlm"] = req.config.vlm.to_dict()
 
     # 11) Build per-channel signals downsampled for viewer.
     signal_channels: list[SignalChannel] = [
@@ -287,17 +421,23 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     # 12) Build dataclass payloads.
     generated_at = dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
+    _degraded = phase2_outcome is not None and phase2_outcome.kind == "degraded"
     pipeline_status = PipelineStatus(
         object_state_available=False,
-        degraded_from_phase=None,
-        degrade_reason=None,
+        degraded_from_phase=(req.config.target_phase if _degraded else None),
+        degrade_reason=(phase2_outcome.degrade_reason if _degraded else None),
     )
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(
         name="mimicanno",
         cli_version=__version__,
-        pipeline_phase=1,
+        pipeline_phase=req.config.target_phase,
     )
+
+    model_versions: dict = {"sam3": None, "vlm": None}
+    if req.config.target_phase >= 2 and req.config.vlm is not None:
+        vlm_cp = req.config.vlm.resolved_checkpoint or "unresolved"
+        model_versions["vlm"] = f"{req.config.vlm.model_id}:{vlm_cp}"
 
     manifest = Manifest(
         schema_version=ARTIFACT_SCHEMA_VERSIONS["manifest"],
@@ -308,7 +448,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         config_hash=config_hash,
         input_hash=input_hash,
         run_hash=run_hash,
-        model_versions={"sam3": None, "vlm": None},
+        model_versions=model_versions,
         pipeline_params=pipeline_params,
         inputs={
             "video": InputRef(path=str(req.video), sha256=probe.sha256),
@@ -336,13 +476,13 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         config_hash=config_hash,
         input_hash=input_hash,
         run_hash=run_hash,
-        model_versions={"sam3": None, "vlm": None},
-        pipeline_phase=1,
+        model_versions=model_versions,
+        pipeline_phase=req.config.target_phase,
         pipeline_status=pipeline_status,
         segments=segments,
         boundaries_url="boundaries.json",
         signals_url="signals.json",
-        notes=None,
+        notes=phase2_notes,
     )
 
     # 13) Publish.
@@ -371,7 +511,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         input_hash=input_hash,
         run_hash=run_hash,
         task_text=req.task,
-        pipeline_phase=1,
+        pipeline_phase=req.config.target_phase,
         generated_at=generated_at,
         force=req.force,
     )
