@@ -531,16 +531,14 @@ class LocalGemmaVLMLabeler:
 
     def _raise_classified(self, e: Exception) -> None:
         """Map low-level PyTorch / HF exceptions into LabelerRuntimeError(reason)."""
-        try:
-            import torch
-            if isinstance(e, torch.cuda.OutOfMemoryError):
-                raise LabelerRuntimeError("cuda_oom") from e
-        except ImportError:
-            pass
+        import torch
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            raise LabelerRuntimeError("cuda_oom") from e
         if isinstance(e, TimeoutError):
             raise LabelerRuntimeError("inference_timeout") from e
         if isinstance(e, ConnectionError) or "connection" in str(e).lower():
             raise LabelerRuntimeError("model_unreachable") from e
         if isinstance(e, RuntimeError) and "device" in str(e).lower():
             raise LabelerRuntimeError("device_unavailable") from e
+        # Anything else propagates — implementation bug, NOT a runtime fault.
         raise e
