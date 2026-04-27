@@ -1,0 +1,21 @@
+{
+  "model_identity": {"vlm_model": "fixture", "vlm_checkpoint": "<auto>"},
+  "init_should_raise": null,
+  "segments": {
+    "s_002": {
+      "scenario": "fallback_to_unknown",
+      "responses": [
+        {"_emit_raw": "broken"},
+        {"_emit_raw": "broken"},
+        {"_emit_raw": "broken"}
+      ]
+    },
+    "*": {
+      "scenario": "ok_first_try",
+      "responses": [{
+        "phase": "idle", "verb": null, "object": null, "target": null,
+        "vlm_confidence": 0.6, "evidence": null
+      }]
+    }
+  }
+}

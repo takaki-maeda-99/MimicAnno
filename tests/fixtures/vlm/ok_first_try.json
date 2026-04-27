@@ -1,0 +1,14 @@
+{
+  "model_identity": {"vlm_model": "fixture", "vlm_checkpoint": "<auto>"},
+  "init_should_raise": null,
+  "segments": {
+    "*": {
+      "scenario": "ok_first_try",
+      "responses": [{
+        "phase": "approach_object", "verb": "approach", "object": "block",
+        "target": null, "vlm_confidence": 0.85,
+        "evidence": "gripper open, EEF moving"
+      }]
+    }
+  }
+}

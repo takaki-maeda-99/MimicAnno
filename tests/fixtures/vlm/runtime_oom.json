@@ -1,0 +1,10 @@
+{
+  "model_identity": {"vlm_model": "fixture", "vlm_checkpoint": "<auto>"},
+  "init_should_raise": null,
+  "segments": {
+    "*": {
+      "scenario": "runtime_error",
+      "_raise_each_attempt": "LabelerRuntimeError(cuda_oom)"
+    }
+  }
+}

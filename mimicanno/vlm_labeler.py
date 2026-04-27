@@ -7,9 +7,11 @@ later tasks.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Protocol, TypedDict, get_args
 
 import numpy as np
@@ -180,3 +182,71 @@ def parse_and_validate(raw_text: str, user_allowed_labels: set[str]) -> VLMRespo
         vlm_confidence=float(obj["vlm_confidence"]),
         evidence=evidence,
     )
+
+
+# --- FixtureVLMLabeler (spec §5.5) ------------------------------------------
+
+_FIXT_RUNTIME_PATTERN = re.compile(
+    r"^LabelerRuntimeError\((?P<reason>[a-z_]+)\)$"
+)
+
+
+class FixtureVLMLabeler:
+    """Test/CI implementation that replays scenarios from a fixture JSON
+    (spec §5.5). Routing per segment uses ``request["segment_id"]`` (spec §2.1).
+    """
+
+    def __init__(self, fixture_path: Path) -> None:
+        self._fixture_path = Path(fixture_path)
+        body = json.loads(self._fixture_path.read_text(encoding="utf-8"))
+        init_raise = body.get("init_should_raise")
+        if init_raise is not None:
+            if init_raise.startswith("RuntimeError"):
+                raise RuntimeError(init_raise)
+            raise Exception(init_raise)
+        self._segments: dict[str, dict] = body.get("segments", {})
+        self._sha256 = hashlib.sha256(self._fixture_path.read_bytes()).hexdigest()
+
+    def model_identity(self) -> ModelIdentity:
+        return ModelIdentity(vlm_model="fixture", vlm_checkpoint=self._sha256)
+
+    def _route(self, segment_id: str) -> dict:
+        if segment_id in self._segments:
+            return self._segments[segment_id]
+        if "*" in self._segments:
+            return self._segments["*"]
+        raise KeyError(
+            f"fixture has no scenario for segment_id={segment_id!r} and no '*' wildcard"
+        )
+
+    def label_segment(
+        self,
+        request: VLMRequest,
+        attempt: int,
+        last_reject_reason: RejectReason | None = None,
+    ) -> VLMResponse:
+        scen = self._route(request["segment_id"])
+
+        raise_each = scen.get("_raise_each_attempt")
+        if raise_each is not None:
+            m = _FIXT_RUNTIME_PATTERN.match(raise_each)
+            if m:
+                reason = m.group("reason")
+                raise LabelerRuntimeError(reason)  # type: ignore[arg-type]
+            m2 = re.match(r"^LabelerError\(([a-z_]+)\)$", raise_each)
+            if m2:
+                raise LabelerError(m2.group(1))  # type: ignore[arg-type]
+            raise RuntimeError(f"unparseable _raise_each_attempt: {raise_each!r}")
+
+        responses = scen.get("responses", [])
+        idx = attempt - 1
+        if idx >= len(responses):
+            raise RuntimeError(
+                f"fixture exhausted: segment_id={request['segment_id']!r} attempt={attempt}"
+            )
+        spec = responses[idx]
+
+        if "_emit_raw" in spec:
+            return parse_and_validate(spec["_emit_raw"], set(request["allowed_labels"]))
+        as_text = json.dumps(spec)
+        return parse_and_validate(as_text, set(request["allowed_labels"]))
