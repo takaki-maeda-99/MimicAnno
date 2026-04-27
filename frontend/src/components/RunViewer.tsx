@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   artifactUrl,
   assertArtifactSelfConsistent,
@@ -47,16 +47,24 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
   const abortRef = useRef<AbortController | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [widthPx, setWidthPx] = useState(0);
-  const rowRef = useRef<HTMLDivElement | null>(null);
+  const obsRef = useRef<ResizeObserver | null>(null);
 
-  useEffect(() => {
-    if (!rowRef.current) return;
-    const obs = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width ?? 0;
-      if (w > 0) setWidthPx(w);
-    });
-    obs.observe(rowRef.current);
-    return () => obs.disconnect();
+  // Callback ref so the observer attaches when the loaded branch's <div>
+  // mounts (not at RunViewer mount, which happens during the "loading" state
+  // when the div doesn't exist yet — that's why a useEffect([],...) on a
+  // useRef would silently never fire and Timeline/WaveformView would render
+  // null forever).
+  const rowRef = useCallback((node: HTMLDivElement | null) => {
+    obsRef.current?.disconnect();
+    obsRef.current = null;
+    if (node) {
+      const obs = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect.width ?? 0;
+        if (w > 0) setWidthPx(w);
+      });
+      obs.observe(node);
+      obsRef.current = obs;
+    }
   }, []);
 
   useEffect(() => {
