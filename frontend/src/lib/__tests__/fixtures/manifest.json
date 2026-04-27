@@ -1,0 +1,87 @@
+{
+  "artifacts": [
+    {
+      "content_type": "video/mp4",
+      "role": "video",
+      "url": "video.mp4"
+    },
+    {
+      "content_type": "application/json",
+      "role": "annotation",
+      "url": "annotation.json"
+    },
+    {
+      "content_type": "application/json",
+      "role": "boundaries",
+      "url": "boundaries.json"
+    },
+    {
+      "content_type": "application/json",
+      "role": "signals",
+      "url": "signals.json"
+    }
+  ],
+  "compat": {
+    "annotation": 0,
+    "boundaries": 0,
+    "manifest": 0,
+    "signals": 0
+  },
+  "config_hash": "sha256:09bab886373d507b4ce9adaac5c57c39a3b10dadfa63c5f95e402692aa2ea153",
+  "duration_sec": 15.133333,
+  "episode_id": "episode_000",
+  "fps": 30.0,
+  "generated_at": "2026-04-26T12:58:46.764563Z",
+  "generator": {
+    "cli_version": "0.1.0",
+    "name": "mimicanno",
+    "pipeline_phase": 1
+  },
+  "input_hash": "sha256:0e0e99e3170e7a9d09cd059ca53c1ccd53107232603db8464fc20651dbf49b20",
+  "inputs": {
+    "parquet": {
+      "path": "/tmp/mimicanno-real-verify/svla_ep0/episode_000.parquet",
+      "sha256": "sha256:b3cfbc689a0c74cc3530b10a06e099d1276b4ca75628e18117e694c7271b5fa5"
+    },
+    "video": {
+      "path": "/tmp/mimicanno-real-verify/svla_ep0/episode_000.mp4",
+      "sha256": "sha256:0456525f893210e49cf38bd063c68926aee266692f74509c60bbc0a0d02bf099"
+    }
+  },
+  "model_versions": {
+    "sam3": null,
+    "vlm": null
+  },
+  "pipeline_params": {
+    "boundary": {
+      "disabled_sources": [
+        "eef_velocity_valley",
+        "eef_acceleration_peak"
+      ],
+      "merge_window_sec": 0.1,
+      "score_threshold": 0.05,
+      "thresholds": {
+        "gripper_delta": 0.1,
+        "velocity_valley": 0.05
+      },
+      "weights": {
+        "acceleration": 0.15,
+        "action": 0.1,
+        "gripper": 0.5,
+        "velocity": 0.25
+      }
+    }
+  },
+  "pipeline_status": {
+    "degrade_reason": null,
+    "degraded_from_phase": null,
+    "object_state_available": false
+  },
+  "run_hash": "sha256:564ecfc09b7d139144932886aac5434dc7bfe59571eb97ae47d79483fc65d207",
+  "schema_version": "0.1.0",
+  "task": {
+    "text": "Pick up the cube and place it in the box.",
+    "version": null
+  },
+  "time_base": "video_pts_seconds"
+}

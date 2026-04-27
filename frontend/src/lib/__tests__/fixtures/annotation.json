@@ -1,0 +1,541 @@
+{
+  "boundaries_url": "boundaries.json",
+  "config_hash": "sha256:09bab886373d507b4ce9adaac5c57c39a3b10dadfa63c5f95e402692aa2ea153",
+  "episode_id": "episode_000",
+  "generated_at": "2026-04-26T12:58:46.764563Z",
+  "generator": {
+    "cli_version": "0.1.0",
+    "name": "mimicanno",
+    "pipeline_phase": 1
+  },
+  "input_hash": "sha256:0e0e99e3170e7a9d09cd059ca53c1ccd53107232603db8464fc20651dbf49b20",
+  "model_versions": {
+    "sam3": null,
+    "vlm": null
+  },
+  "notes": null,
+  "pipeline_phase": 1,
+  "pipeline_status": {
+    "degrade_reason": null,
+    "degraded_from_phase": null,
+    "object_state_available": false
+  },
+  "run_hash": "sha256:564ecfc09b7d139144932886aac5434dc7bfe59571eb97ae47d79483fc65d207",
+  "schema_version": "0.1.0",
+  "segments": [
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_001",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 2.8333333333333335
+      },
+      "end_frame": 84,
+      "end_time": 2.8333333333333335,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_001",
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 1.0,
+        "sources": [
+          "episode_start"
+        ],
+        "time": 0.0
+      },
+      "start_frame": 0,
+      "start_time": 0.0,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_002",
+        "score": 0.15948579314115696,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 3.3666666666666667
+      },
+      "end_frame": 100,
+      "end_time": 3.3666666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_002",
+      "start_boundary": {
+        "candidate_id": "b_001",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 2.8333333333333335
+      },
+      "start_frame": 85,
+      "start_time": 2.8333333333333335,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_003",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 4.266666666666667
+      },
+      "end_frame": 127,
+      "end_time": 4.266666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_003",
+      "start_boundary": {
+        "candidate_id": "b_002",
+        "score": 0.15948579314115696,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 3.3666666666666667
+      },
+      "start_frame": 101,
+      "start_time": 3.3666666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_004",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 4.9
+      },
+      "end_frame": 146,
+      "end_time": 4.9,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_004",
+      "start_boundary": {
+        "candidate_id": "b_003",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 4.266666666666667
+      },
+      "start_frame": 128,
+      "start_time": 4.266666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_005",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 7.166666666666667
+      },
+      "end_frame": 214,
+      "end_time": 7.166666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_005",
+      "start_boundary": {
+        "candidate_id": "b_004",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 4.9
+      },
+      "start_frame": 147,
+      "start_time": 4.9,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_006",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 7.966666666666667
+      },
+      "end_frame": 238,
+      "end_time": 7.966666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_006",
+      "start_boundary": {
+        "candidate_id": "b_005",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 7.166666666666667
+      },
+      "start_frame": 215,
+      "start_time": 7.166666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_007",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 9.466666666666667
+      },
+      "end_frame": 283,
+      "end_time": 9.466666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_007",
+      "start_boundary": {
+        "candidate_id": "b_006",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 7.966666666666667
+      },
+      "start_frame": 239,
+      "start_time": 7.966666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_008",
+        "score": 0.12363474284783871,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 10.3
+      },
+      "end_frame": 308,
+      "end_time": 10.3,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_008",
+      "start_boundary": {
+        "candidate_id": "b_007",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 9.466666666666667
+      },
+      "start_frame": 284,
+      "start_time": 9.466666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.12363474284783871,
+      "end_boundary": {
+        "candidate_id": "b_009",
+        "score": 0.13671333989312873,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 10.466666666666667
+      },
+      "end_frame": 313,
+      "end_time": 10.466666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_009",
+      "start_boundary": {
+        "candidate_id": "b_008",
+        "score": 0.12363474284783871,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 10.3
+      },
+      "start_frame": 309,
+      "start_time": 10.3,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.13671333989312873,
+      "end_boundary": {
+        "candidate_id": "b_010",
+        "score": 0.23570130277160564,
+        "sources": [
+          "action_norm_change",
+          "gripper_transition"
+        ],
+        "time": 10.8
+      },
+      "end_frame": 323,
+      "end_time": 10.8,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_010",
+      "start_boundary": {
+        "candidate_id": "b_009",
+        "score": 0.13671333989312873,
+        "sources": [
+          "gripper_transition"
+        ],
+        "time": 10.466666666666667
+      },
+      "start_frame": 314,
+      "start_time": 10.466666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_011",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 12.2
+      },
+      "end_frame": 365,
+      "end_time": 12.2,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_011",
+      "start_boundary": {
+        "candidate_id": "b_010",
+        "score": 0.23570130277160564,
+        "sources": [
+          "action_norm_change",
+          "gripper_transition"
+        ],
+        "time": 10.8
+      },
+      "start_frame": 324,
+      "start_time": 10.8,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": "b_012",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 13.866666666666667
+      },
+      "end_frame": 415,
+      "end_time": 13.866666666666667,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_012",
+      "start_boundary": {
+        "candidate_id": "b_011",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 12.2
+      },
+      "start_frame": 366,
+      "start_time": 12.2,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.1,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 1.0,
+        "sources": [
+          "episode_end"
+        ],
+        "time": 15.133333
+      },
+      "end_frame": 453,
+      "end_time": 15.133333,
+      "episode_id": "episode_000",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.0,
+      "phase": "unlabeled",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "s_013",
+      "start_boundary": {
+        "candidate_id": "b_012",
+        "score": 0.1,
+        "sources": [
+          "action_norm_change"
+        ],
+        "time": 13.866666666666667
+      },
+      "start_frame": 416,
+      "start_time": 13.866666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    }
+  ],
+  "signals_url": "signals.json",
+  "task": {
+    "text": "Pick up the cube and place it in the box.",
+    "version": null
+  }
+}
