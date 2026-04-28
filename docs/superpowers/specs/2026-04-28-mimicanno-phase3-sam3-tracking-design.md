@@ -149,11 +149,14 @@ mimicanno/
                         # for tracks.json (TracksFile, Track, TrackSample, GapEvent, BBox)
                         # extend SubtaskSegment serialization with object_track_ids
                         # (already declared, populated only in Phase 3)
-  config.py             # add TrackingConfig, Phase3BoundaryWeights;
-                        # AnnotationConfig.tracking sub-block; BoundaryWeights gains 2 new
-                        # fields. Hash backward-compat is enforced at to_dict() time —
-                        # see §9.1 (target_phase-gated serialization), NOT by relying on
-                        # default values to silently drop out of canonical JSON
+  config.py             # add TrackingConfig + AnnotationConfig.tracking sub-block.
+                        # BoundaryWeights remains ONE class — the existing Phase 1 class
+                        # gains 2 new fields (default 0.0). Phase 3 default values are
+                        # produced by BoundaryWeights.phase3_defaults() classmethod, NOT
+                        # by a separate dataclass. Hash backward-compat is enforced at
+                        # to_dict() time — see §9.1 (target_phase-gated serialization),
+                        # NOT by relying on default values to silently drop out of
+                        # canonical JSON
   cli.py                # add --sam3-checkpoint, --track-stride-frames flags
                         # add abort path: target_phase == 3 requires --vlm-model and resolvable SAM3
   hashing.py            # no logic change; new TrackingConfig fields enter config_hash
@@ -604,7 +607,7 @@ Default weights (sum = 1.00):
 
 `score_threshold` remains `0.30`. `merge_window_sec` remains `0.10`.
 
-These weights are encoded as `Phase3BoundaryWeights` in `config.py` and selected when `target_phase == 3`. Phase 1/2 continue to use the existing `Phase1BoundaryWeights` (untouched). All weights are user-overridable via `--boundary-config <yaml>` (parent spec §11 behavior, unchanged).
+These weights are stored in the **single existing `BoundaryWeights` dataclass** in `config.py`, extended with two new fields (`gripper_object_distance_threshold_crossing: float = 0.0`, `object_motion_start_stop: float = 0.0`). The Phase 3 default values shown above are produced by `BoundaryWeights.phase3_defaults() -> "BoundaryWeights"` classmethod, which the orchestrator instantiates when `target_phase == 3`. Phase 1/2 continue to construct `BoundaryWeights()` (the Phase 1 default values, with the 2 new fields at their 0.0 default — but those fields are gated out of the hash payload per §9.1, so Phase 1/2 hashes are unchanged). All weights remain user-overridable via `--boundary-config <yaml>` (parent spec §11 behavior, unchanged).
 
 ### 4.3 Default-policy intent (Phase 3)
 
@@ -835,9 +838,14 @@ def annotate_episode_phase3(inputs, config):
     finally:
         sam3_runtime.close()                   # free GPU before Stage 3
 
+    image_aspect_ratio = (
+        inputs.image_size.width / inputs.image_size.height
+        if inputs.image_size is not None and inputs.image_size.height > 0
+        else config.tracking.image_aspect_ratio_default
+    )
     object_signals = compute_object_signals(
         tracks, fps=inputs.fps, n_frames=inputs.n_frames,
-        image_aspect_ratio=inputs.image_size.width / inputs.image_size.height,
+        image_aspect_ratio=image_aspect_ratio,
     )
 
     # Stage 2: integrated boundary score with 6 sources
@@ -892,6 +900,8 @@ def annotate_episode_phase3(inputs, config):
 - Adds a `notes` entry to `annotation.json` mirroring the same string (parent spec §9.4 wording).
 - The run is **published successfully** to its Phase 3 canonical directory (`target_phase=3` ∈ `config_hash`). It is not a Phase 2 run despite using the Phase 2 labeling path: hashes differ from a literal Phase 2 invocation.
 
+**Boundary detection in the degrade path also differs from Phase 2.** The `BoundaryWeights.phase3_defaults()` instance built at orchestrator start (`target_phase == 3`) remains in effect during degrade — the 4 Phase 1 sources are scored with Phase 3 weights (gripper 0.45 / valley 0.15 / accel 0.03 / action 0.02), and the 2 Phase 3 weight keys are present but disabled (no `object_signals` available, so `disabled_sources` includes them per §4.4). This is intentional: the Phase 3 directory should reflect Phase 3 boundary policy throughout, even when labels fall back. Re-running with literal Phase 2 weights would produce a different `config_hash` and contradict the canonical-name discipline.
+
 ### 7.3 Resource handoff
 
 - `LocalGemmaVLMLabeler` and `LocalGemmaTrackingPlanner` share one in-memory Gemma model. `vlm.shared_handle()` returns a thin reference; `LocalGemmaTrackingPlanner` holds it for the duration of `plan(...)` and releases.
@@ -921,22 +931,36 @@ class TrackingConfig:
         return self.track_stride_frames if self.track_stride_frames else max(1, round(fps / 3))
 
 
+# Single existing dataclass extended with 2 new fields. Phase 3 defaults
+# come from a classmethod, NOT a separate type.
 @dataclass(slots=True, frozen=True)
-class Phase3BoundaryWeights:
-    gripper_transition: float = 0.45
-    gripper_object_distance_threshold_crossing: float = 0.25
-    eef_velocity_valley: float = 0.15
-    object_motion_start_stop: float = 0.10
-    eef_acceleration_peak: float = 0.03
-    action_norm_change: float = 0.02
+class BoundaryWeights:
+    gripper_transition: float = 0.50              # Phase 1 default
+    eef_velocity_valley: float = 0.25             # Phase 1 default
+    eef_acceleration_peak: float = 0.15           # Phase 1 default
+    action_norm_change: float = 0.10              # Phase 1 default
+    gripper_object_distance_threshold_crossing: float = 0.0   # NEW; gated out of hash when target_phase < 3
+    object_motion_start_stop: float = 0.0                     # NEW; gated out of hash when target_phase < 3
+
+    @classmethod
+    def phase3_defaults(cls) -> "BoundaryWeights":
+        return cls(
+            gripper_transition=0.45,
+            eef_velocity_valley=0.15,
+            eef_acceleration_peak=0.03,
+            action_norm_change=0.02,
+            gripper_object_distance_threshold_crossing=0.25,
+            object_motion_start_stop=0.10,
+        )
 
 
 @dataclass(slots=True, frozen=True)
 class AnnotationConfig:
     # … existing fields …
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
-    # boundary.weights becomes union: Phase 1/2 use Phase1BoundaryWeights;
-    # Phase 3 uses Phase3BoundaryWeights — selected by target_phase
+    # boundary.weights stays a single BoundaryWeights; orchestrator builds
+    # `BoundaryWeights.phase3_defaults()` when target_phase == 3 (CLI-overridable
+    # via --boundary-config yaml).
 ```
 
 `AnnotationConfig.tracking` enters `config_hash` via the existing recursive serialization (no new hashing logic). Phase 1/2 invocations leave `tracking` at default but `target_phase=1|2` keeps the Phase 1 weights and ignores the new sources, so `tracks.json`-like artifacts never form.
@@ -987,19 +1011,55 @@ Per parent spec §4.1, `config_hash = sha256(canonical_json(AnnotationConfig + t
 def to_dict(self, *, target_phase: int) -> dict[str, Any]:
     payload = {
         "boundary": self.boundary.to_dict(target_phase=target_phase),
-        # vlm sub-block only when target_phase >= 2 (existing Phase 2 gate)
     }
     if target_phase >= 2:
-        payload["vlm"] = self.vlm.to_dict()
+        payload["vlm"] = self.vlm.to_dict()              # existing Phase 2 gate
     if target_phase >= 3:
-        payload["tracking"] = self.tracking.to_dict()
+        payload["tracking"] = self.tracking.to_dict()    # see TrackingConfig.to_dict below
     return payload
 
-# In BoundaryConfig.to_dict:
-def to_dict(self, *, target_phase: int) -> dict[str, Any]:
-    weights = self.weights.to_dict(target_phase=target_phase)
-    # weights.to_dict omits the 2 Phase 3 keys when target_phase < 3
-    return {"weights": weights, "thresholds": self.thresholds.to_dict(), ...}
+# Single BoundaryWeights class with two Phase 3 fields gated out:
+def BoundaryConfig.to_dict(self, *, target_phase: int) -> dict[str, Any]:
+    return {
+        "weights":          self.weights.to_dict(target_phase=target_phase),
+        "thresholds":       self.thresholds.to_dict(),
+        "merge_window_sec": self.merge_window_sec,
+        "score_threshold":  self.score_threshold,
+        "disabled_sources": sorted(self.disabled_sources),
+    }
+
+def BoundaryWeights.to_dict(self, *, target_phase: int) -> dict[str, float]:
+    payload = {
+        "gripper_transition":   self.gripper_transition,
+        "eef_velocity_valley":  self.eef_velocity_valley,
+        "eef_acceleration_peak": self.eef_acceleration_peak,
+        "action_norm_change":   self.action_norm_change,
+    }
+    if target_phase >= 3:
+        payload["gripper_object_distance_threshold_crossing"] = self.gripper_object_distance_threshold_crossing
+        payload["object_motion_start_stop"]                   = self.object_motion_start_stop
+    return payload
+
+# TrackingConfig MUST exclude sam3_model_id and sam3_checkpoint from its own to_dict():
+# those values are authoritative in model_config (below); double-serializing them into
+# AnnotationConfig.tracking would (a) duplicate them in the canonical hash payload, and
+# (b) the path-string in TrackingConfig vs the file-content sha256 in model_config would
+# produce different bytes for the same logical value, making the hash sensitive to the
+# checkpoint path on disk.
+def TrackingConfig.to_dict(self) -> dict[str, Any]:
+    return {
+        "track_stride_frames":           self.track_stride_frames,
+        "min_track_score":               self.min_track_score,
+        "max_gap_frames":                self.max_gap_frames,
+        "reacquisition_iou_threshold":   self.reacquisition_iou_threshold,
+        "visibility_threshold":          self.visibility_threshold,
+        "gripper_object_distance_threshold": self.gripper_object_distance_threshold,
+        "object_motion_threshold":       self.object_motion_threshold,
+        "object_motion_min_sec":         self.object_motion_min_sec,
+        "image_aspect_ratio_default":    self.image_aspect_ratio_default,
+        # NOTE: sam3_model_id / sam3_checkpoint are intentionally excluded;
+        # they live in model_config (build_model_config below).
+    }
 ```
 
 `model_config` is similarly gated:
@@ -1030,6 +1090,23 @@ Within a payload, key ordering is sorted ascending; floats are formatted with `r
 
 `tracking` config differences (under `target_phase=3`) → different `config_hash` → different `canonical_name` (parent spec §4.1 invariant, preserved).
 
+### 9.4 Observability-only fields (NOT in `config_hash`)
+
+The following Phase 3 manifest fields are **display / observability only** and MUST NOT enter the `config_hash` payload. An implementer who routes any of them through `to_dict(target_phase=...)` has introduced a bug:
+
+| Field | Authoritative hashed counterpart |
+|---|---|
+| `manifest.pipeline_status.object_state_segment_coverage` | none — purely observability (varies per run on the same config) |
+| `manifest.pipeline_status.object_state_available` | none — derived from runtime success, not config |
+| `manifest.pipeline_status.degraded_from_phase` | none — derived from runtime |
+| `manifest.pipeline_status.degrade_reason` | none — derived from runtime |
+| `manifest.model_versions.sam3` | `model_config.sam3_model` |
+| `manifest.model_versions.sam3_checkpoint` (sha256 string) | `model_config.sam3_checkpoint` (computed via `_sha256_of_path`) |
+| `manifest.pipeline_params.tracking` (echoed config for human inspection) | `AnnotationConfig.tracking` (via `to_dict(target_phase=3)`, which excludes `sam3_*` per §9.1) |
+| `manifest.pipeline_params.boundary` (echoed weights for inspection) | `AnnotationConfig.boundary` (via `to_dict(target_phase=...)`, with the 2 Phase 3 keys gated) |
+
+The `manifest.pipeline_params.*` echoes MAY include fields that are gated out of the hash (e.g., the 2 Phase 3 weight keys when `target_phase=2`). The echo is for human/viewer consumption and bears no contract relationship to the hash payload.
+
 ## 10. Testing strategy
 
 Three layers, mirroring Phase 2:
@@ -1043,7 +1120,8 @@ Per-module unit tests with no external dependencies:
 - `tests/object_tracker/test_propagator.py` — gap consolidation, re-acquisition IoU branch, primary marking, deterministic ordering. Driven via `FixtureSAM3Tracker`.
 - `tests/object_tracker/test_signals.py` — `compute_object_signals` distance + speed, NaN handling at gaps and episode boundaries, primary track resolution.
 - `tests/test_object_state_summary.py` — `compute_object_state_summary` visibility-threshold filter, primary-pair distance extraction, IoU-at-end proxy, None return on missing primary.
-- `tests/test_phase3_boundary_detector.py` — new sources fire under crafted signals; weight rebalance produces expected scores; `disabled_sources` rules; `Phase3BoundaryWeights` defaults.
+- `tests/test_phase3_boundary_detector.py` — new sources fire under crafted signals; weight rebalance produces expected scores; `disabled_sources` rules; `BoundaryWeights.phase3_defaults()` values.
+- `tests/test_phase3_boundary_edge_suppression.py` — explicit edge-case test pinning §4.1.1's no-emit rule: a synthetic distance signal with a crossing inside `[0, w)` or `[n_frames - w, n_frames)` produces no candidate from `gripper_object_distance_threshold_crossing`. Same for a near-edge sustained transition for `object_motion_start_stop` (the `min_sec` window must fit on both sides).
 - `tests/test_vlm_prompt_phase3.py` — `build_prompt` byte-equality with Phase 2 when `object_state_summary is None`; snapshot tests for the two new SYSTEM sub-sections; advisory line always present.
 - `tests/test_tracks_json_schema.py` — round-trip serialization, schema validation, cross-artifact integrity rule positives and negatives.
 - `tests/test_phase3_hash_isolation.py` — Phase 1/2 hashes unchanged after Phase 3 schema additions; Phase 3 hash differs from Phase 1/2 on identical episode inputs.
@@ -1060,7 +1138,7 @@ Driven by `FixtureTrackingPlanner` + `FixtureSAM3Tracker`. No GPU, no SAM3 weigh
 - `tests/integration/test_phase3_degrade_sam3_init_failed.py` — `FixtureSAM3Tracker` raises on `load`. Degrades with `sam3_init_failed`.
 - `tests/integration/test_phase3_idempotency.py` — same inputs + config produce byte-identical artifacts and identical `config_hash` / `run_hash` / `canonical_name`.
 - `tests/integration/test_phase3_distinctness.py` — Phase 1, Phase 2, Phase 3 of the same episode produce three different `canonical_name`s and three different run directories.
-- `tests/integration/test_phase3_no_phase12_regression.py` — running Phase 1 and Phase 2 against a curated fixture episode produces byte-identical output as before Phase 3 was merged.
+- `tests/integration/test_phase3_no_phase12_regression.py` — running Phase 1 and Phase 2 against a curated fixture episode produces an identical `manifest.config_hash` and `manifest.run_hash` as before Phase 3 was merged (pinned values in the test), and structural equality on `boundaries.json` / `annotation.json` / `signals.json` (deep dict-compare on parsed JSON, NOT raw byte equality — float serializer differences across Python patch versions can change byte output without touching content).
 - `tests/integration/test_tracks_json_cross_artifact.py` — corrupted `tracks.episode_id` triggers `ArtifactIntegrityError` on read.
 
 ### 10.3 Real-SAM3 smoke (gated)
