@@ -5,15 +5,13 @@ the concrete error/enum/dataclass surface matches spec §2.1 + §2.3.
 """
 from __future__ import annotations
 
-import pytest
-
 from mimicanno.vlm_labeler import (
+    REJECT_REASONS,
+    RUNTIME_FAULT_REASONS,
     LabelAttempt,
     LabelerError,
     LabelerRuntimeError,
     ModelIdentity,
-    REJECT_REASONS,
-    RUNTIME_FAULT_REASONS,
     RunOutcome,
     VLMResponse,
 )

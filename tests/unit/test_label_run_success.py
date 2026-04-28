@@ -6,13 +6,9 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-import numpy as np
-import pytest
-
-from mimicanno.config import ClipFeatureConfig, VLMConfig
+from mimicanno.config import VLMConfig
 from mimicanno.vlm_labeler import (
     FixtureVLMLabeler,
-    LabelAttempt,
     label_run,
 )
 from tests.unit.helpers_phase1 import make_synthetic_phase1_run

@@ -13,7 +13,6 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from mimicanno.errors import VLMModelNotFound
 
@@ -28,7 +27,7 @@ class PreflightResult:
     fixture_path: Path | None = None  # populated only for fixture:// URIs
 
 
-def _hf_model_info(model_id: str, revision: Optional[str]) -> str:
+def _hf_model_info(model_id: str, revision: str | None) -> str:
     """Resolve a HuggingFace model_id+revision to a commit sha.
     Isolated for monkeypatching in tests; production import guarded so that
     test environments without `huggingface_hub` installed still pass."""
@@ -37,10 +36,10 @@ def _hf_model_info(model_id: str, revision: Optional[str]) -> str:
     sha = getattr(info, "sha", None) or getattr(info, "commit_hash", None)
     if not sha or not SHA40_REGEX.match(sha):
         raise OSError(f"HF returned non-sha revision: {sha!r}")
-    return sha
+    return str(sha)
 
 
-def _split_model_at_revision(arg: str) -> tuple[str, Optional[str]]:
+def _split_model_at_revision(arg: str) -> tuple[str, str | None]:
     if "@" in arg:
         model_id, _, revision = arg.partition("@")
         return model_id, revision

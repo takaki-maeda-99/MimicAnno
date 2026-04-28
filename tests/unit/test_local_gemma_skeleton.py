@@ -48,8 +48,9 @@ def _cfg(**overrides) -> VLMConfig:
 
 
 def _minimal_request(segment_id: str = "s_000"):
-    from mimicanno.vlm_labeler import VLMRequest
     import numpy as np
+
+    from mimicanno.vlm_labeler import VLMRequest
     return VLMRequest(
         task_text="t", allowed_labels=["idle"], label_version="manipulation.v1",
         robot_type="aloha", fps=30.0, episode_duration_sec=1.0,
@@ -89,9 +90,8 @@ def test_constructor_propagates_loader_exception_unwrapped() -> None:
     vlm_init_failed (§2.3)."""
     boom = OSError("weights file missing")
     with patch("mimicanno.vlm_labeler._hf_load_model_and_processor",
-               side_effect=boom):
-        with pytest.raises(OSError, match="weights file missing"):
-            LocalGemmaVLMLabeler(_cfg())
+               side_effect=boom), pytest.raises(OSError, match="weights file missing"):
+        LocalGemmaVLMLabeler(_cfg())
 
 
 def test_resolved_checkpoint_required() -> None:

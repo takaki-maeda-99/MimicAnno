@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from mimicanno.config import VLMConfig
 from mimicanno.vlm_labeler import FixtureVLMLabeler
 from tests.unit.helpers_phase1 import make_synthetic_phase1_run

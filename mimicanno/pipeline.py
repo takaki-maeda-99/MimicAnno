@@ -8,6 +8,7 @@ import json as _json
 import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -97,7 +98,7 @@ def _make_labeler_factory(vlm_config: VLMConfig) -> LabelerFactory:
     return lambda c: LocalGemmaVLMLabeler(c)
 
 
-def _emit_vlm_log(event: dict) -> None:
+def _emit_vlm_log(event: dict[str, Any]) -> None:
     enriched = {
         "ts": dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z"),
         **event,
@@ -109,10 +110,10 @@ def _emit_vlm_log(event: dict) -> None:
 def apply_phase2_labeling(
     *,
     segments: list[SubtaskSegment],
-    extractor,
+    extractor: Any,
     gripper: np.ndarray,
     eef_velocity: np.ndarray | None,
-    episode_meta: dict,
+    episode_meta: dict[str, Any],
     vlm_config: VLMConfig,
     labeler_factory_override: LabelerFactory | None = None,
 ) -> tuple[list[SubtaskSegment], RunOutcome, str | None]:
@@ -129,10 +130,10 @@ def apply_phase2_labeling(
                 "event": "vlm_attempt", "segment_id": a.segment_id,
                 "attempt": i, "status": "rejected", "reject_reason": reason,
             })
-        for i, reason in enumerate(a.runtime_errors, start=1):
+        for i, runtime_reason in enumerate(a.runtime_errors, start=1):
             _emit_vlm_log({
                 "event": "vlm_runtime_fault", "segment_id": a.segment_id,
-                "attempt": i, "reason": reason,
+                "attempt": i, "reason": runtime_reason,
             })
         if a.final_status == "ok":
             _emit_vlm_log({
@@ -404,7 +405,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         )
 
     # 10) Build pipeline_params for manifest (records what was actually used).
-    pipeline_params: dict = {
+    pipeline_params: dict[str, Any] = {
         "boundary": {
             "weights": dict(bcfg.weights),
             "thresholds": dict(bcfg.thresholds),
@@ -437,7 +438,11 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     pipeline_status = PipelineStatus(
         object_state_available=False,
         degraded_from_phase=(req.config.target_phase if _degraded else None),
-        degrade_reason=(phase2_outcome.degrade_reason if _degraded else None),
+        degrade_reason=(
+            phase2_outcome.degrade_reason
+            if (_degraded and phase2_outcome is not None)
+            else None
+        ),
     )
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(
@@ -446,7 +451,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
         pipeline_phase=req.config.target_phase,
     )
 
-    model_versions: dict = {"sam3": None, "vlm": None}
+    model_versions: dict[str, str | None] = {"sam3": None, "vlm": None}
     if req.config.target_phase >= 2 and req.config.vlm is not None:
         assert req.config.vlm.resolved_checkpoint is not None, (
             "pre-flight (§2.5) must populate vlm.resolved_checkpoint before annotate_episode"

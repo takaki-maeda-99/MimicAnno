@@ -9,19 +9,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 
 from mimicanno.config import ClipFeatureConfig
 
+if TYPE_CHECKING:
+    from mimicanno.schema import SubtaskSegment
+
 
 class RobotStateSummary(TypedDict):
     duration_sec: float
-    mean_eef_speed_mps: Optional[float]
+    mean_eef_speed_mps: float | None
     gripper_open_fraction: float
     gripper_transitions: int
-    dwell_fraction: Optional[float]
+    dwell_fraction: float | None
 
 
 def compute_keyframe_offsets(start_frame: int, end_frame: int, k: int) -> list[int]:
@@ -60,7 +63,7 @@ def compute_robot_state_summary(
     end_frame: int,
     fps: float,
     gripper: np.ndarray,
-    eef_velocity: Optional[np.ndarray],
+    eef_velocity: np.ndarray | None,
     cfg: ClipFeatureConfig,
 ) -> RobotStateSummary:
     """5-scalar robot-state summary for one segment (spec §3.1)."""
@@ -72,8 +75,8 @@ def compute_robot_state_summary(
     gripper_open_fraction = float(np.mean(open_mask)) if g.size > 0 else 0.0
     gripper_transitions = _count_crossings(g, cfg.gripper_open_threshold)
 
-    mean_speed: Optional[float]
-    dwell_fraction: Optional[float]
+    mean_speed: float | None
+    dwell_fraction: float | None
     if eef_velocity is None:
         mean_speed = None
         dwell_fraction = None
@@ -116,11 +119,13 @@ class ClipFeatureExtractor:
         self._image_size_px = image_size_px
 
     def extract(
-        self, segment: "SubtaskSegment",
-        gripper: np.ndarray, eef_velocity: Optional[np.ndarray],
+        self, segment: SubtaskSegment,
+        gripper: np.ndarray, eef_velocity: np.ndarray | None,
         keyframes_per_segment: int,
     ) -> ClipFeatures:
-        from mimicanno.io_video import extract_frames_at_indices  # lazy: avoids circular import at module init
+        from mimicanno.io_video import (
+            extract_frames_at_indices,  # lazy: avoids circular import at module init
+        )
 
         offsets_frames = compute_keyframe_offsets(
             segment.start_frame, segment.end_frame, keyframes_per_segment,

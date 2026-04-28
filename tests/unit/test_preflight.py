@@ -4,14 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from mimicanno.errors import VLMModelNotFound
 from mimicanno.preflight import (
-    PreflightResult,
     SHA40_REGEX,
+    PreflightResult,
     resolve_vlm_model,
 )
 

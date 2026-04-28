@@ -12,15 +12,16 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal, Protocol, TypedDict, get_args
+from contextlib import AbstractContextManager
+from typing import Any, Literal, Protocol, TypedDict, get_args
 
 import numpy as np
 
 from mimicanno.config import VLMConfig
 from mimicanno.schema import SubtaskSegment
-
 
 # --- Reject / runtime-fault reason enums (kept as Literal for type-checkers,
 #     and re-exported as concrete tuples for runtime exhaustiveness checks).
@@ -91,7 +92,7 @@ class VLMRequest(TypedDict):
     segment_id: str             # SubtaskSegment.segment_id (e.g. "s_007"); spec §2.1
     keyframes: list[np.ndarray]
     keyframe_offsets_sec: list[float]
-    robot_state_summary: dict   # see clip_features.RobotStateSummary
+    robot_state_summary: dict[str, Any]   # see clip_features.RobotStateSummary
 
 
 @dataclass(slots=True)
@@ -209,13 +210,13 @@ class FixtureVLMLabeler:
             if init_raise.startswith("RuntimeError("):
                 raise RuntimeError(init_raise)
             raise Exception(init_raise)
-        self._segments: dict[str, dict] = body.get("segments", {})
+        self._segments: dict[str, dict[str, Any]] = body.get("segments", {})
         self._sha256 = hashlib.sha256(self._fixture_path.read_bytes()).hexdigest()
 
     def model_identity(self) -> ModelIdentity:
         return ModelIdentity(vlm_model="fixture", vlm_checkpoint=self._sha256)
 
-    def _route(self, segment_id: str) -> dict:
+    def _route(self, segment_id: str) -> dict[str, Any]:
         if segment_id in self._segments:
             return self._segments[segment_id]
         if "*" in self._segments:
@@ -281,11 +282,11 @@ def _build_request(
     segment_index: int,
     segment_total: int,
     *,
-    extractor,
+    extractor: Any,
     gripper: np.ndarray,
     eef_velocity: np.ndarray | None,
     keyframes_per_segment: int,
-    episode_meta: dict,
+    episode_meta: dict[str, Any],
 ) -> VLMRequest:
     """Compose a VLMRequest from a SubtaskSegment and the run-level metadata.
 
@@ -307,7 +308,7 @@ def _build_request(
         segment_id=segment.segment_id,
         keyframes=feat.keyframes,
         keyframe_offsets_sec=feat.keyframe_offsets_sec,
-        robot_state_summary=feat.robot_state_summary,  # type: ignore[typeddict-item]
+        robot_state_summary=feat.robot_state_summary,
     )
 
 
@@ -335,10 +336,10 @@ def _merge_response(
 def label_run(
     *,
     segments: list[SubtaskSegment],
-    extractor,
+    extractor: Any,
     gripper: np.ndarray,
     eef_velocity: np.ndarray | None,
-    episode_meta: dict,
+    episode_meta: dict[str, Any],
     config: VLMConfig,
     labeler_factory: LabelerFactory,
 ) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome]:
@@ -434,11 +435,13 @@ DEFAULT_LOCAL_GEMMA_MODEL_ID = "google/gemma-4-E2B-it"
 
 def _hf_load_model_and_processor(
     *, model_id: str, revision: str, device: str, dtype: str,
-) -> tuple[object, object]:
+) -> tuple[Any, Any]:
     """Load the HF model + processor at the pre-flight-resolved revision.
     Isolated for monkeypatching in unit tests."""
-    import torch
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    import torch  # type: ignore[import-not-found]
+    from transformers import (  # type: ignore[import-not-found]
+        AutoModelForVision2Seq, AutoProcessor,
+    )
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                    "float32": torch.float32}[dtype]
     model = AutoModelForVision2Seq.from_pretrained(
@@ -463,12 +466,14 @@ class LocalGemmaVLMLabeler:
         if config.resolved_checkpoint is None:
             raise ValueError("resolved_checkpoint must be set by pre-flight (§2.5)")
         self._config = config
-        self._model, self._processor = _hf_load_model_and_processor(
+        model, processor = _hf_load_model_and_processor(
             model_id=config.model_id,
             revision=config.resolved_checkpoint,
             device=config.device,
             dtype=config.dtype,
         )
+        self._model: Any = model
+        self._processor: Any = processor
 
     def model_identity(self) -> ModelIdentity:
         return ModelIdentity(
@@ -510,13 +515,15 @@ class LocalGemmaVLMLabeler:
         return parse_and_validate(decoded.strip(),
                                   set(request["allowed_labels"]))
 
-    def _timeout_guard(self):  # type: ignore[return]
+    def _timeout_guard(self) -> AbstractContextManager[None]:
         import contextlib
         import signal
+        from collections.abc import Iterator
+        from types import FrameType
 
-        @contextlib.contextmanager  # type: ignore[misc]
-        def _gm():  # type: ignore[return]
-            def _handler(signum, frame):  # type: ignore[no-untyped-def]
+        @contextlib.contextmanager
+        def _gm() -> Iterator[None]:
+            def _handler(signum: int, frame: FrameType | None) -> None:
                 raise TimeoutError(
                     f"inference exceeded {self._config.timeout_sec}s"
                 )

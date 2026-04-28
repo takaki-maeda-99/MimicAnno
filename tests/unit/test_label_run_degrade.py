@@ -4,20 +4,15 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-import pytest
-
 from mimicanno.config import VLMConfig
 from mimicanno.vlm_labeler import (
     FixtureVLMLabeler,
     LabelerRuntimeError,
-    VLMLabeler,
-    VLMRequest,
+    ModelIdentity,
     VLMResponse,
     label_run,
-    ModelIdentity,
 )
 from tests.unit.helpers_phase1 import make_synthetic_phase1_run
-
 
 FIXT = Path(__file__).resolve().parents[1] / "fixtures" / "vlm"
 

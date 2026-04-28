@@ -6,8 +6,6 @@ splicing in image tokens at the [KEYFRAMES] marker.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from mimicanno.vlm_labeler import REJECT_REASONS, RejectReason, VLMRequest
 
 _REJECT_AMENDMENT_BY_REASON: dict[RejectReason, str] = {
@@ -34,7 +32,7 @@ assert set(_REJECT_AMENDMENT_BY_REASON) == set(REJECT_REASONS), (
 KEYFRAMES_MARKER = "[KEYFRAMES]"
 
 
-def _fmt_optional_float(v: Optional[float]) -> str:
+def _fmt_optional_float(v: float | None) -> str:
     if v is None:
         return "null"
     return f"{v:.6g}"
@@ -43,7 +41,7 @@ def _fmt_optional_float(v: Optional[float]) -> str:
 def build_prompt(
     request: VLMRequest,
     attempt: int,
-    last_reject_reason: Optional[RejectReason],
+    last_reject_reason: RejectReason | None,
 ) -> str:
     """Construct the prompt text for one VLM call.
 

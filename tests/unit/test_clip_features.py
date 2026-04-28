@@ -5,12 +5,10 @@ import numpy as np
 import pytest
 
 from mimicanno.clip_features import (
-    RobotStateSummary,
     compute_keyframe_offsets,
     compute_robot_state_summary,
 )
 from mimicanno.config import ClipFeatureConfig
-
 
 # ---- compute_keyframe_offsets ---------------------------------------------
 
@@ -43,7 +41,6 @@ def test_summary_no_eef_returns_null_speed_and_dwell() -> None:
     """When EEF velocity is unavailable, both mean_eef_speed_mps and
     dwell_fraction MUST be None (spec §2.4 ClipFeatureConfig note)."""
     fps = 30.0
-    duration = 1.0  # 30 frames
     gripper = np.linspace(0.0, 1.0, num=30, dtype=np.float64)
     cfg = ClipFeatureConfig()
     summ = compute_robot_state_summary(
@@ -99,9 +96,9 @@ def test_summary_dwell_fraction_with_eef() -> None:
 
 def test_clip_feature_extractor_composes(tmp_path) -> None:
     """ClipFeatureExtractor.extract() returns frames + summary."""
-    from tests.fixtures.synthesize import synthesize_minimal_mp4
     from mimicanno.clip_features import ClipFeatureExtractor
     from mimicanno.schema import BoundaryRef, SubtaskSegment
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
     video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
     seg = SubtaskSegment(
         segment_id="s_000", episode_id="ep", start_frame=0, end_frame=29,

@@ -28,6 +28,11 @@ dev = [
   "ruff>=0.4",
   "mypy>=1.10",
 ]
+vlm = [
+  "huggingface_hub>=0.30",
+  "transformers>=5.5",
+  "Pillow>=10",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["mimicanno"]

@@ -8,7 +8,6 @@ import numpy as np
 from mimicanno.config import ClipFeatureConfig
 from mimicanno.schema import BoundaryRef, SubtaskSegment
 
-
 _DEFAULT_ALLOWED_LABELS = [
     "idle", "approach_object", "align_gripper", "grasp_object",
     "lift_object", "move_to_target", "align_to_target",
@@ -29,7 +28,9 @@ class StubClipFeatureExtractor:
         self, *, segment, gripper, eef_velocity, keyframes_per_segment,
     ):
         from mimicanno.clip_features import (
-            ClipFeatures, compute_keyframe_offsets, compute_robot_state_summary,
+            ClipFeatures,
+            compute_keyframe_offsets,
+            compute_robot_state_summary,
         )
         offsets = compute_keyframe_offsets(
             segment.start_frame, segment.end_frame, keyframes_per_segment,

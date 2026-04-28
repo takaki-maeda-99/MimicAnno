@@ -4,8 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from mimicanno.vlm_prompt import build_prompt
+
 from mimicanno.vlm_labeler import VLMRequest
+from mimicanno.vlm_prompt import build_prompt
 
 SNAPS = Path(__file__).resolve().parents[1] / "snapshots" / "phase2"
 
