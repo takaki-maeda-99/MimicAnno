@@ -10,6 +10,7 @@ import pytest
 
 from mimicanno.config import TrackingConfig, VLMConfig
 from mimicanno.object_tracker.propagator import BBox, GapEvent, Track, TrackSample
+from mimicanno.object_tracker.signals import ObjectSignals
 from mimicanno.schema import ObjectStateSummary
 from mimicanno.vlm_labeler import FixtureVLMLabeler
 from tests.unit.helpers_phase1 import make_synthetic_phase1_run
@@ -105,7 +106,7 @@ def _make_gapped_track(
     )
 
 
-def _make_signals(tracks: list[Track], n_frames: int) -> object:
+def _make_signals(tracks: list[Track], n_frames: int) -> ObjectSignals:
     """Compute ObjectSignals with no gripper track (no distances)."""
     from mimicanno.object_tracker.signals import compute_object_signals
     return compute_object_signals(
