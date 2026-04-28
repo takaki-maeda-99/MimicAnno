@@ -409,6 +409,13 @@ class TracksTrack:
                     f"frame[{i}]={samples[i].frame} <= frame[{i - 1}]={samples[i - 1].frame}"
                 )
         gap_events = [TracksGap.from_dict(g, n_frames=n_frames) for g in d["gap_events"]]
+        for i in range(1, len(gap_events)):
+            prev, curr = gap_events[i - 1], gap_events[i]
+            if prev.to_frame >= curr.from_frame:
+                raise ValueError(
+                    f"gap_events must be strictly frame-ascending and non-overlapping; "
+                    f"got prev.to_frame={prev.to_frame} >= curr.from_frame={curr.from_frame}"
+                )
         return cls(
             track_id=str(d["track_id"]),
             role=role,
@@ -563,6 +570,14 @@ class TracksFile:
             raise ValueError(f"track_stride_frames={stride!r} must be int >= 1")
         tracking_plan = TracksTrackingPlan.from_dict(d["tracking_plan"])
         tracks = [TracksTrack.from_dict(t, n_frames=n_frames) for t in d["tracks"]]
+        # Validate track_id uniqueness within file
+        seen_ids: set[str] = set()
+        for t in tracks:
+            if t.track_id in seen_ids:
+                raise ValueError(
+                    f"track_id={t.track_id!r} appears more than once within the file"
+                )
+            seen_ids.add(t.track_id)
         # Validate at-most-one primary per role
         primary_roles: set[str] = set()
         for t in tracks:

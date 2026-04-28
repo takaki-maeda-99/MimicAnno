@@ -305,6 +305,42 @@ def test_stats_wall_time_negative():
         TracksFile.from_dict(d)
 
 
+def test_track_id_duplicate_within_file():
+    """spec §3.2: track_id must be unique within the file."""
+    d = _make_minimal().to_dict()
+    second = dict(d["tracks"][0])
+    second["primary"] = False  # avoid triggering the primary-role check
+    second["role"] = "target"
+    # keep the same track_id — this is the violation
+    d["tracks"].append(second)
+    d["stats"]["n_tracks"] = 2
+    d["stats"]["n_samples_total"] = 6
+    with pytest.raises(ValueError, match="track_id"):
+        TracksFile.from_dict(d)
+
+
+def test_gap_events_not_frame_ascending():
+    """spec §3.2: gap_events must be strictly frame-ascending."""
+    d = _make_minimal().to_dict()
+    d["tracks"][0]["gap_events"] = [
+        {"from_frame": 500, "to_frame": 600, "reason": "sam3_lost"},
+        {"from_frame": 200, "to_frame": 300, "reason": "sam3_lost"},
+    ]
+    with pytest.raises(ValueError, match="frame-ascending"):
+        TracksFile.from_dict(d)
+
+
+def test_gap_events_overlapping():
+    """spec §3.2: gap_events must be non-overlapping (prev.to_frame < curr.from_frame)."""
+    d = _make_minimal().to_dict()
+    d["tracks"][0]["gap_events"] = [
+        {"from_frame": 100, "to_frame": 300, "reason": "sam3_lost"},
+        {"from_frame": 200, "to_frame": 400, "reason": "sam3_lost"},
+    ]
+    with pytest.raises(ValueError, match="frame-ascending"):
+        TracksFile.from_dict(d)
+
+
 # ---------------------------------------------------------------------------
 # NaN handling for mean_track_score
 # ---------------------------------------------------------------------------
