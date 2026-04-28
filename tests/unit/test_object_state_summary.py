@@ -291,8 +291,89 @@ def test_distance_none_when_no_gripper_track() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 6a: max_speed None when all speed is NaN
+# ---------------------------------------------------------------------------
+
+
+def test_max_speed_none_when_all_speed_nan() -> None:
+    """primary_object_max_speed is None when all object_speed values are NaN.
+
+    Tests a missing branch: spec §5.2 step 5 sets primary_max_speed based on
+    nanmax of the speed segment, but if all values are NaN, nanmax returns NaN,
+    which should coerce to None.
+    """
+    from mimicanno.clip_features import compute_object_state_summary
+
+    # Segment [0, 4], primary object visible with valid center but all-NaN speed.
+    n_frames = 5
+    tracks = [
+        make_center_track(
+            "obj_a", "object", "red block", primary=True,
+            samples=[(0, 0.5, 0.5), (4, 0.5, 0.5)],
+        ),
+    ]
+    signals = make_signals(n_frames, tracks)
+
+    # Manually set the speed array to all NaN for the primary object
+    primary_id = tracks[0].track_id
+    signals.object_speed[primary_id] = np.full(n_frames, np.nan)
+
+    config = TrackingConfig()
+    summary = compute_object_state_summary(
+        tracks,
+        segment_start_frame=0,
+        segment_end_frame=4,
+        object_signals=signals,
+        config=config,
+    )
+    assert summary is not None
+    assert summary.primary_object_max_speed is None
+
+
+# ---------------------------------------------------------------------------
 # Test 6: Speed and displacement
 # ---------------------------------------------------------------------------
+
+
+def test_displacement_none_when_no_adjacent_non_nan_pair() -> None:
+    """primary_object_displacement is None when no two adjacent frames are both non-NaN.
+
+    Tests a missing branch: spec §5.2 step 5 sums displacement over adjacent
+    pairs where both centers are non-NaN. If no such pair exists (e.g., every
+    other frame is NaN), has_pair remains False and displacement is None.
+    """
+    from mimicanno.clip_features import compute_object_state_summary
+
+    # Segment [0, 4] with 5 frames. Center values: valid at frames 0,2,4; NaN at 1,3.
+    n_frames = 5
+    tracks = [
+        make_center_track(
+            "obj_a", "object", "red block", primary=True,
+            samples=[(0, 0.5, 0.5), (4, 0.5, 0.5)],
+        ),
+    ]
+    signals = make_signals(n_frames, tracks)
+
+    # Manually set center array: frames 0,2,4 are valid; frames 1,3 are NaN.
+    primary_id = tracks[0].track_id
+    centers = signals.object_center[primary_id]
+    # centers[0] is already set by make_signals from the sample at frame 0
+    # centers[4] is already set by the sample at frame 4
+    # Set frames 1 and 3 to NaN (frame 2 stays NaN from interpolation or default)
+    centers[1] = [np.nan, np.nan]
+    centers[2] = [np.nan, np.nan]
+    centers[3] = [np.nan, np.nan]
+
+    config = TrackingConfig()
+    summary = compute_object_state_summary(
+        tracks,
+        segment_start_frame=0,
+        segment_end_frame=4,
+        object_signals=signals,
+        config=config,
+    )
+    assert summary is not None
+    assert summary.primary_object_displacement is None
 
 
 def test_speed_and_displacement() -> None:
@@ -408,6 +489,89 @@ def test_iou_at_end_below_threshold_false() -> None:
     )
     assert summary is not None
     assert summary.primary_object_at_target_at_end is False
+
+
+def test_iou_at_end_just_below_threshold_returns_false() -> None:
+    """IoU approximately 0.0398 (strictly between 0.03 and 0.05) → False.
+
+    Plan-required boundary stress test: spec §5.2 step 6 requires IoU > 0.05
+    (strict), not >= 0.05. This test crafts two bboxes with overlap that
+    produces IoU ≈ 0.0398 to ensure the strict inequality is enforced.
+    """
+    from mimicanno.clip_features import compute_object_state_summary
+
+    # Two 0.3x0.3 boxes with offset ~0.217 produce IoU ≈ 0.0398.
+    # Verified: BBox(0.0, 0.0, 0.3, 0.3).iou(BBox(0.217, 0.217, 0.3, 0.3)) = 0.039795
+    n_frames = 5
+    tracks = [
+        make_track(
+            "obj_a", "object", "red block", primary=True,
+            samples=[
+                (0, 0.0, 0.0, 0.3, 0.3),
+                (4, 0.0, 0.0, 0.3, 0.3),
+            ],
+        ),
+        make_track(
+            "tgt_a", "target", "bin A", primary=True,
+            samples=[
+                (0, 0.1, 0.1, 0.3, 0.3),
+                (4, 0.217, 0.217, 0.3, 0.3),
+            ],
+        ),
+    ]
+    signals = make_signals(n_frames, tracks)
+    config = TrackingConfig()
+    summary = compute_object_state_summary(
+        tracks,
+        segment_start_frame=0,
+        segment_end_frame=4,
+        object_signals=signals,
+        config=config,
+    )
+    assert summary is not None
+    assert summary.primary_object_at_target_at_end is False
+
+
+# ---------------------------------------------------------------------------
+# Test 7b: Prompt deduplication
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_deduplication() -> None:
+    """Two Track instances with same role + same prompt but different index.
+
+    Both tracks are fully visible. The first is primary=True. Expected:
+    result.object_prompts contains the prompt exactly once (deduplication).
+    """
+    from mimicanno.clip_features import compute_object_state_summary
+
+    # Two object tracks, both with prompt "red block", different indices (0 and 1).
+    # Both visible in segment [0, 4]. Only track 0 is primary.
+    n_frames = 5
+    tracks = [
+        make_center_track(
+            "obj_a", "object", "red block", primary=True,
+            samples=[(0, 0.5, 0.5), (4, 0.5, 0.5)],
+        ),
+        make_center_track(
+            "obj_b", "object", "red block", primary=False,
+            samples=[(0, 0.5, 0.5), (4, 0.5, 0.5)],
+        ),
+    ]
+    # Manually set different indices to distinguish them
+    tracks[0].index = 0
+    tracks[1].index = 1
+    signals = make_signals(n_frames, tracks)
+    config = TrackingConfig()
+    summary = compute_object_state_summary(
+        tracks,
+        segment_start_frame=0,
+        segment_end_frame=4,
+        object_signals=signals,
+        config=config,
+    )
+    assert summary is not None
+    assert summary.object_prompts == ["red block"]  # Exactly once, not twice
 
 
 # ---------------------------------------------------------------------------
