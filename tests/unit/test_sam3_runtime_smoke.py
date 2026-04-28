@@ -76,28 +76,28 @@ def test_sam3_runtime_load_raises_extras_missing_when_transformers_unavailable(
 def test_sam3_runtime_load_raises_init_failed_on_pretrained_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SAM3Runtime.load() wraps from_pretrained errors in SAM3InitFailed."""
+    """SAM3Runtime.load() wraps from_pretrained errors in SAM3InitFailed.
+
+    Sam3Processor.from_pretrained is called first in load(), so failing it
+    here exercises the try/except wrapper without needing to also fail
+    Sam3Model.from_pretrained (it is never reached).
+    """
     from mimicanno.errors import SAM3InitFailed
     from mimicanno.object_tracker import sam3_runtime
     from mimicanno.object_tracker.sam3_runtime import SAM3Runtime
 
-    # Let the import guard pass, but make from_pretrained raise.
     monkeypatch.setattr(sam3_runtime, "_ensure_transformers_sam3_importable", lambda: None)
 
     fake_processor = mock.MagicMock()
     fake_processor.from_pretrained.side_effect = RuntimeError("weights not found")
-
-    fake_tracker = mock.MagicMock()
 
     with mock.patch.dict(
         sys.modules,
         {
             "transformers": mock.MagicMock(
                 Sam3Processor=fake_processor,
-                Sam3Model=mock.MagicMock(
-                    from_pretrained=mock.MagicMock(side_effect=RuntimeError("weights not found"))
-                ),
-                Sam3TrackerVideoModel=fake_tracker,
+                Sam3Model=mock.MagicMock(),
+                Sam3TrackerVideoModel=mock.MagicMock(),
             )
         },
     ), pytest.raises(SAM3InitFailed) as exc_info:

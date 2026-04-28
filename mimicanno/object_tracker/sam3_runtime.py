@@ -71,37 +71,24 @@ def _ensure_transformers_sam3_importable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _extract_bboxes_scores(
-    output: Any,
-    image_h: int,
-    image_w: int,
-) -> list[tuple[BBox, float]]:
-    """Convert Sam3ImageSegmentationOutput to a list of (BBox, score) pairs.
+def _extract_bboxes_scores(output: Any) -> list[tuple[BBox, float]]:
+    """Convert Sam3ImageSegmentationOutput to (BBox, score) pairs sorted desc.
 
-    Assumes output has:
-      - output.pred_boxes: Tensor of shape (1, N, 4) in cxcywh format, values
-        in [0, 1] (normalized by image dimensions).
-      - output.pred_scores (or logits_per_image): Tensor of shape (1, N).
+    Returns BBoxes with top-left x/y + w/h in normalized [0, 1] coords.
 
-    The resulting BBox uses top-left x/y + w/h in [0, 1] (spec §2.4).
-
-    Sorted by descending score.
-
-    TODO(Task 25): Confirm the exact field names on Sam3ImageSegmentationOutput
-    against real weights.  The HF transformers 5.5 docs list `pred_boxes` and
-    `pred_scores`; if the real model uses different field names (e.g.,
-    `logits_per_image`, `boxes`) update this helper and remove this marker.
+    TODO(Task 25): The output is assumed to expose `pred_boxes` (shape (1, N, 4),
+    cxcywh, normalized [0, 1]) and `pred_scores` (shape (1, N)). Confirm the
+    exact attribute names + normalization against real `Sam3Model` weights and
+    update this helper if the API differs (e.g., `logits_per_image`, `boxes`,
+    pixel-space outputs).
     """
     import torch
 
-    # pred_boxes: (1, N, 4) cxcywh in [0, 1]
-    # TODO(Task 25): verify field name `pred_boxes` against real Sam3Model output
-    pred_boxes: Any = output.pred_boxes  # shape (1, N, 4)
-    # TODO(Task 25): verify field name `pred_scores` against real Sam3Model output
-    pred_scores: Any = output.pred_scores  # shape (1, N)
+    pred_boxes: Any = output.pred_boxes
+    pred_scores: Any = output.pred_scores
 
-    boxes = pred_boxes[0]   # (N, 4)
-    scores = pred_scores[0]  # (N,)
+    boxes = pred_boxes[0]
+    scores = pred_scores[0]
 
     if isinstance(scores, torch.Tensor):
         scores_np: np.ndarray = scores.detach().cpu().numpy()
@@ -115,19 +102,18 @@ def _extract_bboxes_scores(
 
     results: list[tuple[BBox, float]] = []
     for i in range(int(scores_np.shape[0])):
-        cx, cy, bw, bh = float(boxes_np[i, 0]), float(boxes_np[i, 1]), float(boxes_np[i, 2]), float(boxes_np[i, 3])
-        x = cx - bw / 2.0
-        y = cy - bh / 2.0
-        # Clamp to valid unit-square
-        x = max(0.0, min(x, 1.0 - bw))
-        y = max(0.0, min(y, 1.0 - bh))
-        bw = max(1e-6, min(bw, 1.0))
-        bh = max(1e-6, min(bh, 1.0))
+        cx = float(boxes_np[i, 0])
+        cy = float(boxes_np[i, 1])
+        # Clamp w/h FIRST so that derived x/y respect the unit square.
+        bw = float(np.clip(boxes_np[i, 2], 1e-6, 1.0))
+        bh = float(np.clip(boxes_np[i, 3], 1e-6, 1.0))
+        x = float(np.clip(cx - bw / 2.0, 0.0, 1.0 - bw))
+        y = float(np.clip(cy - bh / 2.0, 0.0, 1.0 - bh))
         score = float(scores_np[i])
         try:
             bbox = BBox(x=x, y=y, w=bw, h=bh)
         except ValueError:
-            continue  # skip degenerate boxes
+            continue
         results.append((bbox, score))
 
     results.sort(key=lambda t: t[1], reverse=True)
@@ -226,19 +212,17 @@ class SAM3Runtime:
             List of (BBox, score) sorted by descending score. May be empty if
             the model detects nothing.
 
-        TODO(Task 25): Confirm the Sam3Model.forward() call signature and that
-        `Sam3Processor` accepts `text=[prompt]` + `images=[pil_image]` inputs.
-        Also confirm the output class is Sam3ImageSegmentationOutput (or
-        equivalent) and that post-processing via _extract_bboxes_scores is
-        correct. Update if the actual API differs.
+        TODO(Task 25): Confirm against real `facebook/sam3` weights that (a)
+        `Sam3Processor.__call__(text=[prompt], images=[pil_image], return_tensors="pt")`
+        produces the kwargs expected by `Sam3Model.forward(**inputs)`, and
+        (b) the resulting `Sam3ImageSegmentationOutput` is the input shape
+        `_extract_bboxes_scores` consumes. Update both call sites if the
+        actual API differs.
         """
         from PIL import Image
 
         pil_image = Image.fromarray(frame)
-        h, w = frame.shape[:2]
 
-        # TODO(Task 25): confirm processor input format (text vs. input_ids,
-        # images vs. pixel_values) against real Sam3Processor API.
         inputs = self._processor(
             text=[prompt],
             images=[pil_image],
@@ -246,11 +230,9 @@ class SAM3Runtime:
         )
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
-        # TODO(Task 25): confirm Sam3Model.forward() kwarg names match inputs
-        # produced by Sam3Processor (no extra adapter needed).
         output = self._model(**inputs)
 
-        return _extract_bboxes_scores(output, image_h=h, image_w=w)
+        return _extract_bboxes_scores(output)
 
     def propagate(
         self,
@@ -274,28 +256,25 @@ class SAM3Runtime:
             FramePropagationResult for each frame. detections[prompt] is None
             if the tracker lost the object for that frame.
 
-        TODO(Task 25): Confirm Sam3TrackerVideoInferenceSession instantiation
-        API: constructor args, how to register initial prompts + bboxes, and
-        the per-frame inference call signature. The HF transformers docs for
-        Sam3TrackerVideoInferenceSession may use a context-manager or an
-        explicit add_new_points_or_box() style API (similar to SAM 2). Update
-        this method once verified against real weights.
+        TODO(Task 25): Confirm three things against real `Sam3TrackerVideoModel`
+        weights, then remove this marker:
+        (a) **Session creation:** `tracker_model.get_inference_session()` is
+            assumed; the real API may use a constructor (`Sam3TrackerVideoInferenceSession(model)`)
+            or context manager.
+        (b) **Initial prompt registration:** `session.add_new_points_or_box(
+            obj_id, box, frame_idx)` is assumed (mirrors SAM 2). Confirm box
+            format (xyxy vs xywh) and coord space (normalized [0, 1] vs pixel).
+        (c) **Per-frame call + output shape:** `session.propagate_in_video(frame,
+            frame_idx)` is assumed to return a dict keyed by `obj_id` with
+            `{"box": [...], "score": float}`. Confirm method name, arg names,
+            and per-object result shape — including whether the session needs
+            explicit cleanup at the end.
         """
         from PIL import Image
 
-        # TODO(Task 25): confirm Sam3TrackerVideoInferenceSession constructor
-        # and initialization API.  The implementation below mirrors the
-        # Sam2VideoPredictor pattern; adjust if the real API differs.
         session = self._tracker_model.get_inference_session()
 
-        # Register initial bboxes per prompt.
-        # TODO(Task 25): confirm the method name and kwarg names for adding
-        # initial object prompts (box coordinates in xyxy or xywh? normalized
-        # or pixel? what dtype does the session expect?).
         for obj_idx, (_prompt, bbox) in enumerate(prompts_with_initial_bbox):
-            # Convert normalized BBox to xyxy format (normalized [0,1]).
-            # TODO(Task 25): confirm whether session expects normalized [0,1]
-            # or pixel coords, and xyxy vs xywh.
             box_xyxy = [
                 bbox.x,
                 bbox.y,
@@ -313,9 +292,6 @@ class SAM3Runtime:
         for frame_idx, frame_array in frames:
             pil_frame = Image.fromarray(frame_array)
 
-            # TODO(Task 25): confirm per-frame propagation API on
-            # Sam3TrackerVideoInferenceSession (method name, arg names, and
-            # output format — expected to return per-object masks/boxes/scores).
             frame_result = session.propagate_in_video(
                 frame=pil_frame,
                 frame_idx=frame_idx,
@@ -323,23 +299,17 @@ class SAM3Runtime:
 
             detections: dict[str, tuple[BBox, float] | None] = {}
             for obj_idx, prompt in enumerate(prompts_list):
-                # TODO(Task 25): confirm how per-object detections are accessed
-                # from frame_result (e.g., frame_result[obj_idx] or
-                # frame_result.boxes[obj_idx] / frame_result.scores[obj_idx]).
                 obj_result = frame_result.get(obj_idx)
                 if obj_result is None:
                     detections[prompt] = None
                     continue
 
-                # TODO(Task 25): confirm field names for box + score in
-                # per-object result (box in normalized [0,1] xyxy? xywh?).
                 box = obj_result.get("box")
                 score = obj_result.get("score")
                 if box is None or score is None:
                     detections[prompt] = None
                     continue
 
-                # Convert xyxy normalized -> BBox (xywh normalized)
                 x0, y0, x1, y1 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
                 bw = max(1e-6, x1 - x0)
                 bh = max(1e-6, y1 - y0)
@@ -351,21 +321,17 @@ class SAM3Runtime:
 
             yield FramePropagationResult(frame=frame_idx, detections=detections)
 
-        # TODO(Task 25): confirm whether Sam3TrackerVideoInferenceSession
-        # needs explicit cleanup (e.g., session.close() or context manager exit).
-
     def close(self) -> None:
-        """Release model resources. Idempotent — safe to call multiple times."""
+        """Release model resources. Idempotent — safe to call multiple times.
+
+        TODO(Task 25): If `Sam3Model` / `Sam3TrackerVideoModel` expose an
+        explicit `release()` / `cpu()` / `to_empty()` method to free CUDA
+        memory deterministically, call it here in addition to dropping
+        references.
+        """
         if self._closed:
             return
         self._closed = True
-        # Release references so that Python/CUDA can free memory.
-        # TODO(Task 25): if transformers provides an explicit model.release()
-        # or similar method, call it here.
-        del self._model
-        del self._processor
-        del self._tracker_model
-        # Avoid AttributeError on subsequent close() calls by resetting to None.
         self._model = None
         self._processor = None
         self._tracker_model = None
