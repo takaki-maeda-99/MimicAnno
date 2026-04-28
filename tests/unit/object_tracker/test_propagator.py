@@ -688,3 +688,76 @@ def test_no_initial_detections_returns_empty() -> None:
         config=config,
     )
     assert tracks == []
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Empty-samples track with stride < n_frames - 1 covers full range
+# ---------------------------------------------------------------------------
+
+
+def test_empty_samples_track_with_stride_covers_full_range() -> None:
+    """Empty-samples track (all frames None) with stride < n_frames-1 yields gap [0, n_frames-1].
+
+    This is the spec §2.4.2 requirement: "Tracks with empty samples are
+    returned even if `samples == []`. Such tracks have `gap_events`
+    covering `[0, n_frames - 1]`."
+
+    Bug scenario: stride=10, n_frames=100 => iterator has 11 frames.
+    All return None => resulting gap was [0, 90] instead of [0, 99].
+    """
+    bbox = BBox(0.1, 0.1, 0.2, 0.2)
+    # stride=10, n_frames=100: iterator = [0, 10, 20, ..., 90, 99]
+    # All 11 frames return None
+    prop_results: dict[int, dict[str, tuple[BBox, float] | None]] = {}
+    for f in range(0, 100, 10):
+        prop_results[f] = {"red block": None}
+    prop_results[99] = {"red block": None}  # Last frame always included
+
+    fixture = FixtureSAM3Tracker(propagation_results=prop_results)
+    plan = _plan_single_object("red block", bbox)
+    config = _make_config(max_gap_frames=30, stride=10)
+    tracks = _run(fixture, plan, n_frames=100, stride=10, config=config)
+
+    assert len(tracks) == 1
+    track = tracks[0]
+    assert track.samples == []
+    assert len(track.gap_events) == 1
+    gap = track.gap_events[0]
+    assert gap.from_frame == 0
+    assert gap.to_frame == 99  # SPEC REQUIREMENT: must be n_frames - 1
+    assert gap.reason == "sam3_lost"
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Empty-samples track with low-conf reason
+# ---------------------------------------------------------------------------
+
+
+def test_empty_samples_track_low_conf_reason() -> None:
+    """Empty-samples track where all detections have low score => reason == 'sam3_low_conf'.
+
+    When a track has no samples because all frames failed the score threshold,
+    the synthesized gap should have reason='sam3_low_conf' (not 'sam3_lost').
+    """
+    bbox = BBox(0.1, 0.1, 0.2, 0.2)
+    low_score = 0.10  # below min_track_score=0.30
+    # stride=10, n_frames=100: iterator = [0, 10, 20, ..., 90, 99]
+    # All 11 frames return detections but with low score
+    prop_results: dict[int, dict[str, tuple[BBox, float] | None]] = {}
+    for f in range(0, 100, 10):
+        prop_results[f] = {"red block": (bbox, low_score)}
+    prop_results[99] = {"red block": (bbox, low_score)}  # Last frame
+
+    fixture = FixtureSAM3Tracker(propagation_results=prop_results)
+    plan = _plan_single_object("red block", bbox)
+    config = _make_config(max_gap_frames=30, stride=10, min_track_score=0.30)
+    tracks = _run(fixture, plan, n_frames=100, stride=10, config=config)
+
+    assert len(tracks) == 1
+    track = tracks[0]
+    assert track.samples == []
+    assert len(track.gap_events) == 1
+    gap = track.gap_events[0]
+    assert gap.from_frame == 0
+    assert gap.to_frame == 99
+    assert gap.reason == "sam3_low_conf"
