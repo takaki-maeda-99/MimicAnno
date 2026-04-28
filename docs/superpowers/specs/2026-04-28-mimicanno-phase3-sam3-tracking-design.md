@@ -1189,21 +1189,25 @@ class TrackingConfig:
         }
 ```
 
-`model_config` is similarly gated:
+`ModelConfig` is value-gated, not key-gated (per the implementation reality note above):
 
 ```python
-def build_model_config(config, *, target_phase: int) -> dict[str, Any]:
-    payload = {
-        "vlm_model":       config.vlm.model_id       if target_phase >= 2 else None,
-        "vlm_checkpoint":  config.vlm.checkpoint_sha256 if target_phase >= 2 else None,
-    }
-    if target_phase >= 3:
-        payload["sam3_model"]      = config.tracking.sam3_model_id
-        payload["sam3_checkpoint"] = _sha256_of_path(config.tracking.sam3_checkpoint)
-    return payload
+def build_model_config(config, *, target_phase: int) -> ModelConfig:
+    return ModelConfig(
+        vlm_model       = config.vlm.model_id            if target_phase >= 2 else None,
+        vlm_checkpoint  = config.vlm.resolved_checkpoint if target_phase >= 2 else None,
+        sam3_model      = config.tracking.sam3_model_id  if target_phase >= 3 else None,
+        sam3_checkpoint = _sha256_of_path(config.tracking.sam3_checkpoint)
+                                                          if target_phase >= 3 else None,
+    )
+# All four keys remain in ModelConfig.to_dict() output regardless of target_phase
+# (existing serialization invariant, preserves Phase 1/2 hashes).
 ```
 
-Phase 1/2 payloads omit the `sam3_*` keys entirely (NOT serialize them as `null`). The parent spec §4 manifest example showing `"sam3": null` refers to the **manifest** field for downstream observability, NOT the hash payload. The Phase 1/2 manifest will continue to display `model_versions.sam3 = null` for human readability while the hash payload omits the key.
+**Implementation reality (corrects an earlier draft of this spec):** The existing `mimicanno/config.py` `ModelConfig` dataclass was shipped with `sam3_model: str | None` and `sam3_checkpoint: str | None` fields **pre-declared from Phase 1/2 onward**. Phase 1/2 invocations have always serialized them as `null` into the hash payload via `ModelConfig.to_dict()`. Changing that now would invalidate every existing Phase 1/2 `canonical_name`. Therefore:
+- The `sam3_*` keys are **always present** in the canonical JSON (null for Phase 1/2, populated strings for Phase 3). They do NOT require gating.
+- Only the genuinely new fields require `target_phase`-gated serialization: `AnnotationConfig.tracking` (new sub-block) and the 2 new keys on `BoundaryWeights` (`gripper_object_distance_threshold_crossing`, `object_motion_start_stop`).
+- `build_model_config(...)` therefore reduces to `ModelConfig(vlm_model=..., vlm_checkpoint=..., sam3_model=config.tracking.sam3_model_id if target_phase >= 3 else None, sam3_checkpoint=_sha256_of_path(...) if target_phase >= 3 else None).to_dict()` — the gating sets the value to `None` for Phase 1/2 (which is the existing behavior), not the key's presence. The Phase 1/2 manifest will continue to display `model_versions.sam3 = null` for human readability while the hash payload omits the key.
 
 `tracks.json` follows the same omit-when-not-applicable rule for any future field additions.
 
