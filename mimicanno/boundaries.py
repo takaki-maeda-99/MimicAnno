@@ -199,8 +199,12 @@ def detect_gripper_object_distance_threshold_crossing(
             # Skip NaN frames (spec §4.1.1: NaN frames produce no event)
             if np.isnan(d_prev) or np.isnan(d_cur):
                 continue
-            # Check for sign change across threshold
-            if (d_prev - threshold) * (d_cur - threshold) >= 0:
+            # Check for sign change across threshold (spec §4.1.1: emit iff signs differ).
+            # np.sign returns 0 when value == threshold, so exact-threshold frames emit
+            # as long as the other frame's sign differs (0 != ± both count as crossing).
+            s_prev = np.sign(d_prev - threshold)
+            s_cur = np.sign(d_cur - threshold)
+            if s_prev == s_cur:
                 continue
             # Edge suppression: windowed delta requires t-w >= 0 and t+w < n
             t_left = t - w
@@ -241,7 +245,7 @@ def detect_object_motion_start_stop(
     events: list[RawEvent] = []
     for _track_id, v in per_track_speed.items():
         n = len(v)
-        window = max(1, round(min_sec * fps))
+        window = max(1, round(min_sec * fps))  # max(1, ...) guards against fps * min_sec rounding to 0 (would emit on every frame transition); spec §4.1.2 silent on this corner.
         for t in range(n):
             # Edge suppression: both windows must fit
             if t - window < 0 or t + window - 1 >= n:
@@ -413,6 +417,8 @@ class Phase3BoundaryDetector:
 
         ``final_disabled_sources`` is the input list extended with auto-derived
         disabled sources from §4.4.
+
+        Phase 1 disabled rules (eef_*, action_norm) are NOT auto-derived here — caller must pre-populate ``disabled_sources`` for those. Owned by Task 19's orchestrator.
         """
         # --- §4.4 auto-derive disabled sources ---
         auto_disabled: set[str] = set()
