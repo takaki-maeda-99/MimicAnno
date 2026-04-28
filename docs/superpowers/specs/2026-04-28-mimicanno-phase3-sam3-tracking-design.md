@@ -617,7 +617,7 @@ Per parent spec §5.3 wording (gripper-biased precision) for Phase 3:
 - **Two-source promote:** `gripper_transition + gripper_object_distance_threshold_crossing = 0.70` (canonical grasp/release event); `gripper_object_distance_threshold_crossing + eef_velocity_valley = 0.40`; `gripper_object_distance_threshold_crossing + object_motion_start_stop = 0.35` (object enters/leaves gripper region, both signals fire).
 - **Object-only paths do NOT promote:** `object_motion_start_stop + eef_velocity_valley = 0.25`, `object_motion_start_stop + eef_acceleration_peak + action_norm_change = 0.15`. Intent: object signals augment gripper signals; purely visual handoffs without gripper involvement are out of Phase 3 boundary scope (Phase 4-5 manual edit).
 
-This intent is documented in `Phase3BoundaryWeights` docstring and replayable via the integration test `test_phase3_weights_intent.py`.
+This intent is documented in `BoundaryWeights.phase3_defaults` docstring and replayable via the integration test `test_phase3_weights_intent.py`.
 
 ### 4.4 `disabled_sources` rules
 
@@ -915,7 +915,7 @@ def annotate_episode_phase3(inputs, config):
 ```python
 @dataclass(slots=True, frozen=True)
 class TrackingConfig:
-    sam3_model_id: str = "facebook/sam3.1"               # informational; encoded in config_hash
+    sam3_model_id: str = "facebook/sam3.1"               # informational; encoded in config_hash via model_config (NOT TrackingConfig.to_dict — see §9.1)
     sam3_checkpoint: Path | None = None                  # required for Phase 3; CLI validates
     track_stride_frames: int | None = None               # None -> max(1, round(fps / 3))
     min_track_score: float = 0.30
@@ -988,12 +988,12 @@ All non-zero-exit aborts emit a structured stderr JSON identical in shape to Pha
 {"error_code": "...", "message": "...", "context": {...}, "ts": "<ISO-8601>"}
 ```
 
-New error codes (defined in `mimicanno.errors`):
+New error codes (defined in `mimicanno.errors`). String values are canonical; tests, `degrade_reason` enum, and orchestrator call sites MUST use these exact strings:
 - `sam3_init_failed` — degrade reason; **never goes to stderr** (degrade exits 0)
 - `sam3_runtime_failed` — abort code; **goes to stderr**, exits non-zero
 - `sam3_extras_missing` — abort code; **goes to stderr**, exits non-zero
-- `gemma_planner_no_objects` — degrade reason; **never goes to stderr** (degrade exits 0)
-- `sam3_initial_detection_failed` — degrade reason; **never goes to stderr** (degrade exits 0)
+- `gemma_no_object_prompts` — degrade reason; **never goes to stderr** (degrade exits 0)
+- `sam3_no_initial_detection` — degrade reason; **never goes to stderr** (degrade exits 0)
 
 **Channel assignment is exclusive:** every Phase 3 error code is either a degrade reason (logged to `notes`, exits 0) or an abort code (stderr JSON, non-zero exit). No code uses both channels. The whole-run degrade path (§7.2) writes the chained `cause` from any underlying exception into the `notes` entry text; it does NOT also emit stderr JSON for the same event.
 
@@ -1019,26 +1019,28 @@ def to_dict(self, *, target_phase: int) -> dict[str, Any]:
     return payload
 
 # Single BoundaryWeights class with two Phase 3 fields gated out:
-def BoundaryConfig.to_dict(self, *, target_phase: int) -> dict[str, Any]:
-    return {
-        "weights":          self.weights.to_dict(target_phase=target_phase),
-        "thresholds":       self.thresholds.to_dict(),
-        "merge_window_sec": self.merge_window_sec,
-        "score_threshold":  self.score_threshold,
-        "disabled_sources": sorted(self.disabled_sources),
-    }
+class BoundaryConfig:
+    def to_dict(self, *, target_phase: int) -> dict[str, Any]:
+        return {
+            "weights":          self.weights.to_dict(target_phase=target_phase),
+            "thresholds":       self.thresholds.to_dict(),
+            "merge_window_sec": self.merge_window_sec,
+            "score_threshold":  self.score_threshold,
+            "disabled_sources": sorted(self.disabled_sources),
+        }
 
-def BoundaryWeights.to_dict(self, *, target_phase: int) -> dict[str, float]:
-    payload = {
-        "gripper_transition":   self.gripper_transition,
-        "eef_velocity_valley":  self.eef_velocity_valley,
-        "eef_acceleration_peak": self.eef_acceleration_peak,
-        "action_norm_change":   self.action_norm_change,
-    }
-    if target_phase >= 3:
-        payload["gripper_object_distance_threshold_crossing"] = self.gripper_object_distance_threshold_crossing
-        payload["object_motion_start_stop"]                   = self.object_motion_start_stop
-    return payload
+class BoundaryWeights:
+    def to_dict(self, *, target_phase: int) -> dict[str, float]:
+        payload = {
+            "gripper_transition":     self.gripper_transition,
+            "eef_velocity_valley":    self.eef_velocity_valley,
+            "eef_acceleration_peak":  self.eef_acceleration_peak,
+            "action_norm_change":     self.action_norm_change,
+        }
+        if target_phase >= 3:
+            payload["gripper_object_distance_threshold_crossing"] = self.gripper_object_distance_threshold_crossing
+            payload["object_motion_start_stop"]                   = self.object_motion_start_stop
+        return payload
 
 # TrackingConfig MUST exclude sam3_model_id and sam3_checkpoint from its own to_dict():
 # those values are authoritative in model_config (below); double-serializing them into
@@ -1046,20 +1048,21 @@ def BoundaryWeights.to_dict(self, *, target_phase: int) -> dict[str, float]:
 # (b) the path-string in TrackingConfig vs the file-content sha256 in model_config would
 # produce different bytes for the same logical value, making the hash sensitive to the
 # checkpoint path on disk.
-def TrackingConfig.to_dict(self) -> dict[str, Any]:
-    return {
-        "track_stride_frames":           self.track_stride_frames,
-        "min_track_score":               self.min_track_score,
-        "max_gap_frames":                self.max_gap_frames,
-        "reacquisition_iou_threshold":   self.reacquisition_iou_threshold,
-        "visibility_threshold":          self.visibility_threshold,
-        "gripper_object_distance_threshold": self.gripper_object_distance_threshold,
-        "object_motion_threshold":       self.object_motion_threshold,
-        "object_motion_min_sec":         self.object_motion_min_sec,
-        "image_aspect_ratio_default":    self.image_aspect_ratio_default,
-        # NOTE: sam3_model_id / sam3_checkpoint are intentionally excluded;
-        # they live in model_config (build_model_config below).
-    }
+class TrackingConfig:
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "track_stride_frames":                self.track_stride_frames,
+            "min_track_score":                    self.min_track_score,
+            "max_gap_frames":                     self.max_gap_frames,
+            "reacquisition_iou_threshold":        self.reacquisition_iou_threshold,
+            "visibility_threshold":               self.visibility_threshold,
+            "gripper_object_distance_threshold":  self.gripper_object_distance_threshold,
+            "object_motion_threshold":            self.object_motion_threshold,
+            "object_motion_min_sec":              self.object_motion_min_sec,
+            "image_aspect_ratio_default":         self.image_aspect_ratio_default,
+            # NOTE: sam3_model_id / sam3_checkpoint are intentionally excluded;
+            # they live in model_config (build_model_config below).
+        }
 ```
 
 `model_config` is similarly gated:
