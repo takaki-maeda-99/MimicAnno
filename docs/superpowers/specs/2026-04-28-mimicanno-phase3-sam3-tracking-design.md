@@ -85,11 +85,19 @@ mimicanno annotate --target-phase 3 --vlm-model <id> --sam3-checkpoint <path> ..
   │
   ├─ [Phase 1 existing]   signals.compute → robot_signals
   │
-  ├─ [Phase 3 new — Stage 1b] tracking pipeline:
-  │      planner.plan(task_text, initial_frame, allowed_labels)
-  │        → if degrade-trigger: hand off to Phase 2 path, return Phase 2 run
-  │      sam3_runtime.load(checkpoint) → propagator.run → tracks
-  │      compute_object_signals(tracks) → object_signals
+  ├─ [Phase 3 new — Stage 1b] tracking pipeline (3 sub-steps, each gates the next):
+  │      Step A: planner.extract_entities(task_text, initial_frame, ...)
+  │              → EntityPlan
+  │              → if entities.object_prompts == []:
+  │                  degrade to Phase-3-objectless run (gemma_no_object_prompts)
+  │      Step B: sam3_runtime.load(checkpoint)
+  │              → if load fails: degrade to Phase-3-objectless run (sam3_init_failed)
+  │              ground_initial_detections(runtime, initial_frame, entities)
+  │              → TrackingPlan
+  │              → if no object prompts grounded:
+  │                  degrade to Phase-3-objectless run (sam3_no_initial_detection)
+  │      Step C: propagator.run(runtime, plan, ...) → tracks
+  │              compute_object_signals(tracks) → object_signals
   │
   ├─ [Phase 3 new — Stage 2] phase3_boundary_detector.detect(robot_signals, object_signals)
   │      → boundaries (6 sources, Phase 3 weights, score_threshold=0.30)
@@ -98,7 +106,7 @@ mimicanno annotate --target-phase 3 --vlm-model <id> --sam3-checkpoint <path> ..
   ├─ [Phase 3 new — Stage 3] phase3_labeling:
   │      per-segment compute_object_state_summary(tracks, segment)
   │      apply_phase3_labeling(segments, clip_features_with_object_state, vlm)
-  │        → per-segment fallback to Phase 2 path when summary is None
+  │        → per-segment fallback to Phase-2-prompt path when summary is None
   │      → labeled_segments
   │
   ├─ AnnotationResult assembled (labeled_segments + notes)
@@ -507,7 +515,7 @@ Fixtures are Phase 3's primary test surface. The CI pipeline runs the entire int
     "object_prompts":  ["red block"],
     "target_prompts":  ["bin A"],
     "tool_prompts":    ["gripper"],
-    "failed_prompts":  []
+    "failed_prompts":  []                       /* objects with role + prompt; see §3.2 */
   },
 
   "tracks": [
@@ -573,7 +581,7 @@ Fixtures are Phase 3's primary test surface. The CI pipeline runs the entire int
 | `tracking_plan.object_prompts` | ✓ | `list[str]` | Gemma planner output, may be empty (see §4.4) |
 | `tracking_plan.target_prompts` | ✓ | `list[str]` | Gemma planner output |
 | `tracking_plan.tool_prompts` | ✓ | `list[str]` | Gemma planner output |
-| `tracking_plan.failed_prompts` | ✓ | `list[str]` | Step-B-failed prompts; subset of `object/target/tool_prompts` |
+| `tracking_plan.failed_prompts` | ✓ | `list[{role, prompt}]` | Step-B-failed `(role, prompt)` pairs. Each element is `{"role": "object" \| "target" \| "tool", "prompt": <str>}`. Preserves cross-role distinctness so a prompt that exists in two roles can fail in one and survive in the other (mirrors the `(role, prompt)` tuple key in `TrackingPlan.initial_detections`, §2.4.0). Empty `[]` when every grounded prompt succeeded. |
 | `tracks` | ✓ | array of objects | 0+ tracks; `failed_prompts` are not present here |
 | `tracks[].track_id` | ✓ | string | Form `obj:role:slug:index`; unique within the file |
 | `tracks[].role` | ✓ | enum | `"object" | "target" | "tool"` |
@@ -907,9 +915,11 @@ def annotate_episode_phase3(inputs, config):
             entities=entities,
         )
         # All object prompts failed grounding → whole-run degrade
+        # (sam3_runtime is closed by the outer `finally:` block — close() is
+        # documented idempotent in §2.3 so the degrade path doesn't need its
+        # own close call here)
         object_grounded = [(r, p) for (r, p), _ in plan.initial_detections.items() if r == "object"]
         if not object_grounded:
-            sam3_runtime.close()
             return _degrade_to_phase3_objectless(
                 inputs, config, vlm, robot_signals, "sam3_no_initial_detection"
             )
@@ -1236,7 +1246,8 @@ Per-module unit tests with no external dependencies:
 - `tests/object_tracker/test_bbox.py` — `BBox.iou`, `BBox.center`, validation.
 - `tests/object_tracker/test_planner.py` — `LocalGemmaTrackingPlanner.extract_entities` retry on bad JSON, terminal `EntityPlan(object_prompts=[])` after `planner_max_retries`, duplicate-within-role rejection (`reject_reason="duplicate_prompt_within_role"`).
 - `tests/object_tracker/test_grounding.py` — `ground_initial_detections` builds `TrackingPlan` from `EntityPlan` + per-prompt SAM3 results; cross-role duplicate prompts (e.g. `object="red block"` + `target="red block"`) end up as distinct `(role, prompt)` keys in `initial_detections` (not conflated).
-- `tests/object_tracker/test_propagator.py` — gap consolidation (no `sam3_reacquired` reason), re-acquisition IoU branch (same track_id when IoU >= threshold, new index otherwise), primary marking with `*_prompts[0]` failed grounding (primary falls to `*_prompts[1]` if it survived Step B), deterministic ordering, single propagate-call-per-episode contract. Driven via `FixtureSAM3Tracker`.
+- `tests/object_tracker/test_propagator.py` — gap consolidation (asserts `GapEvent.reason` is restricted to `sam3_lost` / `sam3_low_conf`), re-acquisition IoU branch (same track_id when IoU >= threshold, new index otherwise), primary marking with `*_prompts[0]` failed grounding (primary falls to `*_prompts[1]` if it survived Step B), deterministic ordering, single propagate-call-per-episode contract. Driven via `FixtureSAM3Tracker`.
+- `tests/test_tracks_json_failed_prompts_roundtrip.py` — pin the `failed_prompts: list[{role, prompt}]` on-disk shape: write a `TrackingPlan` with cross-role duplicates (object="red block" succeeded, target="red block" failed) and assert the round-tripped JSON preserves both as distinct entries.
 - `tests/object_tracker/test_signals.py` — `compute_object_signals` distance + speed (image-width-normalized units, NOT image-diag — pin the formula), NaN handling at gaps and episode boundaries, primary track resolution, `object_center` populated for all roles (not just objects).
 - `tests/test_object_state_summary.py` — `compute_object_state_summary` visibility-threshold filter, primary-pair distance extraction, IoU-at-end proxy, None return on missing primary.
 - `tests/test_phase3_boundary_detector.py` — new sources fire under crafted signals; weight rebalance produces expected scores; `disabled_sources` rules; `BoundaryWeights.phase3_defaults()` values.
