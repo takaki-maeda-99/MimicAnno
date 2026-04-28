@@ -164,7 +164,14 @@ def _timeout_guard(timeout_sec: float) -> contextlib.AbstractContextManager[None
 
 
 def _call_gemma(handle: GemmaHandle, prompt: str, frame: np.ndarray) -> str:
-    """Call the Gemma model with the given prompt and frame image."""
+    """Call the Gemma model with the given prompt and frame image.
+
+    Runtime faults (CUDA OOM, device errors, etc.) propagate unwrapped — the
+    orchestrator (Task 19) classifies them. Only inference-level `TimeoutError`
+    is translated to a retry-eligible ``_PlannerLabelerError("timeout")``,
+    matching Phase 2's `LocalGemmaVLMLabeler.label_segment` separation between
+    `LabelerError` (retry-eligible) and `LabelerRuntimeError` (not).
+    """
     from PIL import Image
 
     pil_image = Image.fromarray(frame)
@@ -184,8 +191,6 @@ def _call_gemma(handle: GemmaHandle, prompt: str, frame: np.ndarray) -> str:
         )[0]
     except TimeoutError:
         raise _PlannerLabelerError("timeout") from None
-    except Exception as e:
-        raise _PlannerLabelerError("json_parse_error") from e
 
     if decoded.startswith(prompt):
         decoded = decoded[len(prompt):]
@@ -257,10 +262,16 @@ class LocalGemmaTrackingPlanner:
             try:
                 raw = _call_gemma(self._handle, prompt, initial_frame)
                 plan = _parse_planner_response(raw)
-                return plan
             except _PlannerLabelerError as e:
                 last_reject = e.reject_reason
                 continue
+            # Spec §2.2.1: empty `objects` collapses to the all-empty sentinel
+            # so caller's `object_prompts == []` check uniformly triggers the
+            # §7.2 gemma_no_object_prompts degrade regardless of whether
+            # targets/tools came back populated.
+            if not plan.object_prompts:
+                return EntityPlan(object_prompts=[], target_prompts=[], tool_prompts=[])
+            return plan
         return EntityPlan(object_prompts=[], target_prompts=[], tool_prompts=[])
 
 

@@ -197,6 +197,28 @@ def test_cross_role_duplicates_allowed() -> None:
     assert plan.tool_prompts == []
 
 
+def test_empty_objects_collapses_to_all_empty_sentinel() -> None:
+    """Spec §2.2.1: empty `objects` returns EntityPlan([], [], []) even when
+    targets/tools are populated, so the caller's `object_prompts == []`
+    degrade trigger fires uniformly."""
+    handle = _make_handle()
+    raw_json = '{"objects": [], "targets": ["bin A"], "tools": ["gripper"]}'
+
+    with mock.patch(
+        "mimicanno.object_tracker.planner._call_gemma", return_value=raw_json
+    ):
+        planner = LocalGemmaTrackingPlanner(handle)
+        plan = planner.extract_entities(
+            task_text="task",
+            initial_frame=_FRAME,
+            allowed_labels=_make_label_set(),
+        )
+
+    assert plan.object_prompts == []
+    assert plan.target_prompts == []
+    assert plan.tool_prompts == []
+
+
 # ---------------------------------------------------------------------------
 # 6. shared_handle() identity
 # ---------------------------------------------------------------------------
