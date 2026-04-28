@@ -1,12 +1,10 @@
 """Phase 3 entity-extraction Step A — planner Protocol + EntityPlan dataclass
-(spec §2.2). LocalGemmaTrackingPlanner is implemented in Task 15;
-this file lands the dataclass + Protocol stub so downstream tasks can import."""
++ LocalGemmaTrackingPlanner over a shared Gemma handle (spec §2.2)."""
 
 from __future__ import annotations
 
 import contextlib
 import json
-import re
 import signal
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -17,7 +15,7 @@ import numpy as np
 
 from mimicanno.labelset import LabelSet
 from mimicanno.object_tracker.track_id import ROLE
-from mimicanno.vlm_labeler import GemmaHandle
+from mimicanno.vlm_labeler import GemmaHandle, _strip_markdown_fences
 
 
 @dataclass(slots=True, frozen=True)
@@ -85,9 +83,6 @@ assert set(_PLANNER_REJECT_AMENDMENT_BY_REASON) == set(_PLANNER_REJECT_REASONS),
     "_PLANNER_REJECT_AMENDMENT_BY_REASON keys must match PlannerRejectReason exhaustively"
 )
 
-_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
-
-
 class _PlannerLabelerError(Exception):
     """Local planner parse/schema failure — retry-eligible. Does NOT extend
     LabelerError (Phase 2 hash invariant must stay closed)."""
@@ -95,11 +90,6 @@ class _PlannerLabelerError(Exception):
     def __init__(self, reject_reason: str) -> None:
         super().__init__(f"Planner output rejected: {reject_reason}")
         self.reject_reason: str = reject_reason
-
-
-def _strip_markdown_fences(text: str) -> str:
-    m = _FENCE_RE.match(text)
-    return m.group(1) if m else text
 
 
 def _build_planner_prompt(
@@ -171,6 +161,12 @@ def _call_gemma(handle: GemmaHandle, prompt: str, frame: np.ndarray) -> str:
     is translated to a retry-eligible ``_PlannerLabelerError("timeout")``,
     matching Phase 2's `LocalGemmaVLMLabeler.label_segment` separation between
     `LabelerError` (retry-eligible) and `LabelerRuntimeError` (not).
+
+    NOTE(Task 19): timeouts are retry-eligible HERE but Phase 2 maps the same
+    `TimeoutError` to a runtime fault (not retry-eligible). Task 19 must wrap
+    this call in a `_raise_classified`-equivalent so non-timeout torch/HF
+    errors get the same `LabelerRuntimeError("cuda_oom" / "device_unavailable" /
+    "model_unreachable")` shape as Phase 2 callers downstream.
     """
     from PIL import Image
 
