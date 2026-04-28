@@ -29,6 +29,43 @@ DEFAULT_BOUNDARY_WEIGHTS: dict[str, float] = {
     "acceleration": 0.15,
     "action": 0.1,
 }
+
+
+@dataclass(slots=True, frozen=True)
+class BoundaryWeights:
+    gripper: float = DEFAULT_BOUNDARY_WEIGHTS["gripper"]
+    velocity: float = DEFAULT_BOUNDARY_WEIGHTS["velocity"]
+    acceleration: float = DEFAULT_BOUNDARY_WEIGHTS["acceleration"]
+    action: float = DEFAULT_BOUNDARY_WEIGHTS["action"]
+    gripper_object_distance_threshold_crossing: float = 0.0  # Phase 3
+    object_motion_start_stop: float = 0.0                    # Phase 3
+
+    @classmethod
+    def phase3_defaults(cls) -> BoundaryWeights:
+        return cls(
+            gripper=0.45,
+            velocity=0.15,
+            acceleration=0.03,
+            action=0.02,
+            gripper_object_distance_threshold_crossing=0.25,
+            object_motion_start_stop=0.10,
+        )
+
+    def to_dict(self, *, target_phase: int) -> dict[str, float]:
+        payload: dict[str, float] = {
+            "gripper": self.gripper,
+            "velocity": self.velocity,
+            "acceleration": self.acceleration,
+            "action": self.action,
+        }
+        if target_phase >= 3:
+            payload["gripper_object_distance_threshold_crossing"] = (
+                self.gripper_object_distance_threshold_crossing
+            )
+            payload["object_motion_start_stop"] = self.object_motion_start_stop
+        return payload
+
+
 DEFAULT_BOUNDARY_THRESHOLDS: dict[str, float] = {
     "gripper_delta": 0.30,
     "velocity_valley": 0.05,
@@ -48,15 +85,15 @@ RUN_HASH_FALLBACK_PREFIX_LEN: int = 16
 
 @dataclass(slots=True)
 class BoundaryConfig:
-    weights: dict[str, float]
+    weights: BoundaryWeights
     thresholds: dict[str, float]
     merge_window_sec: float
     score_threshold: float
     disabled_sources: list[str]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, target_phase: int = 1) -> dict[str, Any]:
         return {
-            "weights": dict(self.weights),
+            "weights": self.weights.to_dict(target_phase=target_phase),
             "thresholds": dict(self.thresholds),
             "merge_window_sec": self.merge_window_sec,
             "score_threshold": self.score_threshold,
@@ -64,10 +101,10 @@ class BoundaryConfig:
         }
 
     @classmethod
-    def with_defaults(cls) -> BoundaryConfig:
+    def with_defaults(cls, *, weights: BoundaryWeights | None = None) -> BoundaryConfig:
         """BoundaryConfig populated with the spec-§4.3 default values."""
         return cls(
-            weights=dict(DEFAULT_BOUNDARY_WEIGHTS),
+            weights=weights if weights is not None else BoundaryWeights(),
             thresholds=dict(DEFAULT_BOUNDARY_THRESHOLDS),
             merge_window_sec=DEFAULT_MERGE_WINDOW_SEC,
             score_threshold=DEFAULT_SCORE_THRESHOLD,
@@ -137,6 +174,60 @@ class VLMConfig:
         }
 
 
+@dataclass(slots=True, frozen=True)
+class TrackingConfig:
+    """Phase 3 tracking configuration (spec §7.4).
+
+    NOTE: sam3_checkpoint (path string) is INTENTIONALLY excluded from
+    to_dict() — the authoritative hashed value is model_config.sam3_checkpoint
+    (sha256 of file content). Including the path here would make the hash
+    sensitive to filesystem location (spec §9.1)."""
+
+    sam3_model_id: str = "facebook/sam3"
+    sam3_checkpoint: str | None = None       # path; CLI preflight validates
+    track_stride_frames: int | None = None
+    min_track_score: float = 0.30
+    max_gap_frames: int | None = None
+    reacquisition_iou_threshold: float = 0.30
+    visibility_threshold: float = 0.5
+    gripper_object_distance_threshold: float = 0.05  # image-width-normalized
+    object_motion_threshold: float = 0.02            # image-width-normalized / sec
+    object_motion_min_sec: float = 0.10
+    image_aspect_ratio_default: float = 16.0 / 9.0
+    planner_max_retries: int = 3
+
+    def to_dict(self) -> dict[str, Any]:
+        # sam3_checkpoint is excluded — see class docstring + spec §9.1
+        return {
+            "sam3_model_id": self.sam3_model_id,
+            "track_stride_frames": self.track_stride_frames,
+            "min_track_score": self.min_track_score,
+            "max_gap_frames": self.max_gap_frames,
+            "reacquisition_iou_threshold": self.reacquisition_iou_threshold,
+            "visibility_threshold": self.visibility_threshold,
+            "gripper_object_distance_threshold": self.gripper_object_distance_threshold,
+            "object_motion_threshold": self.object_motion_threshold,
+            "object_motion_min_sec": self.object_motion_min_sec,
+            "image_aspect_ratio_default": self.image_aspect_ratio_default,
+            "planner_max_retries": self.planner_max_retries,
+        }
+
+    def effective_stride(self, fps: float) -> int:
+        """Default stride = max(1, round(fps / 3))."""
+        return (
+            self.track_stride_frames
+            if self.track_stride_frames is not None
+            else max(1, round(fps / 3))
+        )
+
+    def effective_max_gap_frames(self, fps: float) -> int:
+        return (
+            self.max_gap_frames
+            if self.max_gap_frames is not None
+            else round(fps * 1.0)
+        )
+
+
 def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
     """Load a BoundaryConfig YAML, layering supplied fields onto defaults.
 
@@ -201,7 +292,15 @@ def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
                 f"expected any of {sorted(_VALID_WEIGHT_KEYS)!r}",
                 {"path": str(path), "unknown_keys": unknown_w},
             )
-        cfg.weights = {k: float(v) for k, v in weights.items()}
+        # Merge user-supplied weights onto defaults for keys not specified.
+        default_w = BoundaryWeights()
+        merged = {
+            "gripper": float(weights.get("gripper", default_w.gripper)),
+            "velocity": float(weights.get("velocity", default_w.velocity)),
+            "acceleration": float(weights.get("acceleration", default_w.acceleration)),
+            "action": float(weights.get("action", default_w.action)),
+        }
+        cfg.weights = BoundaryWeights(**merged)
 
     if "thresholds" in raw:
         thresholds = raw["thresholds"]
@@ -254,17 +353,51 @@ class ModelConfig:
         }
 
 
+def build_model_config(
+    *,
+    target_phase: int,
+    vlm: VLMConfig | None,
+    tracking: TrackingConfig | None,
+    sam3_checkpoint_sha256: str | None,  # ← separate kwarg, NOT from tracking
+) -> ModelConfig:
+    """Build ModelConfig for a given target_phase. Phase 1/2: sam3_* are
+    None (preserves existing Phase 1/2 hashes). Phase 3: sam3_* are
+    populated from tracking config + the sha256 of the checkpoint file
+    (computed by preflight; see Task 17).
+
+    All four ModelConfig keys are always emitted by ModelConfig.to_dict()
+    (existing serialization invariant). Gating is value-only, NOT key-only
+    (spec §9.1 implementation reality note)."""
+    return ModelConfig(
+        vlm_model=vlm.model_id if (target_phase >= 2 and vlm is not None) else None,
+        vlm_checkpoint=(
+            vlm.resolved_checkpoint
+            if (target_phase >= 2 and vlm is not None)
+            else None
+        ),
+        sam3_model=(
+            tracking.sam3_model_id if (target_phase >= 3 and tracking is not None) else None
+        ),
+        sam3_checkpoint=sam3_checkpoint_sha256 if target_phase >= 3 else None,
+    )
+
+
 @dataclass(slots=True)
 class AnnotationConfig:
     boundary: BoundaryConfig
     target_phase: int
     model_config: ModelConfig
     vlm: VLMConfig | None = None  # required iff target_phase >= 2
+    tracking: TrackingConfig | None = None  # required iff target_phase >= 3
 
     def to_dict(self) -> dict[str, Any]:
-        ann_inner: dict[str, Any] = {"boundary": self.boundary.to_dict()}
+        ann_inner: dict[str, Any] = {
+            "boundary": self.boundary.to_dict(target_phase=self.target_phase),
+        }
         if self.vlm is not None:
             ann_inner["vlm"] = self.vlm.to_dict()
+        if self.target_phase >= 3 and self.tracking is not None:
+            ann_inner["tracking"] = self.tracking.to_dict()
         return {
             "annotation_config": ann_inner,
             "target_phase": self.target_phase,

@@ -342,7 +342,15 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     # Translate BoundaryConfig.weights short keys to detector source names.
     # e.g. {"gripper": 0.5} → {"gripper_transition": 0.5}
-    unknown_keys = [k for k in bcfg.weights if k not in _WEIGHT_KEY_TO_SOURCE]
+    weights_dict = bcfg.weights.to_dict(target_phase=req.config.target_phase)
+    # TODO(Task 10): extend _WEIGHT_KEY_TO_SOURCE with the 2 Phase 3 sources
+    # (gripper_object_distance_threshold_crossing, object_motion_start_stop) and
+    # rename the error code to "boundary_config.unknown_weight_key" to match the
+    # YAML loader. Currently this guard raises "config.unknown_weight_key" — a
+    # divergence from load_boundary_config_yaml. Phase 3 traffic will route
+    # through annotate_episode_phase3 (Task 19), so this guard is currently
+    # unreachable for Phase 3 inputs, but unifying the codes prevents drift.
+    unknown_keys = [k for k in weights_dict if k not in _WEIGHT_KEY_TO_SOURCE]
     if unknown_keys:
         raise MimicAnnoError(
             "config.unknown_weight_key",
@@ -350,7 +358,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             f"expected keys: {list(_WEIGHT_KEY_TO_SOURCE)!r}",
             {"unknown_keys": unknown_keys},
         )
-    detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in bcfg.weights.items()}
+    detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in weights_dict.items()}
     candidates = integrated_candidates(
         events,
         fps=fps,
@@ -407,7 +415,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 10) Build pipeline_params for manifest (records what was actually used).
     pipeline_params: dict[str, Any] = {
         "boundary": {
-            "weights": dict(bcfg.weights),
+            "weights": bcfg.weights.to_dict(target_phase=req.config.target_phase),
             "thresholds": dict(bcfg.thresholds),
             "merge_window_sec": bcfg.merge_window_sec,
             "score_threshold": bcfg.score_threshold,
