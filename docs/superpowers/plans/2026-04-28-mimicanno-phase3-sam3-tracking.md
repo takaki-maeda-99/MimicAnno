@@ -1959,6 +1959,8 @@ grep -rn "^def \|^class \|build_sam3" sam3/sam3/model_builder.py 2>/dev/null | h
 
 Identify the entry point (likely `sam3.model_builder.build_sam3(checkpoint=...)` or similar). Document the chosen entry in the file docstring of `sam3_runtime.py`.
 
+**Layering note:** `FramePropagationResult` is currently defined in `fixtures.py` (Task 7) and imported by both `SAM3Runtime` and `Propagator`. The implementer MAY move it to `sam3_runtime.py` (production module owns the contract type, fixtures imports it) — this is the more typical layering and avoids the production→fixtures import. Either layering works as long as both consumers see the same dataclass; the chosen layering should be consistent.
+
 - [ ] **Step 14.2: Implement `SAM3Runtime` (thin wrapper)**
 
 ```python
@@ -2097,7 +2099,16 @@ Step A only (spec §2.2.1). Shares the Gemma model handle with Phase 2's `LocalG
 - **`shared_handle()` returns the Gemma handle from a `LocalGemmaVLMLabeler`:** mock vlm; `LocalGemmaTrackingPlanner(vlm.shared_handle())` constructs without loading a new model.
 - **`attempt_max=N` honored:** `attempt_max=1` causes immediate empty EntityPlan on parse failure.
 
-- [ ] **Step 15.2: Implement `shared_handle` on `LocalGemmaVLMLabeler` if absent.** A thin object exposing `.model` and `.tokenizer` (or the equivalent, depending on Phase 2 implementation).
+- [ ] **Step 15.2: Implement `shared_handle` on `LocalGemmaVLMLabeler` if absent.**
+
+First, **inspect Phase 2's actual `LocalGemmaVLMLabeler` shape** to pin the exact attribute names that will be exposed by the handle:
+
+```bash
+grep -n "self\.\(model\|tokenizer\|processor\|_model\|_tokenizer\|_processor\)" \
+  mimicanno/vlm_labeler.py
+```
+
+Pin the attributes the handle will expose (typically `.model` + `.tokenizer`, or `.model` + `.processor` for multimodal). Document the chosen attribute set in the `shared_handle` docstring so Task 19's identity assertion (`id(planner.gemma_handle.model) == id(vlm.model)`) refers to a real attribute. If Phase 2's labeler exposes the model under a different name (e.g., `_model`), either rename in the handle or update Task 19's assertion to match.
 
 - [ ] **Step 15.3: Implement `LocalGemmaTrackingPlanner.extract_entities`** — Build the Step A prompt (one-shot JSON instruction asking for objects/targets/tools given task_text + initial_frame). Allowed-label semantic categories passed as guidance ("place_*" → expect targets). Retry policy mirrors Phase 2's `_REJECT_AMENDMENT_BY_REASON` pattern. On terminal failure or empty `objects`, return `EntityPlan(object_prompts=[], ...)`.
 
@@ -2179,7 +2190,7 @@ Adds `--sam3-checkpoint <path>` and `--track-stride-frames <int>` flags. Wires `
 - Test: `tests/unit/test_cli_phase3.py` (uses `typer.testing.CliRunner` like Phase 2 does)
 
 - [ ] **Step 18.1: Write the failing test**
-  - `--target-phase 3` without `--sam3-checkpoint` → exit 2, stderr JSON has `error_code` matching the Phase 2 pattern (`vlm_model_required` already covers vlm; mirror with `sam3_checkpoint_required` if not already a code — actually use `MissingDependencyError` parameterized on the missing field name).
+  - `--target-phase 3` without `--sam3-checkpoint` → exit 2, stderr JSON `error_code` is whatever `MissingDependencyError(field="--sam3-checkpoint")` produces (Phase 2 introduced `MissingDependencyError`; reuse it parameterized on the missing flag name — do NOT introduce a new `sam3_checkpoint_required` code).
   - `--target-phase 3` without `--vlm-model` → exit 2, error code `vlm_model_required`.
   - `--target-phase 3 --vlm-model X --sam3-checkpoint /missing/path` → exit non-zero, error code `sam3_checkpoint_not_found`.
   - `--target-phase 3 --vlm-model X --sam3-checkpoint <valid>` (with mocked sam3 import + mocked SAM3Runtime + Fixture planner) → reaches the Phase 3 orchestrator path.
@@ -2495,7 +2506,7 @@ env -u PYTHONPATH -u ROS_DISTRO -u AMENT_PREFIX_PATH \
                                          --ignore=tests/test_phase2_real_vlm.py
 ```
 
-Expected: every test PASS. Phase 1 baseline (224) + Phase 2 (42 new) + Phase 3 (estimate ~80 new based on 25 tasks with ~3 tests each in this plan) = ~346 tests total.
+Expected: every test PASS. Phase 1 baseline (224) + Phase 2 (42 new) + Phase 3 (estimate **120-150 new** — several tasks have 9-25 parametrized cases each: Task 4 = 16, Task 5 ≈ 14, Task 6 ≈ 25, Task 8 ≈ 11, Task 9 ≈ 9, Task 10 ≈ 14, etc.) = **~390-420 tests total**. Exact count is not asserted, just a sanity-check ballpark.
 
 - [ ] **Step 25.6: Commit gated smoke + milestone marker**
 
