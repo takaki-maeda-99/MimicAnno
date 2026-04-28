@@ -4,14 +4,13 @@ These fixtures provide no-GPU, no-model-weights test doubles for the core
 tracking loop. They support canned happy-path returns and configurable
 failure injection (e.g., raise on first call, raise at a specific frame).
 
-FramePropagationResult is the dataclass contract shared between fixtures
-and the real SAM3Runtime (which lands in Task 14).
+FramePropagationResult is defined in sam3_runtime (production owner) and
+re-exported here for backwards compatibility.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -19,19 +18,9 @@ import numpy as np
 from mimicanno.labelset import LabelSet
 from mimicanno.object_tracker.planner import EntityPlan
 from mimicanno.object_tracker.propagator import BBox
+from mimicanno.object_tracker.sam3_runtime import FramePropagationResult
 
-
-@dataclass(slots=True, frozen=True)
-class FramePropagationResult:
-    """Output of SAM3Runtime.propagate() — one frame's detection results.
-
-    frame: the integer frame index
-    detections: dict[prompt] -> (BBox, score) | None, where None means
-        the prompt was not detected or tracking was lost.
-    """
-
-    frame: int
-    detections: dict[str, tuple[BBox, float] | None]
+__all__ = ["FixtureSAM3Tracker", "FixtureTrackingPlanner", "FramePropagationResult"]
 
 
 class FixtureTrackingPlanner:

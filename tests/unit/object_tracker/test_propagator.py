@@ -29,6 +29,7 @@ from mimicanno.object_tracker.propagator import (
     Propagator,
     Track,
     TrackingPlan,
+    _build_frame_iterator,
 )
 
 # ---------------------------------------------------------------------------
@@ -238,6 +239,12 @@ def test_reacquisition_same_track_id_high_iou() -> None:
     frame_nums = [s.frame for s in tracks[0].samples]
     assert 0 in frame_nums
     assert 110 in frame_nums
+    # Should have exactly 1 gap event covering the lost frames
+    assert len(tracks[0].gap_events) == 1
+    gap = tracks[0].gap_events[0]
+    assert gap.from_frame == 10
+    assert gap.to_frame == 100
+    assert gap.reason == "sam3_lost"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +290,14 @@ def test_reacquisition_new_track_id_low_iou() -> None:
     assert any(s.frame == 0 for s in track0.samples)
     # track1 should have frame 110
     assert any(s.frame == 110 for s in track1.samples)
+    # track0: 1 gap event (frames 10-100 were None, then split at 110)
+    assert len(track0.gap_events) == 1
+    gap0 = track0.gap_events[0]
+    assert gap0.from_frame == 10
+    assert gap0.to_frame == 100
+    assert gap0.reason == "sam3_lost"
+    # track1: no gap events (immediately detected at frame 110 onward)
+    assert len(track1.gap_events) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -761,3 +776,17 @@ def test_empty_samples_track_low_conf_reason() -> None:
     assert gap.from_frame == 0
     assert gap.to_frame == 99
     assert gap.reason == "sam3_low_conf"
+
+
+# ---------------------------------------------------------------------------
+# Test 20: _build_frame_iterator guard — n_frames == 0
+# ---------------------------------------------------------------------------
+
+
+def test_build_frame_iterator_n_frames_zero() -> None:
+    """_build_frame_iterator returns [] when n_frames == 0 (no IndexError)."""
+    result = _build_frame_iterator(n_frames=0, stride=1)
+    assert result == []
+
+    result = _build_frame_iterator(n_frames=0, stride=10)
+    assert result == []

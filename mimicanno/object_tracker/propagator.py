@@ -118,6 +118,8 @@ class TrackingPlan:
 
 def _build_frame_iterator(n_frames: int, stride: int) -> list[int]:
     """Build frame indices: 0, stride, 2*stride, ... always including n_frames - 1."""
+    if n_frames == 0:
+        return []
     frames = list(range(0, n_frames, stride))
     last = n_frames - 1
     if frames[-1] != last:
@@ -348,10 +350,15 @@ class Propagator:
         # Step 1: Build frame iterator
         frame_indices = _build_frame_iterator(n_frames, stride)
 
-        # Step 2: Call runtime.propagate exactly once
-        # Build a dummy frames iterable: the fixture ignores the ndarray;
-        # the real SAM3Runtime reads from video_path but we pass frames as
-        # (index, dummy_array) so it can read the actual frame data itself.
+        # Step 2: Call runtime.propagate exactly once.
+        # frames is Iterator[tuple[int, np.ndarray]]. The ndarray is the actual
+        # decoded video frame; the caller (Task 19's orchestrator) must supply
+        # real frame data read from video_path. Here we pass a 1x1 placeholder
+        # ndarray because this Propagator does not read frames itself —
+        # FixtureSAM3Tracker ignores the array, and the real SAM3Runtime
+        # receives frames from the orchestrator.
+        # TODO(Task 19): replace this placeholder with real frame loading from
+        # video_path, injected by the orchestrator before calling Propagator.run.
         dummy = np.zeros((1, 1, 3), dtype=np.uint8)
         frames_iter = ((idx, dummy) for idx in frame_indices)
 

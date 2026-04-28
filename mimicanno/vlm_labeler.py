@@ -440,10 +440,8 @@ def _hf_load_model_and_processor(
 ) -> tuple[Any, Any]:
     """Load the HF model + processor at the pre-flight-resolved revision.
     Isolated for monkeypatching in unit tests."""
-    import torch  # type: ignore[import-not-found]
-    from transformers import (  # type: ignore[import-not-found]
-        AutoModelForVision2Seq, AutoProcessor,
-    )
+    import torch
+    from transformers import AutoModelForVision2Seq, AutoProcessor
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                    "float32": torch.float32}[dtype]
     model = AutoModelForVision2Seq.from_pretrained(

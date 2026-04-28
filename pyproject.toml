@@ -33,6 +33,13 @@ vlm = [
   "transformers>=5.5",
   "Pillow>=10",
 ]
+sam3 = [
+  "transformers>=5.5",
+  "Pillow>=10",
+  "torch>=2.4",
+  "torchvision>=0.19",
+  "huggingface_hub>=0.30",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["mimicanno"]
@@ -56,3 +63,18 @@ markers = [
 python_version = "3.11"
 strict = true
 files = ["mimicanno"]
+
+[[tool.mypy.overrides]]
+module = [
+  "huggingface_hub",
+  "huggingface_hub.*",
+  "transformers",
+  "transformers.*",
+  "torch",
+  "torch.*",
+  "torchvision",
+  "torchvision.*",
+  "PIL",
+  "PIL.*",
+]
+ignore_missing_imports = true

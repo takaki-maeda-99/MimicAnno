@@ -1,5 +1,5 @@
 """Object tracking module — orchestration, fixtures, and shared types."""
 
-from mimicanno.object_tracker.fixtures import FramePropagationResult
+from mimicanno.object_tracker.sam3_runtime import FramePropagationResult, SAM3Runtime
 
-__all__ = ["FramePropagationResult"]
+__all__ = ["FramePropagationResult", "SAM3Runtime"]
