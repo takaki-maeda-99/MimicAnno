@@ -617,6 +617,76 @@ class TracksFile:
         )
 
 
+@dataclass(slots=True)
+class ObjectStateSummary:
+    """Per-segment object/target/tool state derived from SAM3 tracks.
+    Used as the Phase 3 add-on to ClipFeatures and the VLM prompt."""
+
+    object_prompts: list[str]                       # visible >= visibility_threshold of seg
+    target_prompts: list[str]
+    tool_prompts:   list[str]                       # may be []
+
+    gripper_object_distance_at_start: float | None  # primary pair, image-width-normalized
+    gripper_object_distance_at_end:   float | None
+    gripper_object_distance_min:      float | None
+
+    primary_object_displacement: float | None       # image-width-normalized
+    primary_object_max_speed:    float | None       # image-width-normalized / sec
+
+    primary_object_at_target_at_end: bool | None    # bbox-IoU(obj_0, tgt_0) at last frame > 0.05
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "object_prompts": list(self.object_prompts),
+            "target_prompts": list(self.target_prompts),
+            "tool_prompts": list(self.tool_prompts),
+            "gripper_object_distance_at_start": self.gripper_object_distance_at_start,
+            "gripper_object_distance_at_end": self.gripper_object_distance_at_end,
+            "gripper_object_distance_min": self.gripper_object_distance_min,
+            "primary_object_displacement": self.primary_object_displacement,
+            "primary_object_max_speed": self.primary_object_max_speed,
+            "primary_object_at_target_at_end": self.primary_object_at_target_at_end,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ObjectStateSummary:
+        return cls(
+            object_prompts=list(d["object_prompts"]),
+            target_prompts=list(d["target_prompts"]),
+            tool_prompts=list(d["tool_prompts"]),
+            gripper_object_distance_at_start=(
+                float(d["gripper_object_distance_at_start"])
+                if d["gripper_object_distance_at_start"] is not None
+                else None
+            ),
+            gripper_object_distance_at_end=(
+                float(d["gripper_object_distance_at_end"])
+                if d["gripper_object_distance_at_end"] is not None
+                else None
+            ),
+            gripper_object_distance_min=(
+                float(d["gripper_object_distance_min"])
+                if d["gripper_object_distance_min"] is not None
+                else None
+            ),
+            primary_object_displacement=(
+                float(d["primary_object_displacement"])
+                if d["primary_object_displacement"] is not None
+                else None
+            ),
+            primary_object_max_speed=(
+                float(d["primary_object_max_speed"])
+                if d["primary_object_max_speed"] is not None
+                else None
+            ),
+            primary_object_at_target_at_end=(
+                bool(d["primary_object_at_target_at_end"])
+                if d["primary_object_at_target_at_end"] is not None
+                else None
+            ),
+        )
+
+
 def _deep_jsonify(value: Any) -> Any:
     """Recursively convert nested dataclasses inside dict/list to dicts.
 
