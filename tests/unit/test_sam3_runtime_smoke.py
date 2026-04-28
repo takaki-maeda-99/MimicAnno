@@ -57,23 +57,6 @@ def test_frame_propagation_result_is_frozen() -> None:
         result.frame = 1  # type: ignore[misc]
 
 
-def test_sam3_extras_missing_raised_when_transformers_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """_ensure_transformers_sam3_importable() raises SAM3ExtrasMissing when
-    the transformers Sam3* symbols are not importable.
-    """
-    from mimicanno.errors import SAM3ExtrasMissing
-    from mimicanno.object_tracker import sam3_runtime
-
-    with mock.patch.object(
-        sam3_runtime,
-        "_ensure_transformers_sam3_importable",
-        side_effect=SAM3ExtrasMissing(),
-    ), pytest.raises(SAM3ExtrasMissing):
-        sam3_runtime._ensure_transformers_sam3_importable()
-
-
 def test_sam3_runtime_load_raises_extras_missing_when_transformers_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

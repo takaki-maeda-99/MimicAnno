@@ -16,16 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from mimicanno.errors import SAM3ExtrasMissing, SAM3InitFailed
 from mimicanno.object_tracker.propagator import BBox
-
-if TYPE_CHECKING:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # FramePropagationResult (production type; fixtures.py re-exports this)
@@ -167,13 +164,15 @@ class SAM3Runtime:
     def load(
         cls,
         *,
-        checkpoint: str = "facebook/sam3",
+        checkpoint: str | Path = "facebook/sam3",
         device: str = "cuda",
     ) -> SAM3Runtime:
         """Load SAM3 models from a HF checkpoint or local path.
 
         Args:
-            checkpoint: HF model id or local directory (e.g., "facebook/sam3").
+            checkpoint: HF model id or local directory (e.g., "facebook/sam3"
+                or `Path("/weights/sam3")`). Spec §2.3 declares `Path`; HF
+                `from_pretrained` accepts both, so we normalize via `str()`.
             device: torch device string (e.g., "cuda", "cpu").
 
         Returns:
@@ -192,13 +191,14 @@ class SAM3Runtime:
             Sam3TrackerVideoModel,
         )
 
+        checkpoint_str = str(checkpoint)
         try:
-            processor = Sam3Processor.from_pretrained(checkpoint)
-            model = Sam3Model.from_pretrained(checkpoint)
+            processor = Sam3Processor.from_pretrained(checkpoint_str)
+            model = Sam3Model.from_pretrained(checkpoint_str)
             model = model.to(device)
             model.eval()
 
-            tracker_model = Sam3TrackerVideoModel.from_pretrained(checkpoint)
+            tracker_model = Sam3TrackerVideoModel.from_pretrained(checkpoint_str)
             tracker_model = tracker_model.to(device)
             tracker_model.eval()
         except Exception as exc:
