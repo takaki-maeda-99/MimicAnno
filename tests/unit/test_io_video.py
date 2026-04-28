@@ -65,3 +65,25 @@ class TestMaterialize:
         dest = copy_video(tiny_mp4, tmp_path / "out.mp4")
         assert dest == tmp_path / "out.mp4"
         assert dest.read_bytes() == tiny_mp4.read_bytes()
+
+
+def test_extract_frames_at_indices_returns_correct_count(tmp_path: Path) -> None:
+    """Smoke: synthesize a 30-frame video, request frames [0, 10, 29]."""
+    from mimicanno.io_video import extract_frames_at_indices
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+    video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
+    frames = extract_frames_at_indices(video, [0, 10, 29])
+    assert len(frames) == 3
+    assert all(f.shape == (48, 64, 3) for f in frames)
+    assert all(f.dtype == np.uint8 for f in frames)
+
+
+def test_extract_frames_with_long_edge_resize(tmp_path: Path) -> None:
+    from mimicanno.io_video import extract_frames_at_indices
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+    video = synthesize_minimal_mp4(tmp_path, n_frames=10, width=128, height=96)
+    frames = extract_frames_at_indices(video, [0, 5], long_edge_px=64)
+    assert len(frames) == 2
+    # Long edge 128 → resized to 64; short edge 96 → 48.
+    for f in frames:
+        assert max(f.shape[:2]) == 64

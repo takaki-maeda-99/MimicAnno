@@ -18,10 +18,12 @@ class SyntheticEpisode:
     parquet: Path
 
 
-def _write_mp4(path: Path, n_frames: int, fps: float) -> Path:
+def _write_mp4(
+    path: Path, n_frames: int, fps: float, *, width: int = 64, height: int = 64
+) -> Path:
     writer = imageio_ffmpeg.write_frames(
         str(path),
-        size=(64, 64),
+        size=(width, height),
         fps=int(fps),
         codec="libx264",
         macro_block_size=1,
@@ -30,7 +32,7 @@ def _write_mp4(path: Path, n_frames: int, fps: float) -> Path:
     writer.send(None)
     for i in range(n_frames):
         # Simple gradient that advances each frame so SAM3 (later phases) sees motion.
-        frame = np.full((64, 64, 3), (i * 4) % 255, dtype=np.uint8)
+        frame = np.full((height, width, 3), (i * 4) % 255, dtype=np.uint8)
         frame[:, :, 1] = (i * 7) % 255
         writer.send(frame.tobytes())
     writer.close()
@@ -104,3 +106,14 @@ def synthesize_koch_episode(
     parquet = out_dir / f"{episode_id}.parquet"
     pq.write_table(table, parquet)
     return SyntheticEpisode(episode_id=episode_id, video=video, parquet=parquet)
+
+
+def synthesize_minimal_mp4(
+    out_dir: Path, n_frames: int, *, width: int = 64, height: int = 48,
+    fps: float = 30.0,
+) -> Path:
+    """Render an n_frames mp4 using the same _write_mp4 helper used by the
+    full-episode synthesizer. Returns the file path."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "minimal.mp4"
+    return _write_mp4(path, n_frames=n_frames, fps=fps, width=width, height=height)

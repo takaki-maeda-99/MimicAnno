@@ -26,10 +26,17 @@ from mimicanno.config import (  # noqa: E402
     AnnotationConfig,
     BoundaryConfig,
     ModelConfig,
+    VLMConfig,
     load_boundary_config_yaml,
 )
-from mimicanno.errors import MimicAnnoError, write_error_json  # noqa: E402
+from mimicanno.errors import (  # noqa: E402
+    MimicAnnoError,
+    VLMConfigInvalid,
+    VLMModelRequired,
+    write_error_json,
+)
 from mimicanno.pipeline import AnnotateRequest, annotate_episode  # noqa: E402
+from mimicanno.preflight import resolve_vlm_model  # noqa: E402
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -70,6 +77,26 @@ def annotate(
         "--merge-window-sec",
         help="Overrides merge_window_sec from --boundary-config / defaults (0.10).",
     ),
+    target_phase: int = typer.Option(
+        1, "--target-phase",
+        help="1 = boundaries+segments only; 2 = +VLM phase labeling.",
+    ),
+    vlm_model: str | None = typer.Option(
+        None, "--vlm-model",
+        help="HF model_id, '<id>@<sha>', or 'fixture://<path>'. Required when --target-phase >= 2.",
+    ),
+    vlm_keyframes: int = typer.Option(
+        4, "--vlm-keyframes",
+        help="Keyframes per segment passed to the VLM (>= 1).",
+    ),
+    vlm_max_retries: int = typer.Option(
+        3, "--vlm-max-retries",
+        help="Max attempts per segment before unknown_fallback.",
+    ),
+    offline: bool = typer.Option(
+        False, "--offline",
+        help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
+    ),
 ) -> None:
     """Annotate a single LeRobot episode and publish a Phase-1 run directory."""
     try:
@@ -85,10 +112,37 @@ def annotate(
         boundary.score_threshold = score_threshold
     if merge_window_sec is not None:
         boundary.merge_window_sec = merge_window_sec
+
+    # Phase 2 prerequisites: resolve --vlm-model via pre-flight (§2.5).
+    vlm_config: VLMConfig | None = None
+    if target_phase >= 2:
+        try:
+            if vlm_model is None:
+                raise VLMModelRequired(target_phase=target_phase)
+            preflight = resolve_vlm_model(vlm_model, offline=offline)
+            vlm_config = VLMConfig(
+                model_id=preflight.model_id,
+                resolved_checkpoint=preflight.resolved_checkpoint,
+                fixture_path=preflight.fixture_path,
+                keyframes_per_segment=vlm_keyframes,
+                max_retries=vlm_max_retries,
+            )
+            if vlm_config.keyframes_per_segment < 1:
+                raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
+        except MimicAnnoError as e:
+            write_error_json(e)
+            raise typer.Exit(code=2) from None
+
     cfg = AnnotationConfig(
         boundary=boundary,
-        target_phase=1,
-        model_config=ModelConfig(None, None, None, None),
+        target_phase=target_phase,
+        model_config=ModelConfig(
+            vlm_config.model_id if vlm_config else None,
+            vlm_config.resolved_checkpoint if vlm_config else None,
+            None,
+            None,
+        ),
+        vlm=vlm_config,
     )
     req = AnnotateRequest(
         video=video,

@@ -1,0 +1,5 @@
+{
+  "model_identity": {"vlm_model": "fixture", "vlm_checkpoint": "<auto>"},
+  "init_should_raise": "RuntimeError(\"fake init failure\")",
+  "segments": {}
+}

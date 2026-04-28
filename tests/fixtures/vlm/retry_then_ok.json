@@ -1,0 +1,24 @@
+{
+  "model_identity": {"vlm_model": "fixture", "vlm_checkpoint": "<auto>"},
+  "init_should_raise": null,
+  "segments": {
+    "s_001": {
+      "scenario": "ok_after_2_retries",
+      "responses": [
+        {"_emit_raw": "garbage not json"},
+        {"_emit_raw": "{\"phase\":\"made_up_label\",\"vlm_confidence\":0.5}"},
+        {
+          "phase": "grasp_object", "verb": "grasp", "object": "block",
+          "target": null, "vlm_confidence": 0.72, "evidence": "gripper closing"
+        }
+      ]
+    },
+    "*": {
+      "scenario": "ok_first_try",
+      "responses": [{
+        "phase": "idle", "verb": null, "object": null, "target": null,
+        "vlm_confidence": 0.6, "evidence": null
+      }]
+    }
+  }
+}

@@ -1,0 +1,32 @@
+SYSTEM:
+You are labeling a segment of a robot manipulation episode.
+Task instruction: "Pick the red block and place it in the white bin."
+Robot type: aloha, FPS: 30, Episode duration: 15.13s.
+This is segment 3 of 8.
+
+Allowed phase labels (label_version=manipulation.v1):
+  idle, approach_object, align_gripper, grasp_object, lift_object, move_to_target, align_to_target, place_object, release_object, retreat
+
+Robot-state summary for this segment:
+  duration_sec: 1.83
+  mean_eef_speed_mps: 0.082
+  gripper_open_fraction: 0.41
+  gripper_transitions: 1
+  dwell_fraction: 0.12
+
+USER:
+[KEYFRAMES]
+
+Respond with ONE JSON object, no prose, no markdown fences:
+{
+  "phase":          "<one of allowed labels, or 'unknown'>",
+  "verb":           "<short verb or null>",
+  "object":         "<short noun or null>",
+  "target":         "<short noun or null>",
+  "vlm_confidence": <float in [0.0, 1.0]>,
+  "evidence":       "<<=80 chars, or null>"
+}
+
+Your previous response was rejected: reject_reason=invalid_label.
+The 'phase' field MUST be one of the allowed labels OR exactly 'unknown'.
+Re-emit the JSON object exactly per the schema.
