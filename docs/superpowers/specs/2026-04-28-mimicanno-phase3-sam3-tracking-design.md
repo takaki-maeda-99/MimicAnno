@@ -44,7 +44,7 @@ If you're a reviewer evaluating this spec, the question is: **could a competent 
 
 In scope:
 
-- New `mimicanno/object_tracker/` package wrapping the vendored `sam3/` repo (parent spec §12 layout). Public API surface: `TrackingPlanner`, `SAM3Runtime`, `Propagator`, `compute_object_signals`, plus `Track` / `TrackSample` / `GapEvent` / `BBox` / `TrackingPlan` / `ObjectSignals` dataclasses.
+- New `mimicanno/object_tracker/` package wrapping the vendored `sam3/` repo (parent spec §12 layout). Public API surface: `TrackingPlanner` (Step A entity extraction), `ground_initial_detections` (Step B), `SAM3Runtime`, `Propagator` (Step C), `compute_object_signals`, plus `EntityPlan` / `TrackingPlan` / `Track` / `TrackSample` / `GapEvent` / `BBox` / `ObjectSignals` dataclasses.
 - New `tracks.json` artifact (schema §3) written under each Phase 3 canonical run directory.
 - Two new boundary sources with concrete formulae and a Phase 3 weight rebalance (§4) producing distinct `boundaries.json` content but the same schema as Phase 1/2.
 - `ObjectStateSummary` dataclass + `build_prompt` extension (§5) producing Phase 3-mode prompts. Phase 2 prompt is unchanged (default-None object-state field).
@@ -61,7 +61,7 @@ Non-goals:
 - **No multi-camera support.** Single video stream only. Multi-camera tracking is a future extension.
 - **No Phase 4 smoothing.** Phase 3 emits boundaries and labels at per-segment granularity exactly as Phase 1/2 did; smoothing/Viterbi is Phase 4.
 - **No `failure_flags` auto-inference.** Object-state signals (e.g. dropped grasp = object speed nonzero while gripper still closed) could in principle be used to flag `failed_grasp`; we defer this to Phase 4-5 to keep Phase 3 scoped to "tracking + labeling" rather than "tracking + labeling + failure inference."
-- **No HuggingFace transformers integration of SAM3.** SAM3 is not in `transformers` as of 2026-04; we vendor `sam3/` and import directly. The `sam3_runtime.py` wrapper isolates this so a future transformers integration is a swap-out.
+- **No mandatory HuggingFace transformers integration of SAM3.** Phase 3 ships against the vendored `sam3/` checkout for backend independence — the `sam3_runtime.py` wrapper isolates the choice so the underlying implementation (vendored Meta repo, HF transformers `Sam3Model` / `Sam3Processor`, or a future replacement) can be swapped without touching `mimicanno/object_tracker/{planner,propagator,signals}.py`. The wrapper contract, not the backend, is stable. Selecting between vendored vs transformers backends is deferred to the writing-plans phase.
 - **No SAM3 prompt iteration past Step A retries.** Gemma's entity-extraction call has the same retry budget as Phase 2 (max 3) and the same "fall back to empty list" terminal behavior.
 - **No new schema_version bumps.** All Phase 3 changes are additive-or-populate within existing 0.1.x schemas. The new `tracks.json` is a new artifact at `schema_version="0.1.0"`. Existing artifacts (`signals.json`, `boundaries.json`, `annotation.json`, `manifest.json`) get new but optional / already-declared fields populated.
 
@@ -121,8 +121,9 @@ New package + modules:
 ```
 mimicanno/
   object_tracker/       # NEW package — owns all SAM3 contact
-    __init__.py         # re-exports: TrackingPlanner, SAM3Runtime, Propagator,
-                        #   Track, TrackSample, GapEvent, BBox, TrackingPlan, ObjectSignals
+    __init__.py         # re-exports: TrackingPlanner, ground_initial_detections,
+                        #   SAM3Runtime, Propagator, EntityPlan, TrackingPlan,
+                        #   Track, TrackSample, GapEvent, BBox, ObjectSignals
     track_id.py         # slugify, make_track_id (parent spec §9.5)
     planner.py          # TrackingPlanner protocol; LocalGemmaTrackingPlanner
     sam3_runtime.py     # SAM3Runtime: load() / ground_on_frame() / propagate() / close()
@@ -207,27 +208,34 @@ def make_track_id(role: Literal["object", "target", "tool"], prompt: str, index:
 
 `make_track_id` is the **only** place in Phase 3 code that constructs a track_id string. Tests and viewer parse track_ids by splitting on `:` (4-tuple).
 
-### 2.2 `planner.py` — entity extraction (parent spec §9.1–§9.4)
+### 2.2 `planner.py` — Step A entity extraction (parent spec §9.1–§9.2)
+
+The planner is **Step A only** (Gemma entity extraction). Step B (SAM3 grounding on the initial frame) is a separate function in `propagator.py` (§2.4.0) that runs after `SAM3Runtime.load(...)`. This split is required because the orchestrator must know `EntityPlan.object_prompts` is non-empty before paying the SAM3 load cost (§7.1), and the planner must not depend on a runtime that hasn't been loaded yet.
 
 ```python
 @dataclass(slots=True, frozen=True)
-class TrackingPlan:
-    object_prompts: list[str]                # natural-language prompts
+class EntityPlan:
+    """Step A output. No SAM3 contact yet."""
+    object_prompts: list[str]                # natural-language prompts, deduped within role
     target_prompts: list[str]
     tool_prompts:   list[str]                # typically ["gripper"]; may be []
-    initial_detections: dict[str, BBox]      # prompt -> initial bbox (Step B output)
-    failed_prompts: list[str]                # Step A succeeded but Step B returned no bbox
+
+    def all_prompts_with_role(self) -> list[tuple[Literal["object", "target", "tool"], str]]:
+        """Stable ordering: objects, then targets, then tools; within each role,
+        original order from Gemma. Used by Step B grounding."""
 
 class TrackingPlanner(Protocol):
-    def plan(
+    def extract_entities(
         self,
         *,
         task_text: str,
-        initial_frame: np.ndarray,           # H×W×3 RGB uint8
+        initial_frame: np.ndarray,           # H×W×3 RGB uint8 — used as Gemma image input
         allowed_labels: LabelSet,
         attempt_max: int = 3,
-    ) -> TrackingPlan: ...
+    ) -> EntityPlan: ...
 ```
+
+`TrackingPlan` (the propagator's input) is built **after** Step B; see §2.4.0.
 
 #### 2.2.1 `LocalGemmaTrackingPlanner`
 
@@ -235,12 +243,13 @@ Implementation that **shares the Gemma model handle** with Phase 2's `LocalGemma
 
 - Constructed with `gemma_handle: GemmaHandle` (a thin reference type returned by `LocalGemmaVLMLabeler.shared_handle()`); does not load its own model.
 - Step A prompt: a single JSON-output instruction asking Gemma to emit `{"objects": [...], "targets": [...], "tools": [...]}` given task_text + initial_frame. Allowed-label semantic categories are passed as guidance (e.g. labels like `place_object` imply targets exist; tasks without `place_*` labels imply no targets).
-- Step A retry: max 3 attempts on JSON parse / schema failure. Each retry appends a stricter amendment (analogous to Phase 2's `_REJECT_AMENDMENT_BY_REASON`). On terminal failure, emit `TrackingPlan(object_prompts=[], target_prompts=[], tool_prompts=[], initial_detections={}, failed_prompts=[])` — caller treats this as the §7.2 `gemma_no_object_prompts` degrade trigger.
-- Step B: for each prompt, call `SAM3Runtime.ground_on_frame(initial_frame, prompt)`. Take the highest-scoring bbox. Empty bbox list → prompt added to `failed_prompts`, not to `initial_detections`.
+- Step A retry: max `attempt_max` attempts on JSON parse / schema failure. Each retry appends a stricter amendment (analogous to Phase 2's `_REJECT_AMENDMENT_BY_REASON`). On terminal failure, return `EntityPlan(object_prompts=[], target_prompts=[], tool_prompts=[])` — caller treats `object_prompts == []` as the §7.2 `gemma_no_object_prompts` degrade trigger.
+- Schema constraint: within each role, prompts MUST be deduped (case-insensitive). A duplicate is a Gemma JSON schema violation; counts as a retry-eligible failure with reject_reason `"duplicate_prompt_within_role"`.
+- `attempt_max` defaults to `config.tracking.planner_max_retries` (default 3). This is **independent of** Phase 2's `vlm.max_retries` — same Gemma model, but different operations may want different retry budgets.
 
 #### 2.2.2 `FixtureTrackingPlanner`
 
-Returns a fixed `TrackingPlan` constructed at instantiation. Used in unit tests and integration tests. Does not depend on Gemma or SAM3.
+Returns a fixed `EntityPlan` constructed at instantiation. Used in unit tests and integration tests. Does not depend on Gemma or SAM3.
 
 ### 2.3 `sam3_runtime.py` — SAM 3.1 model wrapper
 
@@ -281,6 +290,34 @@ class FramePropagationResult:
 
 The wrapper's job is to isolate every `import sam3.*` to this file. The choice of which SAM 3.1 entry point to call (model_builder + agent vs. SAM 3.1 video pipeline) is an implementation decision in the writing-plans phase — the contract above is what `Propagator` consumes.
 
+### 2.4.0 `propagator.py` — Step B grounding
+
+After `SAM3Runtime.load(...)` and **before** `Propagator.run(...)`:
+
+```python
+@dataclass(slots=True, frozen=True)
+class TrackingPlan:
+    """Step A + Step B combined. Consumed by Propagator."""
+    entities: EntityPlan
+    initial_detections: dict[tuple[Literal["object", "target", "tool"], str], BBox]
+    """(role, prompt) -> initial bbox. Tuple key handles cross-role duplicates
+    (e.g. role='object' prompt='red block' AND role='target' prompt='red block')
+    without conflation."""
+    failed_prompts: list[tuple[Literal["object", "target", "tool"], str]]
+    """(role, prompt) entries from EntityPlan whose Step B grounding returned no bbox."""
+
+def ground_initial_detections(
+    *,
+    runtime: SAM3Runtime,
+    initial_frame: np.ndarray,
+    entities: EntityPlan,
+) -> TrackingPlan:
+    """For each (role, prompt) in entities.all_prompts_with_role(), call
+    runtime.ground_on_frame(initial_frame, prompt). Take the highest-scoring
+    bbox; empty result -> failed_prompts. Returns the full TrackingPlan ready
+    for Propagator.run."""
+```
+
 ### 2.4 `propagator.py` — propagation + gap detection
 
 ```python
@@ -310,7 +347,12 @@ class TrackSample:
 class GapEvent:
     from_frame: int                     # inclusive
     to_frame: int                       # inclusive (single-frame gap: from == to)
-    reason: Literal["sam3_lost", "sam3_low_conf", "sam3_reacquired"]
+    reason: Literal["sam3_lost", "sam3_low_conf"]
+    """gap_events represent contiguous frame ranges where the bbox is invalid /
+    missing. Re-acquisition is implicit (it is the next sample after a gap) and
+    is NOT recorded here — that would conflate range semantics ('NaN inside this
+    range', consumed by ObjectSignals) with point semantics ('this single frame
+    was a track event'). Track-level events are not currently emitted."""
 
 @dataclass(slots=True)
 class Track:
@@ -339,17 +381,17 @@ class Propagator:
 
 #### 2.4.1 Algorithm
 
-1. Iterate video frames with `stride` step (frame indices `0, stride, 2*stride, …`). Always include the last frame (`n_frames - 1`) if not already aligned.
-2. Per frame, call `runtime.propagate(...)`. For each prompt in `plan.{object,target,tool}_prompts ∪ plan.initial_detections.keys()`, receive `(bbox, score) | None`.
-3. Per prompt, build samples:
-   - If `score >= config.min_track_score` and bbox is valid, emit a `TrackSample`.
-   - If `score < config.min_track_score` or bbox is missing, do not emit a sample. Track the gap.
-4. Gap consolidation: between two non-adjacent emitted samples `s_i.frame` and `s_{i+1}.frame`, the inclusive frame range `[s_i.frame + 1, s_{i+1}.frame - 1]` is a `GapEvent` with `reason="sam3_lost"` if no SAM3 result, or `"sam3_low_conf"` if SAM3 returned bbox below threshold. Single-stride gaps (i.e. one missed sub-sample) are still recorded — caller may filter by `to_frame - from_frame >= stride`.
-5. Re-acquisition: when a track has been in gap for `gap_frames > config.max_gap_frames`, the next emitted sample is checked against the last pre-gap sample's bbox via `iou(...)`:
-   - `iou >= config.reacquisition_iou_threshold` → same `track_id`, append `GapEvent(reason="sam3_reacquired", from_frame=current_frame, to_frame=current_frame)` immediately before this sample.
+1. Build the per-episode frame iterator: frame indices `0, stride, 2*stride, …`. Always include `n_frames - 1` if not already aligned.
+2. Call `runtime.propagate(frames=..., prompts_with_initial_bbox=[(prompt, bbox) for (role, prompt), bbox in plan.initial_detections.items()], stride=stride)` **exactly once per episode**. The runtime yields `FramePropagationResult` in ascending frame order. Calling `propagate` per-frame would reset SAM3's video-pipeline tracker state and break track identity.
+3. Stream-consume the iterator. For each `FramePropagationResult.detections[prompt]`:
+   - If non-None and `score >= config.min_track_score`, emit a `TrackSample` for that frame.
+   - Else, do not emit a sample. Record the gap reason for that frame (`"sam3_low_conf"` if score below threshold, else `"sam3_lost"`).
+4. Gap consolidation: between two non-adjacent emitted samples `s_i.frame` and `s_{i+1}.frame`, the inclusive frame range `[s_i.frame + 1, s_{i+1}.frame - 1]` is a single `GapEvent`. If any frame in the range had `"sam3_low_conf"`, the gap reason is `"sam3_low_conf"`; otherwise `"sam3_lost"`. Single-stride gaps (one missed sub-sample) are recorded; downstream consumers may filter by `to_frame - from_frame >= stride`.
+5. Re-acquisition (track identity preservation): when a track has been in gap for `gap_frames > config.max_gap_frames`, the next emitted sample is checked against the last pre-gap sample's bbox via `iou(...)`:
+   - `iou >= config.reacquisition_iou_threshold` → same `track_id`. The gap is closed implicitly by appending the next sample; no track-event is emitted (re-acquisition is implicit per `GapEvent` docstring).
    - `iou < config.reacquisition_iou_threshold` → start a new `Track` with index incremented (`obj:object:red_block:1`).
-6. Track ID assignment: `make_track_id(role, prompt, index)` where `index` increments across re-acquisition splits within the same (role, prompt).
-7. Primary marking: per role, find the first prompt in `plan.{role}_prompts` order that has a non-empty `plan.initial_detections[prompt]` entry (i.e. survived Step B grounding). The index=0 occurrence of that prompt gets `primary=True`. Non-primary tracks get `primary=False`. If every prompt for a role failed Step B, no track for that role is primary. Roles with no tracks → no primary.
+6. Track ID assignment: `make_track_id(role, prompt, index)` where `index` increments across re-acquisition splits within the same `(role, prompt)`.
+7. Primary marking: per role, find the first prompt in role-order from `plan.entities.{role}_prompts` that **survived Step B grounding** (the `(role, prompt)` tuple has an entry in `plan.initial_detections`, equivalently is NOT in `plan.failed_prompts`). The index=0 occurrence of that prompt gets `primary=True`. Non-primary tracks get `primary=False`. If every prompt for a role failed Step B, no track for that role is primary. Roles with no tracks → no primary.
 
 #### 2.4.2 Output guarantees
 
@@ -363,18 +405,33 @@ class Propagator:
 @dataclass(slots=True)
 class ObjectSignals:
     """Frame-aligned (length = n_frames) derived signals.
-    Frames inside any source track's gap_events are NaN."""
+    Frames inside any source track's gap_events are NaN.
+
+    All distances and speeds are in **image-width-normalized** units
+    (NOT image-diagonal — the formula is `sqrt(dx² + (dy/aspect)²)` which
+    re-isotropizes y to width-fraction units, giving width-normalized
+    distance, not diagonal-normalized; for an aspect-ratio-aware diag
+    normalization an additional `/ sqrt(1 + 1/aspect²)` factor would be
+    required, which we deliberately omit for simplicity since the policy
+    threshold 0.05 is pinned in the same units)."""
 
     gripper_object_distance: dict[str, np.ndarray]
-    """object_track_id -> per-frame distance (normalized image diag).
+    """object_track_id -> per-frame distance (image-width-normalized).
     NaN where either gripper or object bbox is missing at that frame.
     Dict is empty if no gripper tool track exists."""
 
     object_speed: dict[str, np.ndarray]
-    """object_track_id -> per-frame speed (normalized image diag / sec).
+    """object_track_id -> per-frame speed (image-width-normalized / sec).
     NaN where bbox is missing at that frame.
     Computed as central-difference on bbox-center after linear interp
     between non-NaN sub-sampled frames inside a non-gap region."""
+
+    object_center: dict[str, np.ndarray]
+    """track_id -> per-frame bbox-center, shape [n_frames, 2] in normalized
+    image coords. NaN where bbox is missing at that frame. Populated for
+    EVERY track (object, target, tool), not just objects — needed by
+    compute_object_state_summary's primary_object_displacement (§5.2 step 5)
+    and the IoU-at-end proxy (§5.2 step 6) without recomputing interpolation."""
 
     primary_object_track_id: str | None
     primary_target_track_id: str | None
@@ -396,7 +453,7 @@ For each `(object_track, gripper_tool_track)` pair where `gripper_tool_track is 
 
 1. Linear-interpolate each track's bbox-center across non-gap regions (one sub-sample to the next; do **not** interpolate across `gap_events`).
 2. At each frame `t`, both centers exist (non-NaN) iff `t ∉ gap_events(object_track) ∪ gap_events(gripper_tool_track)` and `t` is within the interpolation domain of both tracks.
-3. `gripper_object_distance[object_track_id][t]` = `sqrt((dx)² + (dy / image_aspect_ratio)²)` where `(dx, dy) = center_object - center_gripper`. Division by aspect ratio re-isotropizes to image-diag-normalized units.
+3. `gripper_object_distance[object_track_id][t]` = `sqrt((dx)² + (dy / image_aspect_ratio)²)` where `(dx, dy) = center_object - center_gripper`. Division by aspect ratio re-isotropizes y to width-fraction units. Result is **image-width-normalized**.
 4. Frames where either side is in a gap: `NaN`.
 
 #### 2.5.2 Speed computation
@@ -404,7 +461,7 @@ For each `(object_track, gripper_tool_track)` pair where `gripper_tool_track is 
 For each object track:
 
 1. Linear-interpolate bbox-center across non-gap regions (same rule).
-2. At each frame `t` in the interpolation domain: with `(dx, dy) = center(t+1) - center(t-1)` and inter-frame spacing `Δt = 1/fps`, define `vx = dx * fps / 2`, `vy = dy * fps / 2`. Then `object_speed[track_id][t] = sqrt(vx² + (vy / image_aspect_ratio)²)`. Aspect-ratio division re-isotropizes to image-diag-normalized units / sec.
+2. At each frame `t` in the interpolation domain: with `(dx, dy) = center(t+1) - center(t-1)` and inter-frame spacing `Δt = 1/fps`, define `vx = dx * fps / 2`, `vy = dy * fps / 2`. Then `object_speed[track_id][t] = sqrt(vx² + (vy / image_aspect_ratio)²)`. Aspect-ratio division re-isotropizes to image-width-normalized units / sec.
 3. Boundary frames (`t = 0`, `t = n_frames - 1`, frames adjacent to a gap) use forward/backward difference. Frames inside a gap: `NaN`.
 
 #### 2.5.3 Primary track resolution
@@ -416,13 +473,16 @@ For each object track:
 
 ```python
 class FixtureTrackingPlanner(TrackingPlanner):
-    """Returns a fixed TrackingPlan. Constructed with all fields explicit."""
-    def __init__(self, plan: TrackingPlan): ...
+    """Returns a fixed EntityPlan. Constructed with all fields explicit.
+    Used to drive Step A in tests without invoking Gemma."""
+    def __init__(self, entities: EntityPlan): ...
 
 class FixtureSAM3Tracker:
-    """Drop-in for SAM3Runtime in tests. Constructed with a per-frame fixture
-    of detections. ground_on_frame returns the fixture's initial detections;
-    propagate yields per-frame results from the fixture.
+    """Drop-in for SAM3Runtime in tests. Constructed with two fixture sources:
+    a per-prompt initial-detection map (consumed by ground_on_frame, drives
+    Step B), and a per-frame propagation result map (consumed by propagate,
+    drives Step C). Either source may be configured to raise on access to
+    simulate sam3_init_failed / sam3_runtime_failed degrade paths.
 
     Does not load any model; safe to use without CUDA, without sam3/ extras."""
 ```
@@ -464,8 +524,7 @@ Fixtures are Phase 3's primary test surface. The CI pipeline runs the entire int
         { "frame":  20, "time_sec": 0.666667, "bbox": [0.430, 0.527, 0.084, 0.071], "score": 0.88 }
       ],
       "gap_events": [
-        { "from_frame": 320, "to_frame": 360, "reason": "sam3_lost" },
-        { "from_frame": 370, "to_frame": 370, "reason": "sam3_reacquired" }
+        { "from_frame": 320, "to_frame": 360, "reason": "sam3_lost" }
       ]
     },
     {
@@ -521,7 +580,7 @@ Fixtures are Phase 3's primary test surface. The CI pipeline runs the entire int
 | `tracks[].prompt` | ✓ | string | Original prompt from `tracking_plan` |
 | `tracks[].slug` | ✓ | string | `slugify(prompt)`; consistent with `track_id` |
 | `tracks[].index` | ✓ | int ≥ 0 | Per-`(role, slug)` 0-based |
-| `tracks[].primary` | ✓ | bool | At most one true per role; corresponds to `*_prompts[0]` index 0 |
+| `tracks[].primary` | ✓ | bool | At most one true per role. Corresponds to the index=0 occurrence of the first prompt in role-order that **survived Step B grounding** (per §2.4 step 7 / §5.3) — NOT necessarily `*_prompts[0]` if that prompt's Step B failed |
 | `tracks[].samples` | ✓ | array | Strict frame ascending; no duplicate frames |
 | `tracks[].samples[].frame` | ✓ | int | `[0, n_frames)` |
 | `tracks[].samples[].time_sec` | ✓ | float | `frame / fps`, 6 sig fig |
@@ -530,10 +589,10 @@ Fixtures are Phase 3's primary test surface. The CI pipeline runs the entire int
 | `tracks[].gap_events` | ✓ | array | Frame ascending; non-overlapping |
 | `tracks[].gap_events[].from_frame` | ✓ | int | `[0, n_frames)`; `≤ to_frame` |
 | `tracks[].gap_events[].to_frame` | ✓ | int | `[0, n_frames)` |
-| `tracks[].gap_events[].reason` | ✓ | enum | `"sam3_lost" | "sam3_low_conf" | "sam3_reacquired"` |
+| `tracks[].gap_events[].reason` | ✓ | enum | `"sam3_lost" | "sam3_low_conf"` (re-acquisition is implicit, NOT recorded — see `GapEvent` docstring in §2.4) |
 | `stats.n_tracks` | ✓ | int | Equals `len(tracks)` |
 | `stats.n_samples_total` | ✓ | int | Sum of `len(t.samples)` over `tracks` |
-| `stats.mean_track_score` | ✓ | float | NaN if `n_samples_total == 0`; serialize as `null` |
+| `stats.mean_track_score` | ✓ | float \| null | NaN serialized as `null` (occurs when `n_samples_total == 0`) |
 | `stats.tracking_wall_time_sec` | ✓ | float ≥ 0 | Wall clock for the propagation stage |
 
 `stats` is observability — schema validation rejects only missing fields, not value drift.
@@ -556,7 +615,11 @@ Three cases:
 | Whole-run degrade — `sam3_init_failed` (§7.2) | **no** | n/a | n/a |
 | Per-segment fallback (§6) | yes | full | unchanged from success |
 
-The whole-run degrade path produces a Phase 2-equivalent run: no `tracks.json`, `manifest.pipeline_status.object_state_available = false`, `degraded_from_phase = 3`, `degrade_reason` populated. Per-segment fallback does not affect `tracks.json`; it is recorded only on the affected `SubtaskSegment`.
+The whole-run degrade path produces a **Phase-3-objectless run** (NOT a Phase-2-equivalent run; see §7.2 for the precise contract): no `tracks.json` is written, `manifest.pipeline_status.object_state_available = false`, `degraded_from_phase = 3`, `degrade_reason` populated.
+
+**`manifest.artifacts[]` MUST NOT include a `kind="tracks"` entry when `tracks.json` was not written** (whole-run degrade case). An artifact entry pointing to a non-existent file is a violation of the parent spec §6.6 typed-artifacts contract.
+
+Per-segment fallback does not affect `tracks.json`; it is recorded only on the affected `SubtaskSegment`.
 
 ### 3.5 File output
 
@@ -574,7 +637,7 @@ Parent spec §5.3 announced that Phase 3 adds `gripper_object_distance_threshold
 
 - **Input:** `ObjectSignals.gripper_object_distance[object_track_id]` for each `object_track_id`.
 - **Per-frame signal:** `d(t) = gripper_object_distance[object_track_id][t]`. NaN frames are skipped (no event emitted).
-- **Crossing detection:** at each frame `t` where both `d(t-1)` and `d(t)` are non-NaN, emit a candidate iff `sign(d(t-1) - threshold) != sign(d(t) - threshold)` where `threshold = config.tracking.gripper_object_distance_threshold` (default `0.05` of image diagonal).
+- **Crossing detection:** at each frame `t` where both `d(t-1)` and `d(t)` are non-NaN, emit a candidate iff `sign(d(t-1) - threshold) != sign(d(t) - threshold)` where `threshold = config.tracking.gripper_object_distance_threshold` (default `0.05` image-width-normalized; same units as `ObjectSignals.gripper_object_distance`).
 - **`source_score`:** `clip(|d(t + w) - d(t - w)| / threshold, 0, 1)` where `w = max(1, round(0.10 * fps))`. The window is clipped to `[0, n_frames)`; **if either side of the windowed delta is undefined (i.e. `t - w < 0` or `t + w >= n_frames`), do NOT emit the event** (the windowed-delta is undefined; falling back to a sentinel score risks polluting boundary candidates at the episode edges where the bracketing already creates implicit cuts).
 - **Multi-object aggregation:** events from different `(object_track_id, gripper_tool_track_id)` pairs at the same effective `time` are merged at the integrated-score stage via §5.3 max rule (parent spec).
 - **Source identifier in `boundaries.json`:** `"gripper_object_distance_threshold_crossing"`
@@ -586,8 +649,9 @@ Parent spec §5.3 announced that Phase 3 adds `gripper_object_distance_threshold
 - **Sustained transition detection:** maintain a sliding `window = round(config.tracking.object_motion_min_sec * fps)` (default `object_motion_min_sec = 0.10`).
   - **Start event** at frame `t` iff `v(t - window) … v(t - 1)` are all `< threshold` and `v(t) … v(t + window - 1)` are all `≥ threshold`.
   - **Stop event** at frame `t` iff the inverse transition holds.
-  - `threshold = config.tracking.object_motion_threshold` (default `0.02` image-diag/sec).
+  - `threshold = config.tracking.object_motion_threshold` (default `0.02` image-width-normalized / sec; same units as `ObjectSignals.object_speed`).
 - **`source_score`:** `clip(max(mean(v[t-window:t]), mean(v[t:t+window])) / threshold, 0, 1)`.
+- **Edge suppression** (matches §4.1.1): if `t - window < 0` or `t + window - 1 >= n_frames`, do NOT emit the event (the `min_sec` window must fit on both sides).
 - **Multi-object aggregation:** as above.
 - **Source identifier in `boundaries.json`:** `"object_motion_start_stop"`
 
@@ -627,6 +691,8 @@ The `pipeline_params.boundary.disabled_sources` list (parent spec §5.3, §11) g
 |---|---|
 | `ObjectSignals.gripper_tool_track_id is None` (no gripper tool track) | `gripper_object_distance_threshold_crossing` |
 | `tracks` contains no `role="object"` track | `gripper_object_distance_threshold_crossing` and `object_motion_start_stop` |
+| All `gripper_object_distance` arrays are entirely NaN (e.g. tracks exist but their non-gap regions never overlap) | `gripper_object_distance_threshold_crossing` |
+| All `object_speed` arrays are entirely NaN (e.g. all object samples are degenerate / single-point) | `object_motion_start_stop` |
 | Both Phase 1 conditions for `eef_*` (parent spec §11) | `eef_velocity_valley`, `eef_acceleration_peak` (unchanged from Phase 1) |
 | Both Phase 1 conditions for `action_norm_change` (parent spec §11) | `action_norm_change` (unchanged) |
 
@@ -666,12 +732,12 @@ class ObjectStateSummary:
     target_prompts: list[str]
     tool_prompts:   list[str]                       # may be []
 
-    gripper_object_distance_at_start: float | None  # primary pair, normalized image diag
+    gripper_object_distance_at_start: float | None  # primary pair, image-width-normalized
     gripper_object_distance_at_end:   float | None
     gripper_object_distance_min:      float | None
 
-    primary_object_displacement: float | None       # normalized image diag
-    primary_object_max_speed:    float | None       # normalized image diag / sec
+    primary_object_displacement: float | None       # image-width-normalized
+    primary_object_max_speed:    float | None       # image-width-normalized / sec
 
     primary_object_at_target_at_end: bool | None    # bbox-IoU(obj_0, tgt_0) at last frame > 0.05
 ```
@@ -699,19 +765,19 @@ Algorithm:
    - `gripper_object_distance_at_start` = first non-NaN value in segment (or None if all NaN or no gripper track).
    - `gripper_object_distance_at_end` = last non-NaN value in segment (or None).
    - `gripper_object_distance_min` = min of non-NaN values in segment (or None).
-5. **Primary object motion.** From `object_signals.object_speed[primary_object_track.track_id]` over segment (NaN-skipped):
-   - `primary_object_max_speed` = max (or None if all NaN).
-   - `primary_object_displacement` = sum of `|center_diff(t)|` for adjacent non-gap frame pairs in segment, normalized by image-diag (or None if all NaN).
+5. **Primary object motion.** From the primary object track's signals in segment:
+   - `primary_object_max_speed` = max of non-NaN values in `object_signals.object_speed[primary_object_track.track_id]` over segment (or None if all NaN).
+   - `primary_object_displacement` = `sum(|object_center[t+1] - object_center[t]| · weight)` where `object_center` is `object_signals.object_center[primary_object_track.track_id]`, summing over adjacent frame pairs `(t, t+1)` in segment where **both** entries are non-NaN. The y-component is divided by `image_aspect_ratio` before taking the norm (same image-width-normalized convention as §2.5). None if no two adjacent non-NaN frames exist in segment.
 6. **Object-at-target proxy.**
-   - Define `bbox_at_frame(track, t)`: linearly interpolate `(x, y, w, h)` between the two bracketing samples of `track` whose frames sandwich `t`, **iff `t` is not inside any `gap_event` for that track and at least one sample exists at frame `<= t` and one at frame `>= t`** (no extrapolation past the first or last sample). Returns `None` otherwise.
+   - Define `bbox_at_frame(track, t)`: linearly interpolate `(x, y, w, h)` between the two bracketing samples of `track` whose frames sandwich `t`, **iff `t` is not inside any `gap_event` for that track and at least one sample exists at frame `<= t` and one at frame `>= t`** (no extrapolation past the first or last sample). Returns `None` otherwise. Implementation note: `compute_object_signals` produces `object_center[t]` using the same interpolation rule for centers — the bbox-at-frame interpolation here extends that to all four `(x, y, w, h)` components and reuses the same gap-test predicate. To avoid duplicate interpolation work, implementations MAY cache per-track interpolated bbox arrays alongside `ObjectSignals.object_center`.
    - Compute `obj_bbox = bbox_at_frame(primary_object_track, segment_end_frame)` and `tgt_bbox = bbox_at_frame(primary_target_track, segment_end_frame)`. **Both are evaluated at the same exact frame `segment_end_frame`** — IoU between bboxes from different frames is geometrically meaningless and is explicitly rejected.
    - If `obj_bbox is None` or `tgt_bbox is None` or `primary_target_track is None`: `primary_object_at_target_at_end = None`.
    - Otherwise: `primary_object_at_target_at_end = obj_bbox.iou(tgt_bbox) > 0.05`.
 
 ### 5.3 Primary pair convention
 
-- `primary` is set on `*_prompts[0]` in §2.4 step 7 (the first prompt of each role from `TrackingPlan`).
-- `compute_object_state_summary` only uses the primary tracks. Non-primary tracks (e.g. multiple "red block" instances) influence the visibility-based `*_prompts` list but not the scalar fields.
+- `primary` is set per §2.4 step 7: per role, the first prompt in role-order that **survived Step B grounding** (NOT necessarily `*_prompts[0]` if `*_prompts[0]` failed grounding). The index=0 occurrence of that prompt is `primary=True`.
+- `compute_object_state_summary` only uses the primary tracks. Non-primary tracks (e.g. multiple "red block" instances or alternative role candidates) influence the visibility-based `*_prompts` list but not the scalar fields.
 - Roles with no track: corresponding `*_prompts` list is empty.
 
 ### 5.4 Prompt extension (Phase 3 mode)
@@ -783,7 +849,7 @@ For a fallback segment:
 ### 6.3 Per-segment vs run-level provenance
 
 - `manifest.pipeline_status.object_state_available` is **true** for any Phase 3 run that did not take the whole-run degrade path (i.e. `tracks.json` was written), regardless of how many segments fell back per-segment.
-- `manifest.pipeline_status.object_state_segment_coverage` (new field, see §1.3) is the fraction `n_segments_with_object_state / n_segments_total`. Phase 1/2 readers default this to `1.0` (parent spec §6.6 compat allowance).
+- `manifest.pipeline_status.object_state_segment_coverage` (new field, see §1.3) is the fraction `n_segments_with_object_state / n_segments_total`. **Phase 1/2 manifests MUST omit this field entirely** (NOT serialize as `1.0` or `null`). Readers MUST treat absence as "not applicable" (Phase 1/2 has no concept of object-state at all). Phase 3 non-degraded runs emit a value in `[0.0, 1.0]`; Phase 3 whole-run-degraded runs emit `0.0`. The previous draft of "default to 1.0 for Phase 1/2 readers" was misleading because it implied full coverage where the concept does not apply.
 - The viewer can use `object_state_segment_coverage < 1.0` to render a softer "partial coverage" indicator (Phase 5 work; not required for Phase 3 to ship).
 
 ### 6.4 No new degrade trigger
@@ -802,30 +868,53 @@ def annotate_episode_phase3(inputs, config):
     # Stage 1a: signals (Phase 1, unchanged)
     robot_signals = compute_robot_signals(inputs)
 
-    # Stage 1b: tracking
+    # Stage 1b: tracking — split into Step A (Gemma), then SAM3 load,
+    # then Step B (grounding), then Step C (propagation). Each stage
+    # gates the next; degrade triggers are checked at each gate.
     initial_frame = extract_initial_frame(inputs.video_path)   # frame 0; retry @5%
     vlm = LocalGemmaVLMLabeler.load(config.vlm)                # shared Gemma instance
     planner = LocalGemmaTrackingPlanner(vlm.shared_handle())
-    plan = planner.plan(
+
+    # Step A — Gemma entity extraction (no SAM3 needed yet)
+    entities = planner.extract_entities(
         task_text=inputs.task_text,
         initial_frame=initial_frame,
         allowed_labels=inputs.allowed_labels,
+        attempt_max=config.tracking.planner_max_retries,
     )
-
-    if not plan.object_prompts or all(p in plan.failed_prompts for p in plan.object_prompts):
-        # Whole-run degrade per §7.2
-        reason = (
-            "gemma_no_object_prompts" if not plan.object_prompts
-            else "sam3_no_initial_detection"
+    if not entities.object_prompts:
+        # Avoid paying SAM3 load cost when we'd just degrade anyway
+        return _degrade_to_phase3_objectless(
+            inputs, config, vlm, robot_signals, "gemma_no_object_prompts"
         )
-        return _degrade_to_phase2(inputs, config, vlm, robot_signals, reason)
 
+    # Now load SAM3 — entities are non-empty so it's worth the cost.
     try:
         sam3_runtime = SAM3Runtime.load(checkpoint=config.tracking.sam3_checkpoint)
     except SAM3InitFailedError as e:
-        return _degrade_to_phase2(inputs, config, vlm, robot_signals, "sam3_init_failed", cause=e)
+        # missing checkpoint was caught at preflight; this branch handles
+        # CUDA OOM, incompatible weights, device fault, etc.
+        return _degrade_to_phase3_objectless(
+            inputs, config, vlm, robot_signals, "sam3_init_failed",
+            underlying_log=repr(e),  # stderr WARN log only; never enters notes
+        )
 
     try:
+        # Step B — ground each prompt on the initial frame
+        plan = ground_initial_detections(
+            runtime=sam3_runtime,
+            initial_frame=initial_frame,
+            entities=entities,
+        )
+        # All object prompts failed grounding → whole-run degrade
+        object_grounded = [(r, p) for (r, p), _ in plan.initial_detections.items() if r == "object"]
+        if not object_grounded:
+            sam3_runtime.close()
+            return _degrade_to_phase3_objectless(
+                inputs, config, vlm, robot_signals, "sam3_no_initial_detection"
+            )
+
+        # Step C — full-episode propagation
         tracks = Propagator().run(
             runtime=sam3_runtime,
             plan=plan,
@@ -887,24 +976,28 @@ def annotate_episode_phase3(inputs, config):
     )
 ```
 
-### 7.2 Whole-run degrade trigger and behavior
+### 7.2 Whole-run degrade trigger and behavior — "Phase 3 objectless run"
 
-`_degrade_to_phase2(...)`:
-- Runs Phase 2's existing `compute_robot_state_signals → bracket_segments → apply_phase2_labeling` against the same inputs (no SAM3 calls; no `tracks.json`).
+The whole-run degrade path produces a **Phase-3-objectless run**. This is NOT a Phase-2-equivalent run — the Phase 3 boundary policy and Phase 3 canonical directory are preserved throughout. The only "Phase 2-shaped" component is the per-segment labeling call (Phase 2 prompt with `object_state_summary=None`).
+
+`_degrade_to_phase3_objectless(inputs, config, vlm, robot_signals, degrade_reason, *, underlying_log=None)`:
+
+- Runs Phase 3's `Phase3BoundaryDetector.detect(robot_signals, object_signals=EMPTY, tracks=[])` (NOT Phase 2's detector). The 2 Phase 3 weight keys are present but every per-frame value is NaN, so they don't fire; they appear in `disabled_sources` per §4.4.
+- The 4 Phase 1 sources are scored with **Phase 3 weights** (gripper 0.45 / valley 0.15 / accel 0.03 / action 0.02). `score_threshold` = 0.30. This produces measurably different boundaries from a literal Phase 2 invocation — and that is intentional: the Phase 3 directory reflects Phase 3 boundary policy throughout. Re-running with literal Phase 2 weights would mean the Phase 3 directory's hash payload contradicts its actual contents.
+- Calls `apply_phase2_labeling` (Phase 2's existing per-segment labeler) on the resulting segments — `object_state_summary=None`, so the prompt is byte-identical to a Phase 2 prompt.
 - Stamps every segment with `label_source = "vlm_robot_state_only"`, `object_state_unavailable = True`, `object_track_ids = []`.
 - Sets `manifest.pipeline_status`:
   - `object_state_available = False`
   - `object_state_segment_coverage = 0.0`
   - `degraded_from_phase = 3`
   - `degrade_reason ∈ {"gemma_no_object_prompts", "sam3_no_initial_detection", "sam3_init_failed"}`
-- Adds a `notes` entry to `annotation.json` mirroring the same string (parent spec §9.4 wording).
-- The run is **published successfully** to its Phase 3 canonical directory (`target_phase=3` ∈ `config_hash`). It is not a Phase 2 run despite using the Phase 2 labeling path: hashes differ from a literal Phase 2 invocation.
-
-**Boundary detection in the degrade path also differs from Phase 2.** The `BoundaryWeights.phase3_defaults()` instance built at orchestrator start (`target_phase == 3`) remains in effect during degrade — the 4 Phase 1 sources are scored with Phase 3 weights (gripper 0.45 / valley 0.15 / accel 0.03 / action 0.02), and the 2 Phase 3 weight keys are present but disabled (no `object_signals` available, so `disabled_sources` includes them per §4.4). This is intentional: the Phase 3 directory should reflect Phase 3 boundary policy throughout, even when labels fall back. Re-running with literal Phase 2 weights would produce a different `config_hash` and contradict the canonical-name discipline.
+- Does NOT write `tracks.json`; `manifest.artifacts[]` MUST NOT contain a `kind="tracks"` entry (§3.4).
+- Adds a single `notes` entry to `annotation.json`: exactly `f"phase3: degraded to object-state-unavailable path (degrade_reason={degrade_reason})."`. **The chained `cause` from any underlying exception is NOT written to `notes`** (PII / file-path / token-leak hazard — see §8 channel rule). The `underlying_log` argument, when provided, goes to a stderr WARN log line for the operator's debugging convenience only.
+- The run is **published successfully** to its Phase 3 canonical directory (`target_phase=3` ∈ `config_hash`). It is not a Phase 2 run despite using the Phase 2 labeler: `config_hash` and `canonical_name` are computed against `target_phase=3` and the full Phase 3 config, so the hash differs from a literal Phase 2 invocation on the same episode.
 
 ### 7.3 Resource handoff
 
-- `LocalGemmaVLMLabeler` and `LocalGemmaTrackingPlanner` share one in-memory Gemma model. `vlm.shared_handle()` returns a thin reference; `LocalGemmaTrackingPlanner` holds it for the duration of `plan(...)` and releases.
+- `LocalGemmaVLMLabeler` and `LocalGemmaTrackingPlanner` share one in-memory Gemma model. `vlm.shared_handle()` returns a thin reference; `LocalGemmaTrackingPlanner` holds it for the duration of `extract_entities(...)` and releases.
 - `SAM3Runtime.close()` is called immediately after `Propagator.run` returns, before Stage 3. This is a hard contract: Stage 3 must not depend on SAM3 still being loaded. Tests assert this via a `with pytest.raises(RuntimeError)` against using the closed runtime.
 - Initial-frame extraction is done synchronously in the orchestrator (not inside `planner`). Failure raises immediately per parent spec §11 (retry @5%, then abort).
 
@@ -915,17 +1008,31 @@ def annotate_episode_phase3(inputs, config):
 ```python
 @dataclass(slots=True, frozen=True)
 class TrackingConfig:
-    sam3_model_id: str = "facebook/sam3.1"               # informational; encoded in config_hash via model_config (NOT TrackingConfig.to_dict — see §9.1)
-    sam3_checkpoint: Path | None = None                  # required for Phase 3; CLI validates
+    # SAM3 model selection. sam3_model_id is the HF Hub identifier or
+    # implementation-pinned name; default is the stable release identifier
+    # (writing-plans phase resolves the actual checkpoint version, e.g.
+    # SAM 3.1 vs SAM 3 base).
+    sam3_model_id: str = "facebook/sam3"                 # informational; encoded in config_hash via model_config (NOT TrackingConfig.to_dict — see §9.1)
+    sam3_checkpoint: Path | None = None                  # required for Phase 3; CLI preflight validates existence + readability + sha256 computability
+    # Sampling / propagation
     track_stride_frames: int | None = None               # None -> max(1, round(fps / 3))
     min_track_score: float = 0.30
     max_gap_frames: int | None = None                    # None -> round(fps * 1.0)
     reacquisition_iou_threshold: float = 0.30
+    # ObjectStateSummary
     visibility_threshold: float = 0.5                    # for ObjectStateSummary
-    gripper_object_distance_threshold: float = 0.05
-    object_motion_threshold: float = 0.02                # image diag / sec
+    # Boundary source thresholds (image-width-normalized — see §2.5 docstring)
+    gripper_object_distance_threshold: float = 0.05      # image-width-normalized
+    object_motion_threshold: float = 0.02                # image-width-normalized / sec
     object_motion_min_sec: float = 0.10
-    image_aspect_ratio_default: float = 16.0 / 9.0       # used when video lacks SAR
+    # Aspect-ratio fallback when video metadata lacks SAR (consumed by §7.1
+    # orchestrator's image_aspect_ratio resolution; passed into
+    # compute_object_signals)
+    image_aspect_ratio_default: float = 16.0 / 9.0
+    # Gemma planner retries — INDEPENDENT of vlm.max_retries because Step A
+    # (entity extraction) and per-segment labeling are different operations
+    # and may want different budgets even though they share the Gemma model.
+    planner_max_retries: int = 3
 
     def effective_stride(self, fps: float) -> int:
         return self.track_stride_frames if self.track_stride_frames else max(1, round(fps / 3))
@@ -971,15 +1078,18 @@ Extends parent spec §11. Phase 3-specific rows:
 
 | Failure | Detection | Action |
 |---|---|---|
-| `--target-phase 3` without `--vlm-model` or unresolvable SAM3 checkpoint | CLI preflight | Abort with `MissingDependencyError`; non-zero exit |
-| sam3 extras not installed but `--target-phase 3` | `import sam3` raises `ModuleNotFoundError` | Abort with hint to install `pip install '.[sam3]'`; exit 2 |
+| `--target-phase 3` without `--vlm-model` | CLI preflight | Abort `MissingDependencyError`; non-zero exit |
+| `--target-phase 3` without `--sam3-checkpoint` | CLI preflight | Abort `MissingDependencyError`; non-zero exit |
+| `--sam3-checkpoint` path missing / unreadable / sha256 cannot be computed | CLI preflight | Abort `error_code="sam3_checkpoint_not_found"`; non-zero exit. **This is config error, not runtime error — caught BEFORE any model load.** |
+| sam3 extras not installed but `--target-phase 3` | `import sam3` raises `ModuleNotFoundError` | Abort `error_code="sam3_extras_missing"`; hint `pip install '.[sam3]'`; exit 2 |
 | Initial frame extraction fails at frame 0 and 5% (parent spec §11) | ffmpeg | Abort (already in parent table) |
-| Gemma planner JSON parse fail × 3 | Step A retries exhausted | `TrackingPlan(object_prompts=[], …)`; whole-run degrade `gemma_no_object_prompts` |
+| Gemma planner JSON parse fail × `planner_max_retries` | Step A retries exhausted | `EntityPlan(object_prompts=[], …)`; whole-run degrade `gemma_no_object_prompts` |
 | Gemma planner returns valid JSON but `objects: []` | Step A semantic check | Whole-run degrade `gemma_no_object_prompts` |
-| Step B: SAM3 returns no detections for any object_prompt | `ground_on_frame` returns `[]` for all | Whole-run degrade `sam3_no_initial_detection` |
+| Gemma planner returns duplicate prompts within a role | Step A schema check | Counted as a retry-eligible failure (`reject_reason="duplicate_prompt_within_role"`); after retries exhausted → `gemma_no_object_prompts` degrade |
+| Step B: SAM3 returns no detections for any object_prompt | `ground_on_frame` returns `[]` for all object prompts | Whole-run degrade `sam3_no_initial_detection` |
 | Step B: SAM3 returns detections for some but not all object_prompts | partial | Continue with detected prompts; failed ones go to `tracking_plan.failed_prompts`. No degrade. |
-| `SAM3Runtime.load(...)` raises during Stage 1b | constructor exception (CUDA OOM, missing checkpoint, …) | Whole-run degrade `sam3_init_failed`. The chained `cause` is recorded in the Phase 2 `notes` entry (NOT to stderr — degrade exits 0). |
-| Propagation runtime error mid-episode | `propagate(...)` exception | Abort with non-zero exit. Stderr JSON has `error_code="sam3_runtime_failed"` and `frame_index` at which it occurred. The orchestrator MUST `rm -rf` the in-flight `*.tmp.<pid>/` directory synchronously before exit (best effort; failures logged but ignored). The parent §4.4 / §6.5 stale-tmp scavenger remains the safety net for crash-during-rm cases. |
+| `SAM3Runtime.load(...)` raises during Stage 1b (preflight passed) | constructor exception (CUDA OOM, incompatible weights, device fault, …) | Whole-run degrade `sam3_init_failed`. The underlying `repr(e)` is logged to stderr as a WARN line (NOT structured JSON; NOT in `annotation.notes`) for operator debugging. `notes` contains only the canonical degrade message (no chained cause — see §7.2). |
+| Propagation runtime error mid-episode | `propagate(...)` exception | Abort with non-zero exit. Stderr structured JSON has `error_code="sam3_runtime_failed"` and `frame_index` at which it occurred. The orchestrator MUST `rm -rf` the in-flight `*.tmp.<pid>/` directory synchronously before exit (best effort; failures logged but ignored). The parent §4.4 / §6.5 stale-tmp scavenger remains the safety net for crash-during-rm cases. |
 | Per-segment: `compute_object_state_summary` returns None | `primary_object_track` invisible / missing in segment | Per-segment fallback (§6); no abort, no degrade |
 | `tracks.json` cross-artifact mismatch on read | Reader integrity check | Reader raises `ArtifactIntegrityError` (read path; not produced at write time by a sound implementation) |
 
@@ -989,13 +1099,16 @@ All non-zero-exit aborts emit a structured stderr JSON identical in shape to Pha
 ```
 
 New error codes (defined in `mimicanno.errors`). String values are canonical; tests, `degrade_reason` enum, and orchestrator call sites MUST use these exact strings:
-- `sam3_init_failed` — degrade reason; **never goes to stderr** (degrade exits 0)
-- `sam3_runtime_failed` — abort code; **goes to stderr**, exits non-zero
+- `sam3_checkpoint_not_found` — abort code; **goes to stderr**, exits non-zero (preflight)
 - `sam3_extras_missing` — abort code; **goes to stderr**, exits non-zero
+- `sam3_runtime_failed` — abort code; **goes to stderr**, exits non-zero (mid-episode)
+- `sam3_init_failed` — degrade reason; **never goes to stderr structured JSON** (degrade exits 0; underlying `repr(e)` MAY be logged as a stderr WARN line for operator debugging)
 - `gemma_no_object_prompts` — degrade reason; **never goes to stderr** (degrade exits 0)
 - `sam3_no_initial_detection` — degrade reason; **never goes to stderr** (degrade exits 0)
 
-**Channel assignment is exclusive:** every Phase 3 error code is either a degrade reason (logged to `notes`, exits 0) or an abort code (stderr JSON, non-zero exit). No code uses both channels. The whole-run degrade path (§7.2) writes the chained `cause` from any underlying exception into the `notes` entry text; it does NOT also emit stderr JSON for the same event.
+**Channel assignment is exclusive:** every Phase 3 error code is either a degrade reason (recorded in `annotation.notes` as the canonical short message, exits 0) or an abort code (stderr structured JSON, non-zero exit). No code uses both channels.
+
+**`annotation.notes` content rule for degrades:** the notes entry contains ONLY `f"phase3: degraded to object-state-unavailable path (degrade_reason={code})."` — exactly the `degrade_reason` string. The underlying exception's `repr()` / `str()` is **NEVER** written to `annotation.notes`. Rationale: exception representations may include local file paths, GPU device names, CUDA environment, checkpoint paths, HF access-token-related error text, and other internal state that would leak into the persisted artifact and travel downstream into MimicRec / shared run repositories. Operators wanting underlying-error visibility re-read the stderr WARN log captured by their CLI invocation.
 
 ## 9. Configuration hashing
 
@@ -1121,8 +1234,10 @@ Per-module unit tests with no external dependencies:
 
 - `tests/object_tracker/test_track_id.py` — `slugify` corner cases, `make_track_id` round trip, parse-by-split.
 - `tests/object_tracker/test_bbox.py` — `BBox.iou`, `BBox.center`, validation.
-- `tests/object_tracker/test_propagator.py` — gap consolidation, re-acquisition IoU branch, primary marking, deterministic ordering. Driven via `FixtureSAM3Tracker`.
-- `tests/object_tracker/test_signals.py` — `compute_object_signals` distance + speed, NaN handling at gaps and episode boundaries, primary track resolution.
+- `tests/object_tracker/test_planner.py` — `LocalGemmaTrackingPlanner.extract_entities` retry on bad JSON, terminal `EntityPlan(object_prompts=[])` after `planner_max_retries`, duplicate-within-role rejection (`reject_reason="duplicate_prompt_within_role"`).
+- `tests/object_tracker/test_grounding.py` — `ground_initial_detections` builds `TrackingPlan` from `EntityPlan` + per-prompt SAM3 results; cross-role duplicate prompts (e.g. `object="red block"` + `target="red block"`) end up as distinct `(role, prompt)` keys in `initial_detections` (not conflated).
+- `tests/object_tracker/test_propagator.py` — gap consolidation (no `sam3_reacquired` reason), re-acquisition IoU branch (same track_id when IoU >= threshold, new index otherwise), primary marking with `*_prompts[0]` failed grounding (primary falls to `*_prompts[1]` if it survived Step B), deterministic ordering, single propagate-call-per-episode contract. Driven via `FixtureSAM3Tracker`.
+- `tests/object_tracker/test_signals.py` — `compute_object_signals` distance + speed (image-width-normalized units, NOT image-diag — pin the formula), NaN handling at gaps and episode boundaries, primary track resolution, `object_center` populated for all roles (not just objects).
 - `tests/test_object_state_summary.py` — `compute_object_state_summary` visibility-threshold filter, primary-pair distance extraction, IoU-at-end proxy, None return on missing primary.
 - `tests/test_phase3_boundary_detector.py` — new sources fire under crafted signals; weight rebalance produces expected scores; `disabled_sources` rules; `BoundaryWeights.phase3_defaults()` values.
 - `tests/test_phase3_boundary_edge_suppression.py` — explicit edge-case test pinning §4.1.1's no-emit rule: a synthetic distance signal with a crossing inside `[0, w)` or `[n_frames - w, n_frames)` produces no candidate from `gripper_object_distance_threshold_crossing`. Same for a near-edge sustained transition for `object_motion_start_stop` (the `min_sec` window must fit on both sides).
@@ -1137,9 +1252,10 @@ Driven by `FixtureTrackingPlanner` + `FixtureSAM3Tracker`. No GPU, no SAM3 weigh
 
 - `tests/integration/test_phase3_smoke.py` — happy-path episode: tracking succeeds, all 6 boundary sources potentially fire, all segments have `object_state_available`. Artifacts: video, signals (with object channels), boundaries, annotation, tracks, manifest.
 - `tests/integration/test_phase3_per_segment_fallback.py` — fixture configured so one segment's primary object is in gap. That segment uses Phase 2 path (`vlm_robot_state_only`); other segments use Phase 3 path. `pipeline_status.object_state_segment_coverage < 1.0`; `object_state_available = True`.
-- `tests/integration/test_phase3_degrade_gemma_no_objects.py` — `FixtureTrackingPlanner` returns empty plan. Run succeeds with Phase 2 output, `degrade_reason = "gemma_no_object_prompts"`, no `tracks.json` written.
-- `tests/integration/test_phase3_degrade_sam3_no_initial.py` — `FixtureSAM3Tracker.ground_on_frame` returns `[]` for all object prompts. Run degrades with `degrade_reason = "sam3_no_initial_detection"`.
-- `tests/integration/test_phase3_degrade_sam3_init_failed.py` — `FixtureSAM3Tracker` raises on `load`. Degrades with `sam3_init_failed`.
+- `tests/integration/test_phase3_degrade_gemma_no_objects.py` — `FixtureTrackingPlanner` returns `EntityPlan(object_prompts=[])`. Run succeeds with Phase-3-objectless output, `degrade_reason = "gemma_no_object_prompts"`, no `tracks.json` written, `manifest.artifacts[]` does NOT contain `kind="tracks"`, `notes` contains exactly the canonical degrade message (no chained cause / no underlying-error text).
+- `tests/integration/test_phase3_degrade_sam3_no_initial.py` — `FixtureSAM3Tracker.ground_on_frame` returns `[]` for all object prompts. Run degrades with `degrade_reason = "sam3_no_initial_detection"`. Same artifact / notes assertions as above.
+- `tests/integration/test_phase3_degrade_sam3_init_failed.py` — `FixtureSAM3Tracker` raises on `load`. Degrades with `sam3_init_failed`. `notes` contains canonical message only; the raised exception's `repr()` MUST NOT appear in `notes` (PII test — assert no path-like strings, no `Traceback`, no `at 0x...`).
+- `tests/integration/test_phase3_preflight_checkpoint_missing.py` — `--sam3-checkpoint` points to a non-existent file. Run aborts with `error_code="sam3_checkpoint_not_found"` (preflight tier), exit code != 0, no run directory published. This locks in the §8 boundary between preflight-abort and runtime-degrade.
 - `tests/integration/test_phase3_idempotency.py` — same inputs + config produce byte-identical artifacts and identical `config_hash` / `run_hash` / `canonical_name`.
 - `tests/integration/test_phase3_distinctness.py` — Phase 1, Phase 2, Phase 3 of the same episode produce three different `canonical_name`s and three different run directories.
 - `tests/integration/test_phase3_no_phase12_regression.py` — running Phase 1 and Phase 2 against a curated fixture episode produces an identical `manifest.config_hash` and `manifest.run_hash` as before Phase 3 was merged (pinned values in the test), and structural equality on `boundaries.json` / `annotation.json` / `signals.json` (deep dict-compare on parsed JSON, NOT raw byte equality — float serializer differences across Python patch versions can change byte output without touching content).
@@ -1164,7 +1280,7 @@ Driven by `FixtureTrackingPlanner` + `FixtureSAM3Tracker`. No GPU, no SAM3 weigh
 Phase 3 is complete when:
 
 1. `mimicanno annotate --target-phase 3 --vlm-model <id> --sam3-checkpoint <path> ...` produces a complete run directory with `tracks.json` and `pipeline_status.object_state_available = true` on at least one real episode (parent spec §15.3 #14 satisfied).
-2. A synthetic broken episode (or fixture-driven test) triggering each of the three whole-run degrade reasons (`gemma_no_object_prompts`, `sam3_no_initial_detection`, `sam3_init_failed`) produces a Phase 2-equivalent run with `pipeline_status.degraded_from_phase = 3` and the matching `degrade_reason` (parent spec §15.3 #15 satisfied).
+2. A synthetic broken episode (or fixture-driven test) triggering each of the three whole-run degrade reasons (`gemma_no_object_prompts`, `sam3_no_initial_detection`, `sam3_init_failed`) produces a Phase-3-objectless run (§7.2) with `pipeline_status.degraded_from_phase = 3`, the matching `degrade_reason`, no `tracks.json`, and a `notes` entry containing only the canonical degrade message (no chained cause). Parent spec §15.3 #15 satisfied.
 3. All Phase 1 and Phase 2 tests pass without modification (no regression).
 4. `mypy --strict` clean across `mimicanno/`, including the new `mimicanno.object_tracker` package.
 5. `ruff check` clean (parity with Phase 2's accepted-warning baseline).
