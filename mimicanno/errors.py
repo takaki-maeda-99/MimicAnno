@@ -149,3 +149,22 @@ class SAM3NoInitialDetection(MimicAnnoError):
                 ]
             },
         )
+
+
+class ArtifactIntegrityError(MimicAnnoError):
+    """tracks.json cross-artifact integrity mismatch (spec §3.3).
+
+    Raised by ``read_tracks_json`` when ``episode_id``, ``fps``, or
+    ``n_frames`` in the file does not match the expected values from
+    ``manifest.json``.
+    """
+
+    def __init__(self, field: str, expected: object, actual: object) -> None:
+        super().__init__(
+            code="tracks_json_integrity_violation",
+            message=(
+                f"tracks.json integrity violation: {field} mismatch "
+                f"(expected={expected!r}, actual={actual!r})"
+            ),
+            context={"field": field, "expected": expected, "actual": actual},
+        )
