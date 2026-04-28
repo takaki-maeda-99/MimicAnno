@@ -178,6 +178,9 @@ _WEIGHT_KEY_TO_SOURCE: dict[str, str] = {
     "velocity": "eef_velocity_valley",
     "acceleration": "eef_acceleration_peak",
     "action": "action_norm_change",
+    # Phase 3 long keys — identity mapping (already the detector source name).
+    "gripper_object_distance_threshold_crossing": "gripper_object_distance_threshold_crossing",
+    "object_motion_start_stop": "object_motion_start_stop",
 }
 
 
@@ -343,17 +346,10 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # Translate BoundaryConfig.weights short keys to detector source names.
     # e.g. {"gripper": 0.5} → {"gripper_transition": 0.5}
     weights_dict = bcfg.weights.to_dict(target_phase=req.config.target_phase)
-    # TODO(Task 10): extend _WEIGHT_KEY_TO_SOURCE with the 2 Phase 3 sources
-    # (gripper_object_distance_threshold_crossing, object_motion_start_stop) and
-    # rename the error code to "boundary_config.unknown_weight_key" to match the
-    # YAML loader. Currently this guard raises "config.unknown_weight_key" — a
-    # divergence from load_boundary_config_yaml. Phase 3 traffic will route
-    # through annotate_episode_phase3 (Task 19), so this guard is currently
-    # unreachable for Phase 3 inputs, but unifying the codes prevents drift.
     unknown_keys = [k for k in weights_dict if k not in _WEIGHT_KEY_TO_SOURCE]
     if unknown_keys:
         raise MimicAnnoError(
-            "config.unknown_weight_key",
+            "boundary_config.unknown_weight_key",
             f"BoundaryConfig.weights contains unknown key(s): {unknown_keys!r}; "
             f"expected keys: {list(_WEIGHT_KEY_TO_SOURCE)!r}",
             {"unknown_keys": unknown_keys},
