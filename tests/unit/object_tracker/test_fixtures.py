@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from mimicanno.object_tracker import FramePropagationResult as ExportedFramePropagationResult
 from mimicanno.object_tracker.fixtures import (
     FixtureSAM3Tracker,
     FixtureTrackingPlanner,
@@ -237,3 +238,24 @@ def test_tracker_init_with_defaults() -> None:
         prompt="anything",
     )
     assert result == []
+
+
+def test_tracker_load_accepts_checkpoint_and_device_kwargs() -> None:
+    """load() accepts checkpoint and device kwargs (happy path)."""
+    tracker = FixtureSAM3Tracker()
+    result = tracker.load(checkpoint="/path/to/model.pt", device="cuda")
+    assert result is tracker
+
+
+def test_tracker_load_still_raises_with_kwargs_present() -> None:
+    """raise_on_load still fires when checkpoint/device kwargs are passed."""
+    exc = RuntimeError("Model load failure")
+    tracker = FixtureSAM3Tracker(raise_on_load=exc)
+
+    with pytest.raises(RuntimeError, match="Model load failure"):
+        tracker.load(checkpoint="/path/to/model.pt", device="cuda")
+
+
+def test_frame_propagation_result_exported_from_package() -> None:
+    """FramePropagationResult is accessible from mimicanno.object_tracker package."""
+    assert ExportedFramePropagationResult is FramePropagationResult

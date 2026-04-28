@@ -111,10 +111,22 @@ class FixtureSAM3Tracker:
         self.raise_with = raise_with
         self._closed = False
 
-    def load(self) -> FixtureSAM3Tracker:
+    def load(
+        self,
+        *,
+        checkpoint: object = None,
+        device: object = "cpu",
+    ) -> FixtureSAM3Tracker:
         """Load (initialize) the tracker.
 
+        Accepts checkpoint and device kwargs to match SAM3Runtime.load signature
+        for drop-in test substitution (kwargs are silently ignored).
+
         Raises the configured exception if raise_on_load was set in __init__.
+
+        Args:
+            checkpoint: ignored (for SAM3Runtime compatibility)
+            device: ignored (for SAM3Runtime compatibility)
 
         Returns:
             self (for chainability in tests).
