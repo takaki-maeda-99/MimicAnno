@@ -110,6 +110,13 @@ class FixtureSAM3Tracker:
         self.raise_on_propagate_at_frame = raise_on_propagate_at_frame
         self.raise_with = raise_with
         self._closed = False
+        self._propagate_call_count: int = 0
+
+    @property
+    def propagate_call_count(self) -> int:
+        """Number of times propagate() has been called. Used in tests to verify
+        the single-call contract (spec §2.4.1 step 2)."""
+        return self._propagate_call_count
 
     def load(
         self,
@@ -178,6 +185,7 @@ class FixtureSAM3Tracker:
             raise_with if raise_on_propagate_at_frame is set and matches
             the frame being yielded.
         """
+        self._propagate_call_count += 1
         for frame_idx, _ in frames:
             if (
                 self.raise_on_propagate_at_frame is not None
