@@ -13,15 +13,15 @@ import json
 import math
 import re
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from contextlib import AbstractContextManager
-from typing import Any, Literal, Protocol, TypedDict, get_args
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
 
 import numpy as np
 
 from mimicanno.config import VLMConfig
-from mimicanno.schema import SubtaskSegment
+from mimicanno.schema import ObjectStateSummary, SubtaskSegment
 
 # --- Reject / runtime-fault reason enums (kept as Literal for type-checkers,
 #     and re-exported as concrete tuples for runtime exhaustiveness checks).
@@ -93,6 +93,7 @@ class VLMRequest(TypedDict):
     keyframes: list[np.ndarray]
     keyframe_offsets_sec: list[float]
     robot_state_summary: dict[str, Any]   # see clip_features.RobotStateSummary
+    object_state_summary: NotRequired[ObjectStateSummary | None]  # Phase 3; spec §5.4
 
 
 @dataclass(slots=True)
