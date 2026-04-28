@@ -13,5 +13,8 @@
   ],
   "tool_prompts": [
     "gripper"
+  ],
+  "visible_track_ids": [
+    "obj:red_block:0"
   ]
 }

@@ -626,6 +626,8 @@ class ObjectStateSummary:
     target_prompts: list[str]
     tool_prompts:   list[str]                       # may be []
 
+    visible_track_ids: list[str]                    # track_ids that passed visibility filter (§5.5)
+
     gripper_object_distance_at_start: float | None  # primary pair, image-width-normalized
     gripper_object_distance_at_end:   float | None
     gripper_object_distance_min:      float | None
@@ -640,6 +642,7 @@ class ObjectStateSummary:
             "object_prompts": list(self.object_prompts),
             "target_prompts": list(self.target_prompts),
             "tool_prompts": list(self.tool_prompts),
+            "visible_track_ids": list(self.visible_track_ids),
             "gripper_object_distance_at_start": self.gripper_object_distance_at_start,
             "gripper_object_distance_at_end": self.gripper_object_distance_at_end,
             "gripper_object_distance_min": self.gripper_object_distance_min,
@@ -654,6 +657,7 @@ class ObjectStateSummary:
             object_prompts=list(d["object_prompts"]),
             target_prompts=list(d["target_prompts"]),
             tool_prompts=list(d["tool_prompts"]),
+            visible_track_ids=list(d.get("visible_track_ids", [])),
             gripper_object_distance_at_start=(
                 float(d["gripper_object_distance_at_start"])
                 if d["gripper_object_distance_at_start"] is not None

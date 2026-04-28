@@ -190,6 +190,7 @@ def compute_object_state_summary(
     object_prompts: list[str] = []
     target_prompts: list[str] = []
     tool_prompts: list[str] = []
+    visible_track_ids: list[str] = []
 
     for track in tracks:
         # Count non-gap frames within [segment_start_frame, segment_end_frame]
@@ -201,6 +202,7 @@ def compute_object_state_summary(
         visible_ratio = non_gap_count / segment_length if segment_length > 0 else 0.0
 
         if visible_ratio >= config.visibility_threshold:
+            visible_track_ids.append(track.track_id)
             if track.role == "object" and track.prompt not in object_prompts:
                 object_prompts.append(track.prompt)
             elif track.role == "target" and track.prompt not in target_prompts:
@@ -275,6 +277,7 @@ def compute_object_state_summary(
         object_prompts=object_prompts,
         target_prompts=target_prompts,
         tool_prompts=tool_prompts,
+        visible_track_ids=visible_track_ids,
         gripper_object_distance_at_start=dist_at_start,
         gripper_object_distance_at_end=dist_at_end,
         gripper_object_distance_min=dist_min,
