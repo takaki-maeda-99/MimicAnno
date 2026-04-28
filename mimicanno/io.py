@@ -1,7 +1,7 @@
 """Public I/O helpers for MimicAnno artifacts.
 
 Exposes:
-- ``write_json_atomic`` — public wrapper around the atomic write helper used by writers.py
+- ``write_json_atomic`` — primitive atomic JSON write (writers.py re-exports this)
 - ``write_tracks_json`` / ``read_tracks_json`` — Phase 3 tracks.json I/O (spec §3)
 """
 
@@ -13,16 +13,13 @@ from typing import Any
 
 from mimicanno.errors import ArtifactIntegrityError
 from mimicanno.schema import TracksFile
-from mimicanno.writers import _atomic_write_json
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Atomically write *payload* as JSON to *path*.
-
-    Delegates to the private helper in ``mimicanno.writers`` so all writers
-    share a single implementation.
-    """
-    _atomic_write_json(path, payload)
+    """Atomically write *payload* as JSON to *path* via tmp-file replace."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    tmp.replace(path)
 
 
 def write_tracks_json(path: Path, tracks: TracksFile) -> None:

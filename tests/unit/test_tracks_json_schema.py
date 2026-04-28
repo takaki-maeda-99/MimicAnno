@@ -341,6 +341,30 @@ def test_gap_events_overlapping():
         TracksFile.from_dict(d)
 
 
+def test_sample_frame_bool_rejected():
+    """bool must not be accepted where int is expected (isinstance(True, int) is True)."""
+    d = _make_minimal().to_dict()
+    d["tracks"][0]["samples"][0]["frame"] = True
+    with pytest.raises(ValueError, match="frame"):
+        TracksFile.from_dict(d)
+
+
+def test_n_frames_bool_rejected():
+    """bool must not be accepted where n_frames int is expected."""
+    d = _make_minimal().to_dict()
+    d["n_frames"] = True
+    with pytest.raises(ValueError, match="n_frames"):
+        TracksFile.from_dict(d)
+
+
+def test_failed_prompts_invalid_role():
+    """failed_prompts[].role must be one of the valid roles."""
+    d = _make_minimal().to_dict()
+    d["tracking_plan"]["failed_prompts"] = [{"role": "banana", "prompt": "x"}]
+    with pytest.raises(ValueError, match="role"):
+        TracksFile.from_dict(d)
+
+
 # ---------------------------------------------------------------------------
 # NaN handling for mean_track_score
 # ---------------------------------------------------------------------------

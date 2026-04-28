@@ -284,6 +284,11 @@ _VALID_ROLES = frozenset({"object", "target", "tool"})
 _VALID_GAP_REASONS = frozenset({"sam3_lost", "sam3_low_conf"})
 
 
+def _is_int(x: Any) -> bool:
+    """Return True iff *x* is a plain int (not bool — isinstance(True, int) is True)."""
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
 @dataclass(slots=True)
 class TracksSample:
     """One propagation sample (spec §3.2)."""
@@ -304,7 +309,7 @@ class TracksSample:
     @classmethod
     def from_dict(cls, d: dict[str, Any], *, n_frames: int) -> TracksSample:
         frame = d["frame"]
-        if not isinstance(frame, int) or frame < 0 or frame >= n_frames:
+        if not _is_int(frame) or frame < 0 or frame >= n_frames:
             raise ValueError(
                 f"sample frame={frame!r} is out of [0, n_frames={n_frames})"
             )
@@ -348,11 +353,11 @@ class TracksGap:
         from_frame = d["from_frame"]
         to_frame = d["to_frame"]
         reason = d["reason"]
-        if not isinstance(from_frame, int) or from_frame < 0 or from_frame >= n_frames:
+        if not _is_int(from_frame) or from_frame < 0 or from_frame >= n_frames:
             raise ValueError(
                 f"gap from_frame={from_frame!r} is out of [0, n_frames={n_frames})"
             )
-        if not isinstance(to_frame, int) or to_frame < 0 or to_frame >= n_frames:
+        if not _is_int(to_frame) or to_frame < 0 or to_frame >= n_frames:
             raise ValueError(
                 f"gap to_frame={to_frame!r} is out of [0, n_frames={n_frames})"
             )
@@ -398,7 +403,7 @@ class TracksTrack:
         if role not in _VALID_ROLES:
             raise ValueError(f"track role={role!r} must be one of {sorted(_VALID_ROLES)}")
         index = d["index"]
-        if not isinstance(index, int) or index < 0:
+        if not _is_int(index) or index < 0:
             raise ValueError(f"track index={index!r} must be int >= 0")
         samples = [TracksSample.from_dict(s, n_frames=n_frames) for s in d["samples"]]
         # Validate strict frame-ascending order
@@ -455,7 +460,12 @@ class TracksTrackingPlan:
     def from_dict(cls, d: dict[str, Any]) -> TracksTrackingPlan:
         failed: list[tuple[str, str]] = []
         for entry in d.get("failed_prompts", []):
-            failed.append((str(entry["role"]), str(entry["prompt"])))
+            role = str(entry["role"])
+            if role not in _VALID_ROLES:
+                raise ValueError(
+                    f"failed_prompts role={role!r} must be one of {sorted(_VALID_ROLES)}"
+                )
+            failed.append((role, str(entry["prompt"])))
         return cls(
             task_text=str(d["task_text"]),
             object_prompts=list(d.get("object_prompts", [])),
@@ -556,17 +566,17 @@ class TracksFile:
         if fps <= 0.0:
             raise ValueError(f"fps={fps!r} must be > 0")
         n_frames = d["n_frames"]
-        if not isinstance(n_frames, int) or n_frames < 1:
+        if not _is_int(n_frames) or n_frames < 1:
             raise ValueError(f"n_frames={n_frames!r} must be int >= 1")
         image_size = d["image_size"]
         width = image_size["width"]
         height = image_size["height"]
-        if not isinstance(width, int) or width <= 0:
+        if not _is_int(width) or width <= 0:
             raise ValueError(f"image_size.width={width!r} must be int > 0")
-        if not isinstance(height, int) or height <= 0:
+        if not _is_int(height) or height <= 0:
             raise ValueError(f"image_size.height={height!r} must be int > 0")
         stride = d["track_stride_frames"]
-        if not isinstance(stride, int) or stride < 1:
+        if not _is_int(stride) or stride < 1:
             raise ValueError(f"track_stride_frames={stride!r} must be int >= 1")
         tracking_plan = TracksTrackingPlan.from_dict(d["tracking_plan"])
         tracks = [TracksTrack.from_dict(t, n_frames=n_frames) for t in d["tracks"]]
