@@ -451,6 +451,20 @@ def _hf_load_model_and_processor(
     return model, processor
 
 
+@dataclass(frozen=True)
+class GemmaHandle:
+    """Thin reference to a loaded Gemma model + processor.
+
+    Returned by ``LocalGemmaVLMLabeler.shared_handle()``. All three attributes
+    are the SAME Python objects as inside the originating labeler — no copies.
+    Callers can verify identity with ``id(handle.model) == id(labeler._model)``.
+    """
+
+    model: Any
+    processor: Any
+    config: VLMConfig
+
+
 class LocalGemmaVLMLabeler:
     """Default real implementation — Gemma 4-family multimodal IT loaded via
     HuggingFace transformers (spec §2.2). Documented default:
@@ -479,6 +493,19 @@ class LocalGemmaVLMLabeler:
         return ModelIdentity(
             vlm_model=self._config.model_id,
             vlm_checkpoint=self._config.resolved_checkpoint or "",
+        )
+
+    def shared_handle(self) -> GemmaHandle:
+        """Return a GemmaHandle exposing the same model/processor/config objects.
+
+        The returned handle holds references (not copies) to ``self._model``,
+        ``self._processor``, and ``self._config``. Identity is preserved:
+        ``id(handle.model) == id(self._model)``.
+        """
+        return GemmaHandle(
+            model=self._model,
+            processor=self._processor,
+            config=self._config,
         )
 
     def label_segment(
