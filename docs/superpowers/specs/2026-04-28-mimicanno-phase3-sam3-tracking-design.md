@@ -349,7 +349,7 @@ class Propagator:
    - `iou >= config.reacquisition_iou_threshold` → same `track_id`, append `GapEvent(reason="sam3_reacquired", from_frame=current_frame, to_frame=current_frame)` immediately before this sample.
    - `iou < config.reacquisition_iou_threshold` → start a new `Track` with index incremented (`obj:object:red_block:1`).
 6. Track ID assignment: `make_track_id(role, prompt, index)` where `index` increments across re-acquisition splits within the same (role, prompt).
-7. Primary marking: per role, the first track for `plan.{role}_prompts[0]` (i.e. the index=0 occurrence of the role's first prompt) gets `primary=True`. Non-primary tracks get `primary=False`. Roles with no tracks → no primary.
+7. Primary marking: per role, find the first prompt in `plan.{role}_prompts` order that has a non-empty `plan.initial_detections[prompt]` entry (i.e. survived Step B grounding). The index=0 occurrence of that prompt gets `primary=True`. Non-primary tracks get `primary=False`. If every prompt for a role failed Step B, no track for that role is primary. Roles with no tracks → no primary.
 
 #### 2.4.2 Output guarantees
 
@@ -1008,15 +1008,16 @@ Per parent spec §4.1, `config_hash = sha256(canonical_json(AnnotationConfig + t
 **Gating rule:** `AnnotationConfig.to_dict()` (and any nested `*.to_dict()` it composes) accepts an explicit `target_phase: int` argument and emits Phase-3-only fields **iff `target_phase >= 3`**. Specifically:
 
 ```python
-def to_dict(self, *, target_phase: int) -> dict[str, Any]:
-    payload = {
-        "boundary": self.boundary.to_dict(target_phase=target_phase),
-    }
-    if target_phase >= 2:
-        payload["vlm"] = self.vlm.to_dict()              # existing Phase 2 gate
-    if target_phase >= 3:
-        payload["tracking"] = self.tracking.to_dict()    # see TrackingConfig.to_dict below
-    return payload
+class AnnotationConfig:
+    def to_dict(self, *, target_phase: int) -> dict[str, Any]:
+        payload = {
+            "boundary": self.boundary.to_dict(target_phase=target_phase),
+        }
+        if target_phase >= 2:
+            payload["vlm"] = self.vlm.to_dict()              # existing Phase 2 gate
+        if target_phase >= 3:
+            payload["tracking"] = self.tracking.to_dict()    # see TrackingConfig.to_dict below
+        return payload
 
 # Single BoundaryWeights class with two Phase 3 fields gated out:
 class BoundaryConfig:
