@@ -362,3 +362,97 @@ def test_outside_interp_domain_is_nan() -> None:
     assert not np.isnan(centers[10, 0])
     assert not np.isnan(centers[15, 0])
     assert not np.isnan(centers[20, 0])
+
+
+# ---------------------------------------------------------------------------
+# Test 16: Speed at frame 0 with gap at frame 1 (Bug 1)
+# ---------------------------------------------------------------------------
+
+
+def test_speed_at_frame_0_with_gap_adjacent() -> None:
+    """Frame 0 has valid sample; frame 1-4 are in gap (no valid 'next').
+    speed[0] should be NaN, not wrapped value from centers[-1].
+    """
+    fps = 30.0
+    aspect = 16 / 9
+    # samples at [0, 5, 6, 7], gap [1, 4]
+    tracks = [
+        make_track(
+            "obj_a",
+            "object",
+            primary=True,
+            samples=[(0, 0.1, 0.5), (5, 0.3, 0.5), (6, 0.4, 0.5), (7, 0.5, 0.5)],
+            gap_events=[(1, 4)],
+        )
+    ]
+    signals = compute_object_signals(tracks, fps=fps, n_frames=8, image_aspect_ratio=aspect)
+    speed = signals.object_speed["obj_a"]
+    # Frame 0: next at frame 1 is NaN (in gap), prev would wrap to frame 7 (invalid)
+    # Expected: NaN (no valid one-sided diff for frame 0)
+    assert np.isnan(speed[0]), "speed[0] should be NaN (no valid adjacent for one-sided diff)"
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Speed at frame n-1 with gap at frame n-2 (Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def test_speed_at_last_frame_with_gap_adjacent() -> None:
+    """Frame 7 is last; frame 3-6 are in gap (no valid 'prev').
+    speed[7] should be NaN, not wrapped value from centers[0].
+    """
+    fps = 30.0
+    aspect = 16 / 9
+    # samples at [0, 1, 2, 7], gap [3, 6]
+    tracks = [
+        make_track(
+            "obj_a",
+            "object",
+            primary=True,
+            samples=[(0, 0.1, 0.5), (1, 0.2, 0.5), (2, 0.3, 0.5), (7, 0.5, 0.5)],
+            gap_events=[(3, 6)],
+        )
+    ]
+    signals = compute_object_signals(tracks, fps=fps, n_frames=8, image_aspect_ratio=aspect)
+    speed = signals.object_speed["obj_a"]
+    # Frame 7: prev at frame 6 is NaN (in gap), next would wrap to frame 0 (invalid)
+    # Expected: NaN (no valid one-sided diff for frame 7)
+    assert np.isnan(speed[7]), "speed[7] should be NaN (no valid adjacent for one-sided diff)"
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Distance NaN inside object gap (invariant 3 coverage)
+# ---------------------------------------------------------------------------
+
+
+def test_distance_nan_inside_object_gap() -> None:
+    """Object track with gap [2, 3]; gripper track no gap.
+    gripper_object_distance should be NaN inside object's gap.
+    """
+    fps = 30.0
+    aspect = 16 / 9
+    tracks = [
+        make_track(
+            "obj_a",
+            "object",
+            primary=True,
+            samples=[(0, 0.5, 0.5), (1, 0.5, 0.5), (2, 0.5, 0.5), (3, 0.5, 0.5), (4, 0.5, 0.5), (5, 0.5, 0.5)],
+            gap_events=[(2, 3)],
+        ),
+        make_track(
+            "tool_a",
+            "tool",
+            primary=True,
+            samples=[(0, 0.3, 0.3), (1, 0.3, 0.3), (2, 0.3, 0.3), (3, 0.3, 0.3), (4, 0.3, 0.3), (5, 0.3, 0.3)],
+        ),
+    ]
+    signals = compute_object_signals(tracks, fps=fps, n_frames=6, image_aspect_ratio=aspect)
+    dist = signals.gripper_object_distance["obj_a"]
+    # Frames 2 and 3 are in object's gap: distance should be NaN
+    assert np.isnan(dist[2]), "distance[2] should be NaN (object gap)"
+    assert np.isnan(dist[3]), "distance[3] should be NaN (object gap)"
+    # Frames outside gap: not NaN
+    assert not np.isnan(dist[0])
+    assert not np.isnan(dist[1])
+    assert not np.isnan(dist[4])
+    assert not np.isnan(dist[5])

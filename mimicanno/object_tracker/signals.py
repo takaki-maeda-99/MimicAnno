@@ -124,11 +124,19 @@ def _compute_speed(
 
     # Where prev is NaN but next is not: use forward diff
     mask_fwd = prev_nan & ~next_nan
+    # Exclude boundary frames: already correctly handled by explicit overrides.
+    # frame 0 and frame n-1 boundary logic prevents adjacent-to-gap masks from overwriting.
+    mask_fwd[0] = False
+    mask_fwd[-1] = False
     dx = np.where(mask_fwd, forward_dx, dx)
     dy = np.where(mask_fwd, forward_dy, dy)
 
     # Where next is NaN but prev is not: use backward diff
     mask_bwd = next_nan & ~prev_nan
+    # Exclude boundary frames: already correctly handled by explicit overrides.
+    # frame 0 and frame n-1 boundary logic prevents adjacent-to-gap masks from overwriting.
+    mask_bwd[0] = False
+    mask_bwd[-1] = False
     dx = np.where(mask_bwd, backward_dx, dx)
     dy = np.where(mask_bwd, backward_dy, dy)
 
