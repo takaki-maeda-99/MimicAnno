@@ -150,8 +150,10 @@ mimicanno/
                         # extend SubtaskSegment serialization with object_track_ids
                         # (already declared, populated only in Phase 3)
   config.py             # add TrackingConfig, Phase3BoundaryWeights;
-                        # AnnotationConfig.tracking sub-block; AnnotationConfig.boundary.weights
-                        # gains 2 new fields (default 0.0 → unchanged hash for Phase 1/2)
+                        # AnnotationConfig.tracking sub-block; BoundaryWeights gains 2 new
+                        # fields. Hash backward-compat is enforced at to_dict() time —
+                        # see §9.1 (target_phase-gated serialization), NOT by relying on
+                        # default values to silently drop out of canonical JSON
   cli.py                # add --sam3-checkpoint, --track-stride-frames flags
                         # add abort path: target_phase == 3 requires --vlm-model and resolvable SAM3
   hashing.py            # no logic change; new TrackingConfig fields enter config_hash
@@ -399,7 +401,7 @@ For each `(object_track, gripper_tool_track)` pair where `gripper_tool_track is 
 For each object track:
 
 1. Linear-interpolate bbox-center across non-gap regions (same rule).
-2. At each frame `t` in the interpolation domain: `object_speed[track_id][t]` = `sqrt((dx/dt)² + (dy/(dt·image_aspect_ratio))²)` where `(dx, dy)` is the central-difference between frames `t-1` and `t+1`, divided by `2/fps`.
+2. At each frame `t` in the interpolation domain: with `(dx, dy) = center(t+1) - center(t-1)` and inter-frame spacing `Δt = 1/fps`, define `vx = dx * fps / 2`, `vy = dy * fps / 2`. Then `object_speed[track_id][t] = sqrt(vx² + (vy / image_aspect_ratio)²)`. Aspect-ratio division re-isotropizes to image-diag-normalized units / sec.
 3. Boundary frames (`t = 0`, `t = n_frames - 1`, frames adjacent to a gap) use forward/backward difference. Frames inside a gap: `NaN`.
 
 #### 2.5.3 Primary track resolution
@@ -570,7 +572,7 @@ Parent spec §5.3 announced that Phase 3 adds `gripper_object_distance_threshold
 - **Input:** `ObjectSignals.gripper_object_distance[object_track_id]` for each `object_track_id`.
 - **Per-frame signal:** `d(t) = gripper_object_distance[object_track_id][t]`. NaN frames are skipped (no event emitted).
 - **Crossing detection:** at each frame `t` where both `d(t-1)` and `d(t)` are non-NaN, emit a candidate iff `sign(d(t-1) - threshold) != sign(d(t) - threshold)` where `threshold = config.tracking.gripper_object_distance_threshold` (default `0.05` of image diagonal).
-- **`source_score`:** `clip(|d(t + w) - d(t - w)| / threshold, 0, 1)` where `w = max(1, round(0.10 * fps))`. Use the most extreme available window (clipped to `[0, n_frames)`); if both sides are within 1 frame of an episode boundary, emit the event with `source_score = 0.5` (sentinel; rare).
+- **`source_score`:** `clip(|d(t + w) - d(t - w)| / threshold, 0, 1)` where `w = max(1, round(0.10 * fps))`. The window is clipped to `[0, n_frames)`; **if either side of the windowed delta is undefined (i.e. `t - w < 0` or `t + w >= n_frames`), do NOT emit the event** (the windowed-delta is undefined; falling back to a sentinel score risks polluting boundary candidates at the episode edges where the bracketing already creates implicit cuts).
 - **Multi-object aggregation:** events from different `(object_track_id, gripper_tool_track_id)` pairs at the same effective `time` are merged at the integrated-score stage via §5.3 max rule (parent spec).
 - **Source identifier in `boundaries.json`:** `"gripper_object_distance_threshold_crossing"`
 
@@ -698,10 +700,10 @@ Algorithm:
    - `primary_object_max_speed` = max (or None if all NaN).
    - `primary_object_displacement` = sum of `|center_diff(t)|` for adjacent non-gap frame pairs in segment, normalized by image-diag (or None if all NaN).
 6. **Object-at-target proxy.**
-   - If `primary_target_track` exists and the last frame of segment has non-NaN bbox for both primary object and primary target:
-     - `bbox_iou = primary_object_track.bbox_at(end).iou(primary_target_track.bbox_at(end))` where `bbox_at(end)` returns the bbox at the largest sampled frame `<= segment_end_frame`, or NaN if none.
-     - `primary_object_at_target_at_end = bbox_iou > 0.05`.
-   - Otherwise: `primary_object_at_target_at_end = None`.
+   - Define `bbox_at_frame(track, t)`: linearly interpolate `(x, y, w, h)` between the two bracketing samples of `track` whose frames sandwich `t`, **iff `t` is not inside any `gap_event` for that track and at least one sample exists at frame `<= t` and one at frame `>= t`** (no extrapolation past the first or last sample). Returns `None` otherwise.
+   - Compute `obj_bbox = bbox_at_frame(primary_object_track, segment_end_frame)` and `tgt_bbox = bbox_at_frame(primary_target_track, segment_end_frame)`. **Both are evaluated at the same exact frame `segment_end_frame`** — IoU between bboxes from different frames is geometrically meaningless and is explicitly rejected.
+   - If `obj_bbox is None` or `tgt_bbox is None` or `primary_target_track is None`: `primary_object_at_target_at_end = None`.
+   - Otherwise: `primary_object_at_target_at_end = obj_bbox.iou(tgt_bbox) > 0.05`.
 
 ### 5.3 Primary pair convention
 
@@ -952,41 +954,81 @@ Extends parent spec §11. Phase 3-specific rows:
 | Gemma planner returns valid JSON but `objects: []` | Step A semantic check | Whole-run degrade `gemma_no_object_prompts` |
 | Step B: SAM3 returns no detections for any object_prompt | `ground_on_frame` returns `[]` for all | Whole-run degrade `sam3_no_initial_detection` |
 | Step B: SAM3 returns detections for some but not all object_prompts | partial | Continue with detected prompts; failed ones go to `tracking_plan.failed_prompts`. No degrade. |
-| `SAM3Runtime.load(...)` raises during Stage 1b | constructor exception (CUDA OOM, missing checkpoint, …) | Whole-run degrade `sam3_init_failed` (with `cause` chained for stderr JSON) |
-| Propagation runtime error mid-episode | `propagate(...)` exception | Abort (no Phase 2 fallback at this point — already past the early-degrade window). Stderr JSON has `error_code="sam3_runtime_failed"` and `frame_index` at which it occurred. The run dir tmp is cleaned up by the existing scavenger contract. |
+| `SAM3Runtime.load(...)` raises during Stage 1b | constructor exception (CUDA OOM, missing checkpoint, …) | Whole-run degrade `sam3_init_failed`. The chained `cause` is recorded in the Phase 2 `notes` entry (NOT to stderr — degrade exits 0). |
+| Propagation runtime error mid-episode | `propagate(...)` exception | Abort with non-zero exit. Stderr JSON has `error_code="sam3_runtime_failed"` and `frame_index` at which it occurred. The orchestrator MUST `rm -rf` the in-flight `*.tmp.<pid>/` directory synchronously before exit (best effort; failures logged but ignored). The parent §4.4 / §6.5 stale-tmp scavenger remains the safety net for crash-during-rm cases. |
 | Per-segment: `compute_object_state_summary` returns None | `primary_object_track` invisible / missing in segment | Per-segment fallback (§6); no abort, no degrade |
 | `tracks.json` cross-artifact mismatch on read | Reader integrity check | Reader raises `ArtifactIntegrityError` (read path; not produced at write time by a sound implementation) |
 
-All aborts emit a structured stderr JSON identical in shape to Phase 1/2:
+All non-zero-exit aborts emit a structured stderr JSON identical in shape to Phase 1/2:
 ```jsonc
 {"error_code": "...", "message": "...", "context": {...}, "ts": "<ISO-8601>"}
 ```
 
 New error codes (defined in `mimicanno.errors`):
-- `sam3_init_failed`
-- `sam3_runtime_failed`
-- `sam3_extras_missing`
-- `gemma_planner_no_objects`
-- `sam3_initial_detection_failed`
+- `sam3_init_failed` — degrade reason; **never goes to stderr** (degrade exits 0)
+- `sam3_runtime_failed` — abort code; **goes to stderr**, exits non-zero
+- `sam3_extras_missing` — abort code; **goes to stderr**, exits non-zero
+- `gemma_planner_no_objects` — degrade reason; **never goes to stderr** (degrade exits 0)
+- `sam3_initial_detection_failed` — degrade reason; **never goes to stderr** (degrade exits 0)
 
-The `..._failed` codes are emitted for whole-run degrade reasons via the `notes` channel, not stderr — the run still exits 0 (degraded success). `sam3_runtime_failed` and `sam3_extras_missing` cause non-zero exit with stderr JSON.
+**Channel assignment is exclusive:** every Phase 3 error code is either a degrade reason (logged to `notes`, exits 0) or an abort code (stderr JSON, non-zero exit). No code uses both channels. The whole-run degrade path (§7.2) writes the chained `cause` from any underlying exception into the `notes` entry text; it does NOT also emit stderr JSON for the same event.
 
 ## 9. Configuration hashing
 
-Per parent spec §4.1, `config_hash = sha256(canonical_json(AnnotationConfig + target_phase + model_config))`. Phase 3 enlarges `model_config`:
+Per parent spec §4.1, `config_hash = sha256(canonical_json(AnnotationConfig + target_phase + model_config))`.
+
+### 9.1 Hash payload gating for Phase 1/2 backward compatibility
+
+**Critical invariant:** the canonical JSON payload that feeds `config_hash` MUST be byte-identical to the Phase 1/2 payload when `target_phase ∈ {1, 2}`. Adding a new field to `AnnotationConfig` or to `BoundaryWeights` and relying on Python's default value to silently disappear from the canonical JSON output **does not work**: dataclass-derived `to_dict()` emits explicitly declared fields regardless of value. Without explicit gating, Phase 1/2 hashes computed against the post-Phase-3-merge code would not match hashes computed against the pre-merge code, invalidating every existing `runs/<canonical_name>/` directory.
+
+**Gating rule:** `AnnotationConfig.to_dict()` (and any nested `*.to_dict()` it composes) accepts an explicit `target_phase: int` argument and emits Phase-3-only fields **iff `target_phase >= 3`**. Specifically:
 
 ```python
-model_config = {
-    "vlm_model":       config.vlm.model_id,
-    "vlm_checkpoint":  config.vlm.checkpoint_sha256 or None,
-    "sam3_model":      config.tracking.sam3_model_id,            # NEW
-    "sam3_checkpoint": _sha256_of_path(config.tracking.sam3_checkpoint),  # NEW (None for Phase 1/2)
-}
+def to_dict(self, *, target_phase: int) -> dict[str, Any]:
+    payload = {
+        "boundary": self.boundary.to_dict(target_phase=target_phase),
+        # vlm sub-block only when target_phase >= 2 (existing Phase 2 gate)
+    }
+    if target_phase >= 2:
+        payload["vlm"] = self.vlm.to_dict()
+    if target_phase >= 3:
+        payload["tracking"] = self.tracking.to_dict()
+    return payload
+
+# In BoundaryConfig.to_dict:
+def to_dict(self, *, target_phase: int) -> dict[str, Any]:
+    weights = self.weights.to_dict(target_phase=target_phase)
+    # weights.to_dict omits the 2 Phase 3 keys when target_phase < 3
+    return {"weights": weights, "thresholds": self.thresholds.to_dict(), ...}
 ```
 
-For Phase 1/2 invocations, the `sam3_*` keys are present with `None` values (they were already pre-declared in parent spec §4 manifest schema). Adding `None` values does not retroactively change Phase 1/2 hashes if `sam3_*` keys were already serialized as `null` (parent spec line 110-111 confirms this). Confirm in unit test `test_phase3_hash_isolation.py`: a Phase 1 invocation today and a Phase 1 invocation post-Phase-3-merge produce identical `config_hash`.
+`model_config` is similarly gated:
 
-`AnnotationConfig.tracking` is hashed via existing recursive canonicalization. Phase 1/2 default `tracking = TrackingConfig()`; Phase 3 reads CLI flags into `TrackingConfig`. Tracking config differences → different `config_hash` → different `canonical_name` (parent spec §4.1 invariant).
+```python
+def build_model_config(config, *, target_phase: int) -> dict[str, Any]:
+    payload = {
+        "vlm_model":       config.vlm.model_id       if target_phase >= 2 else None,
+        "vlm_checkpoint":  config.vlm.checkpoint_sha256 if target_phase >= 2 else None,
+    }
+    if target_phase >= 3:
+        payload["sam3_model"]      = config.tracking.sam3_model_id
+        payload["sam3_checkpoint"] = _sha256_of_path(config.tracking.sam3_checkpoint)
+    return payload
+```
+
+Phase 1/2 payloads omit the `sam3_*` keys entirely (NOT serialize them as `null`). The parent spec §4 manifest example showing `"sam3": null` refers to the **manifest** field for downstream observability, NOT the hash payload. The Phase 1/2 manifest will continue to display `model_versions.sam3 = null` for human readability while the hash payload omits the key.
+
+`tracks.json` follows the same omit-when-not-applicable rule for any future field additions.
+
+### 9.2 Canonicalization
+
+Within a payload, key ordering is sorted ascending; floats are formatted with `repr()` (or equivalent that round-trips); `None` values for keys that ARE present in the payload are serialized as JSON `null` (the gate is on key presence, not on `null` rendering).
+
+### 9.3 Hash isolation test
+
+`tests/test_phase3_hash_isolation.py` MUST pin Phase 1 and Phase 2 hash values for one canonical `(AnnotationConfig, episode_inputs)` pair, computed against both pre-Phase-3 and post-Phase-3 code paths. Both code paths must produce the same hash. The test fails if either Phase 1 or Phase 2 hash drifts from its pinned value.
+
+`tracking` config differences (under `target_phase=3`) → different `config_hash` → different `canonical_name` (parent spec §4.1 invariant, preserved).
 
 ## 10. Testing strategy
 
