@@ -65,6 +65,7 @@ from mimicanno.schema import (
     InputRef,
     Manifest,
     PipelineStatus,
+    SmoothingSummary,
     SubtaskSegment,
     TaskInfo,
     TracksFile,
@@ -928,6 +929,25 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         labeler_factory=labeler_factory,
     )
 
+    # Phase 4: temporal smoothing (spec §3, §7.1).
+    smoothing_summary: SmoothingSummary | None = None
+    if req.config.target_phase >= 4:
+        if req.config.smoother is None:
+            raise MimicAnnoError(
+                "smoother.config_required",
+                "target_phase >= 4 requires a smoother_config; got None.",
+                {"target_phase": req.config.target_phase},
+            )
+        from mimicanno.smoother import apply_smoothing
+        labelset_in_order = [lbl.id for lbl in label_set.labels]
+        smoothing_result = apply_smoothing(
+            segments,
+            config=req.config.smoother,
+            labelset=labelset_in_order,
+        )
+        segments = smoothing_result.segments
+        smoothing_summary = smoothing_result.summary
+
     # Build tracks.json artifact
     tracks_file = _build_tracks_file(
         episode_id=episode_id,
@@ -953,6 +973,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         "vlm": vlm_cfg.to_dict(),
         "tracking": tracking_cfg.to_dict(),
     }
+    if req.config.target_phase >= 4 and req.config.smoother is not None:
+        pipeline_params["smoother"] = req.config.smoother.to_dict()
 
     # 8) Build per-channel signals downsampled for viewer.
     signal_channels: list[SignalChannel] = [
@@ -1025,6 +1047,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             Artifact("signals", "signals.json", "application/json"),
             Artifact("tracks", "tracks.json", "application/json"),
         ],
+        smoothing_summary=smoothing_summary,
     )
 
     annotation = AnnotationResult(
@@ -1084,6 +1107,31 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             length=RUN_HASH_FALLBACK_PREFIX_LEN,
         )
     return AnnotateResult(run_dir=req.runs_root / name, outcome=outcome)
+
+
+def annotate_episode_phase4(req: AnnotateRequest) -> AnnotateResult:
+    """Phase 4 orchestrator (spec §1.1).
+
+    Phase 4 is a thin wrapper over :func:`annotate_episode_phase3`: the same
+    inner pipeline (signals → boundaries → SAM3 → labeling) runs, the smoother
+    is applied to the labeled segments, and ``manifest.smoothing_summary`` is
+    populated. Phase 4 requires Phase 3 inputs (``--vlm-model``,
+    ``--sam3-checkpoint``) plus a ``SmootherConfig`` on
+    ``AnnotationConfig.smoother``.
+    """
+    if req.config.target_phase != 4:
+        raise MimicAnnoError(
+            "phase4.target_phase_mismatch",
+            f"annotate_episode_phase4 requires target_phase=4; got {req.config.target_phase}",
+            {"target_phase": req.config.target_phase},
+        )
+    if req.config.smoother is None:
+        raise MimicAnnoError(
+            "smoother.config_required",
+            "target_phase=4 requires AnnotationConfig.smoother != None.",
+            {"target_phase": req.config.target_phase},
+        )
+    return annotate_episode_phase3(req)
 
 
 def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
