@@ -226,6 +226,12 @@ def _select_adapter(name: str, config_path: Path | None) -> RobotAdapter:
     )
 
 
+def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
+    """Phase 3 orchestrator (Task 19). Currently a stub; Task 19 implements
+    the full Stage 1b ladder + Stage 2 + Stage 3 pipeline."""
+    raise NotImplementedError("annotate_episode_phase3 lands in Task 19")
+
+
 def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 1) Resolve label set.
     labels_path = req.labels_path or Path(default_labels_path("manipulation"))

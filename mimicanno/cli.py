@@ -25,18 +25,24 @@ from mimicanno import __version__  # noqa: E402
 from mimicanno.config import (  # noqa: E402
     AnnotationConfig,
     BoundaryConfig,
-    ModelConfig,
+    TrackingConfig,
     VLMConfig,
+    build_model_config,
     load_boundary_config_yaml,
 )
 from mimicanno.errors import (  # noqa: E402
     MimicAnnoError,
+    MissingDependencyError,
     VLMConfigInvalid,
     VLMModelRequired,
     write_error_json,
 )
-from mimicanno.pipeline import AnnotateRequest, annotate_episode  # noqa: E402
-from mimicanno.preflight import resolve_vlm_model  # noqa: E402
+from mimicanno.pipeline import (  # noqa: E402
+    AnnotateRequest,
+    annotate_episode,
+    annotate_episode_phase3,
+)
+from mimicanno.preflight import resolve_sam3_checkpoint, resolve_vlm_model  # noqa: E402
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -97,6 +103,14 @@ def annotate(
         False, "--offline",
         help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
     ),
+    sam3_checkpoint: Path | None = typer.Option(
+        None, "--sam3-checkpoint", dir_okay=False,
+        help="Path to SAM3 weights file. Required when --target-phase >= 3.",
+    ),
+    track_stride_frames: int | None = typer.Option(
+        None, "--track-stride-frames",
+        help="SAM3 video propagation stride (frames). Default: TrackingConfig.effective_stride.",
+    ),
 ) -> None:
     """Annotate a single LeRobot episode and publish a Phase-1 run directory."""
     try:
@@ -133,16 +147,38 @@ def annotate(
             write_error_json(e)
             raise typer.Exit(code=2) from None
 
+    # Phase 3 prerequisites (spec §8 Tier-1 abort guards).
+    sam3_checkpoint_resolved: str | None = None
+    tracking_config: TrackingConfig | None = None
+    if target_phase >= 3:
+        try:
+            # 1. Verify sam3 backend importable BEFORE any file IO.
+            from mimicanno.object_tracker.sam3_runtime import (
+                _ensure_transformers_sam3_importable,
+            )
+            _ensure_transformers_sam3_importable()
+            # 2. Verify --sam3-checkpoint provided.
+            if sam3_checkpoint is None:
+                raise MissingDependencyError(field="--sam3-checkpoint")
+            # 3. Resolve checkpoint sha256.
+            sam3_checkpoint_resolved = resolve_sam3_checkpoint(sam3_checkpoint)
+            # 4. Build TrackingConfig.
+            tracking_config = TrackingConfig(track_stride_frames=track_stride_frames)
+        except MimicAnnoError as e:
+            write_error_json(e)
+            raise typer.Exit(code=2) from None
+
     cfg = AnnotationConfig(
         boundary=boundary,
         target_phase=target_phase,
-        model_config=ModelConfig(
-            vlm_config.model_id if vlm_config else None,
-            vlm_config.resolved_checkpoint if vlm_config else None,
-            None,
-            None,
+        model_config=build_model_config(
+            target_phase=target_phase,
+            vlm=vlm_config,
+            tracking=tracking_config,
+            sam3_checkpoint_sha256=sam3_checkpoint_resolved,
         ),
         vlm=vlm_config,
+        tracking=tracking_config,
     )
     req = AnnotateRequest(
         video=video,
@@ -157,7 +193,10 @@ def annotate(
         config=cfg,
     )
     try:
-        annotate_episode(req)
+        if cfg.target_phase >= 3:
+            annotate_episode_phase3(req)
+        else:
+            annotate_episode(req)
     except MimicAnnoError as e:
         write_error_json(e)
         raise typer.Exit(code=2) from None

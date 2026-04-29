@@ -45,6 +45,19 @@ class VLMModelRequired(MimicAnnoError):
         )
 
 
+class MissingDependencyError(MimicAnnoError):
+    """A required CLI argument was not provided (spec §8 abort guard).
+    Tier-1 abort, exits non-zero. The `field` context is the missing flag name
+    (e.g., '--sam3-checkpoint')."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(
+            code="missing_dependency",
+            message=f"required argument missing: {field}",
+            context={"field": field},
+        )
+
+
 class VLMConfigInvalid(MimicAnnoError):
     """VLMConfig has an out-of-range or contradictory field (spec §4.2)."""
 
