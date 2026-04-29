@@ -63,13 +63,17 @@ class PipelineStatus:
     object_state_available: bool
     degraded_from_phase: int | None
     degrade_reason: str | None
+    object_state_segment_coverage: float | None = None  # Phase 3 only; absent for Phase 1/2 (§6.3)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "object_state_available": self.object_state_available,
             "degraded_from_phase": self.degraded_from_phase,
             "degrade_reason": self.degrade_reason,
         }
+        if self.object_state_segment_coverage is not None:
+            d["object_state_segment_coverage"] = self.object_state_segment_coverage
+        return d
 
 
 @dataclass(slots=True)

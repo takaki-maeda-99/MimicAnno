@@ -294,16 +294,282 @@ def _compute_image_aspect_ratio(probe: VideoProbe, tracking_config: TrackingConf
 
 
 def _degrade_to_phase3_objectless(
-    inputs: Any,
+    req: AnnotateRequest,
     config: AnnotationConfig,
-    vlm: Any,
-    robot_signals: Any,
-    degrade_reason: str,
+    vlm: Any,  # LocalGemmaVLMLabeler in prod; FixtureVLMLabeler in tests
     *,
+    fps: float,
+    duration_sec: float,
+    n_frames: int,
+    episode_id: str,
+    config_hash: str,
+    input_hash: str,
+    run_hash: str,
+    label_set: Any,
+    probe: VideoProbe,
+    loaded: Any,
+    adapter: RobotAdapter,
+    adapter_config_sha: str | None,
+    timestamps: np.ndarray,
+    gripper_s: np.ndarray,
+    vel_s: np.ndarray | None,
+    accel_s: np.ndarray | None,
+    action_s: np.ndarray | None,
+    has_eef: bool,
+    disabled_sources_phase1: list[str],
+    degrade_reason: str,
     underlying_log: str | None = None,
 ) -> AnnotateResult:
-    """Phase 3 whole-run degrade helper (Task 20). Stub at Task 19."""
-    raise NotImplementedError("_degrade_to_phase3_objectless lands in Task 20")
+    """Phase 3 whole-run degrade — produces a Phase 3 objectless run (spec §7.2).
+
+    Uses Phase3BoundaryDetector with Phase 3 weights + empty object_signals;
+    labels via apply_phase2_labeling (object_state_summary=None); does NOT
+    write tracks.json; sets pipeline_status.object_state_available=False.
+    """
+    from mimicanno.object_tracker.signals import ObjectSignals
+
+    # 1) Emit underlying_log to stderr WARN (NEVER to notes — PII rule §7.2/§8).
+    if underlying_log is not None:
+        _sys.stderr.write(
+            f"WARN: phase3 degrade {degrade_reason}: {underlying_log}\n"
+        )
+        _sys.stderr.flush()
+
+    # 2) Phase 1 disabled sources + Phase 3 always-disabled object sources.
+    disabled_sources: list[str] = [
+        *disabled_sources_phase1,
+        "gripper_object_distance_threshold_crossing",
+        "object_motion_start_stop",
+    ]
+
+    # 3) Build empty ObjectSignals (NaN-filled arrays, no tracks).
+    empty_signals = ObjectSignals(
+        gripper_object_distance={},
+        object_speed={},
+        object_center={},
+        primary_object_track_id=None,
+        primary_target_track_id=None,
+        gripper_tool_track_id=None,
+    )
+
+    # 4) Phase3BoundaryDetector with Phase 3 weights.
+    bcfg = config.boundary
+    tracking_cfg = config.tracking
+    assert tracking_cfg is not None  # guaranteed by annotate_episode_phase3 pre-check
+
+    detector = Phase3BoundaryDetector(
+        fps=fps,
+        weights=bcfg.weights,
+        score_threshold=bcfg.score_threshold,
+        merge_window_sec=bcfg.merge_window_sec,
+        disabled_sources=disabled_sources,
+        tracking_config=tracking_cfg,
+    )
+    eef_vel_for_detector = vel_s if vel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    accel_for_detector = accel_s if accel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    action_for_detector = action_s if action_s is not None else np.zeros(n_frames, dtype=np.float64)
+    candidates, final_disabled = detector.detect(
+        gripper=gripper_s,
+        eef_vel=eef_vel_for_detector,
+        eef_accel=accel_for_detector,
+        action_norm=action_for_detector,
+        object_signals=empty_signals,
+        tracks=[],
+    )
+
+    # 5) Bracket into segments.
+    segments = bracket_phase1_segments(
+        episode_id=episode_id,
+        candidates=candidates,
+        fps=fps,
+        duration_sec=duration_sec,
+    )
+
+    # 6) Label via apply_phase2_labeling (object_state_summary=None → Phase 2 prompt).
+    from mimicanno.clip_features import ClipFeatureExtractor
+
+    vlm_cfg = config.vlm
+    assert vlm_cfg is not None  # guaranteed by annotate_episode_phase3 pre-check
+
+    extractor = ClipFeatureExtractor(
+        video_path=req.video,
+        fps=fps,
+        clip_features_config=vlm_cfg.clip_features,
+        image_size_px=vlm_cfg.image_size_px,
+    )
+    episode_meta = {
+        "task_text": req.task,
+        "allowed_labels": list(label_set.label_ids()),
+        "label_version": label_set.schema_version,
+        "robot_type": req.robot_adapter_name,
+        "fps": fps,
+        "episode_duration_sec": duration_sec,
+    }
+
+    def _labeler_factory(c: VLMConfig) -> Any:
+        return vlm
+
+    gripper_raw = adapter.gripper_signal(loaded.table)
+    eef_vel_raw = adapter.eef_velocity(loaded.table)
+
+    segments, _outcome, _notes = apply_phase2_labeling(
+        segments=segments,
+        extractor=extractor,
+        gripper=gripper_raw,
+        eef_velocity=eef_vel_raw,
+        episode_meta=episode_meta,
+        vlm_config=vlm_cfg,
+        labeler_factory_override=_labeler_factory,
+    )
+
+    # 7) Stamp every segment with Phase 3 degrade fields.
+    for seg in segments:
+        seg.label_source = "vlm_robot_state_only"
+        seg.object_state_unavailable = True
+        seg.object_track_ids = []
+
+    # 8) Build pipeline_status.
+    pipeline_status = PipelineStatus(
+        object_state_available=False,
+        degraded_from_phase=3,
+        degrade_reason=degrade_reason,
+        object_state_segment_coverage=0.0,
+    )
+
+    # 9) annotation.notes — exact canonical message, NO underlying_log (PII rule §7.2/§8).
+    notes = f"phase3: degraded to object-state-unavailable path (degrade_reason={degrade_reason})."
+
+    # 10) Build manifest payloads.
+    generated_at = dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
+
+    pipeline_params: dict[str, Any] = {
+        "boundary": {
+            "weights": bcfg.weights.to_dict(target_phase=config.target_phase),
+            "thresholds": dict(bcfg.thresholds),
+            "merge_window_sec": bcfg.merge_window_sec,
+            "score_threshold": bcfg.score_threshold,
+            "disabled_sources": final_disabled,
+        },
+        "vlm": vlm_cfg.to_dict(),
+        "tracking": tracking_cfg.to_dict(),
+    }
+
+    signal_channels: list[SignalChannel] = [
+        downsample_for_viewer(
+            SignalChannel(name="gripper", unit="normalized", values=gripper_s, dt_sec=1.0 / fps),
+            target_hz=30.0,
+        ),
+    ]
+    if vel_s is not None:
+        signal_channels.append(
+            downsample_for_viewer(
+                SignalChannel(name="eef_velocity", unit="m/s", values=vel_s, dt_sec=1.0 / fps),
+                target_hz=30.0,
+            )
+        )
+
+    assert vlm_cfg.resolved_checkpoint is not None, (
+        "pre-flight must populate vlm.resolved_checkpoint before _degrade_to_phase3_objectless"
+    )
+    model_versions: dict[str, str | None] = {
+        "vlm": f"{vlm_cfg.model_id}:{vlm_cfg.resolved_checkpoint}",
+        "sam3": tracking_cfg.sam3_model_id,
+        "sam3_checkpoint": config.model_config.sam3_checkpoint,
+    }
+
+    task_info = TaskInfo(text=req.task, version=None)
+    generator = GeneratorInfo(
+        name="mimicanno",
+        cli_version=__version__,
+        pipeline_phase=config.target_phase,
+    )
+
+    manifest = Manifest(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["manifest"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_params=pipeline_params,
+        inputs={
+            "video": InputRef(path=str(req.video), sha256=probe.sha256),
+            "parquet": InputRef(path=str(req.parquet), sha256=loaded.sha256),
+        },
+        time_base="video_pts_seconds",
+        fps=fps,
+        duration_sec=duration_sec,
+        pipeline_status=pipeline_status,
+        compat=COMPAT_BLOCK,
+        # spec §3.4: tracks artifact MUST NOT be present on degrade path
+        artifacts=[
+            Artifact("video", "video.mp4", "video/mp4"),
+            Artifact("annotation", "annotation.json", "application/json"),
+            Artifact("boundaries", "boundaries.json", "application/json"),
+            Artifact("signals", "signals.json", "application/json"),
+        ],
+    )
+
+    annotation = AnnotationResult(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["annotation"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_phase=config.target_phase,
+        pipeline_status=pipeline_status,
+        segments=segments,
+        boundaries_url="boundaries.json",
+        signals_url="signals.json",
+        notes=notes,
+    )
+
+    # 11) Publish — NO tracks.json written.
+    def _write_artifacts(tmp_dir: Path) -> None:
+        materialize_video(req.video, tmp_dir, link=req.link_video)
+        write_signals_json(
+            tmp_dir / "signals.json",
+            episode_id=episode_id,
+            duration_sec=duration_sec,
+            channels=signal_channels,
+        )
+        write_boundaries_json(
+            tmp_dir / "boundaries.json",
+            episode_id=episode_id,
+            candidates=candidates,
+        )
+        write_annotation_json(tmp_dir / "annotation.json", annotation)
+        write_manifest_json(tmp_dir / "manifest.json", manifest)
+        # tracks.json intentionally NOT written (spec §3.4 / §7.2)
+
+    publish_req = PublishRequest(
+        runs_root=req.runs_root,
+        episode_id=episode_id,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        task_text=req.task,
+        pipeline_phase=config.target_phase,
+        generated_at=generated_at,
+        force=req.force,
+    )
+    outcome = publish(publish_req, write_artifacts=_write_artifacts)
+
+    name = canonical_name_for(episode_id, run_hash=run_hash)
+    if is_collision(req.runs_root, canonical_name=name, expected_run_hash=run_hash):
+        name = canonical_name_for(
+            episode_id,
+            run_hash=run_hash,
+            length=RUN_HASH_FALLBACK_PREFIX_LEN,
+        )
+    return AnnotateResult(run_dir=req.runs_root / name, outcome=outcome)
 
 
 def _build_tracks_file(
@@ -489,12 +755,13 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         accel_s = None
     action_s = gaussian_smooth_1d(action_norm, sigma=sigma) if action_norm is not None else None
 
-    # Phase 1 disabled sources
-    disabled: list[str] = []
+    # Phase 1 disabled sources (computed before the degrade gates so they
+    # can be forwarded to _degrade_to_phase3_objectless when needed).
+    disabled_phase1: list[str] = []
     if not has_eef:
-        disabled.extend(["eef_velocity_valley", "eef_acceleration_peak"])
+        disabled_phase1.extend(["eef_velocity_valley", "eef_acceleration_peak"])
     if action_s is None:
-        disabled.append("action_norm_change")
+        disabled_phase1.append("action_norm_change")
 
     # Stage 1b: tracking — Step A → SAM3 load → Step B → Step C
 
@@ -515,7 +782,16 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     )
     if not entities.object_prompts:
         return _degrade_to_phase3_objectless(
-            req, req.config, vlm, None, "gemma_no_object_prompts"
+            req, req.config, vlm,
+            fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+            episode_id=episode_id, config_hash=config_hash,
+            input_hash=input_hash, run_hash=run_hash,
+            label_set=label_set, probe=probe, loaded=loaded,
+            adapter=adapter, adapter_config_sha=adapter_config_sha,
+            timestamps=timestamps, gripper_s=gripper_s,
+            vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+            has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+            degrade_reason="gemma_no_object_prompts",
         )
 
     # Step B + C with try/finally for SAM3.close
@@ -530,7 +806,16 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         sam3_runtime = SAM3Runtime.load(checkpoint=tracking_cfg.sam3_checkpoint)
     except SAM3InitFailed as e:
         return _degrade_to_phase3_objectless(
-            req, req.config, vlm, None, "sam3_init_failed",
+            req, req.config, vlm,
+            fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+            episode_id=episode_id, config_hash=config_hash,
+            input_hash=input_hash, run_hash=run_hash,
+            label_set=label_set, probe=probe, loaded=loaded,
+            adapter=adapter, adapter_config_sha=adapter_config_sha,
+            timestamps=timestamps, gripper_s=gripper_s,
+            vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+            has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+            degrade_reason="sam3_init_failed",
             underlying_log=repr(e),
         )
 
@@ -548,7 +833,16 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         ]
         if not object_grounded:
             return _degrade_to_phase3_objectless(
-                req, req.config, vlm, None, "sam3_no_initial_detection"
+                req, req.config, vlm,
+                fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+                episode_id=episode_id, config_hash=config_hash,
+                input_hash=input_hash, run_hash=run_hash,
+                label_set=label_set, probe=probe, loaded=loaded,
+                adapter=adapter, adapter_config_sha=adapter_config_sha,
+                timestamps=timestamps, gripper_s=gripper_s,
+                vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+                has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+                degrade_reason="sam3_no_initial_detection",
             )
         tracks = Propagator().run(
             runtime=sam3_runtime,
@@ -576,7 +870,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         weights=bcfg.weights,
         score_threshold=bcfg.score_threshold,
         merge_window_sec=bcfg.merge_window_sec,
-        disabled_sources=list(disabled),
+        disabled_sources=list(disabled_phase1),
         tracking_config=tracking_cfg,
     )
     # Build smoothed signal arrays needed by the detector
@@ -680,14 +974,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         object_state_available=True,
         degraded_from_phase=(req.config.target_phase if _degraded else None),
         degrade_reason=phase3_outcome.degrade_reason if _degraded else None,
+        object_state_segment_coverage=object_state_coverage,
     )
-    # TODO(Task 20): relocate `object_state_segment_coverage` to
-    # PipelineStatus per spec §1.3 line 188 ("pipeline_status.object_state_
-    # segment_coverage: float"). Task 20 extends PipelineStatus + adjusts
-    # to_dict() to omit when None (Phase 1/2 manifests). Stashed in
-    # pipeline_params here as a temporary holding spot so the value flows
-    # into the manifest until the schema field lands.
-    pipeline_params["object_state_segment_coverage"] = object_state_coverage
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(
         name="mimicanno",

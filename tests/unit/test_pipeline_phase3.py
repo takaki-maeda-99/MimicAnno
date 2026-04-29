@@ -503,8 +503,7 @@ def test_degrade_gate_gemma_no_object_prompts(tmp_path: Path) -> None:
     assert result is fake_degrade_result
     mock_degrade.assert_called_once()
     call_kwargs = mock_degrade.call_args
-    # degrade_reason is the 5th positional arg
-    assert call_kwargs.args[4] == "gemma_no_object_prompts"
+    assert call_kwargs.kwargs["degrade_reason"] == "gemma_no_object_prompts"
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +546,7 @@ def test_degrade_gate_sam3_init_failed(tmp_path: Path) -> None:
     assert result is fake_degrade_result
     mock_degrade.assert_called_once()
     call_kwargs = mock_degrade.call_args
-    assert call_kwargs.args[4] == "sam3_init_failed"
+    assert call_kwargs.kwargs["degrade_reason"] == "sam3_init_failed"
     # underlying_log kwarg must contain "SAM3InitFailed"
     underlying_log = call_kwargs.kwargs.get("underlying_log", "")
     assert underlying_log is not None
@@ -603,7 +602,7 @@ def test_degrade_gate_sam3_no_initial_detection(tmp_path: Path) -> None:
     assert result is fake_degrade_result
     mock_degrade.assert_called_once()
     call_kwargs = mock_degrade.call_args
-    assert call_kwargs.args[4] == "sam3_no_initial_detection"
+    assert call_kwargs.kwargs["degrade_reason"] == "sam3_no_initial_detection"
     # SAM3 must still be closed even when degrade fires from ground step
     mock_sam3_instance.close.assert_called_once()
 
