@@ -24,11 +24,10 @@ from mimicanno.object_tracker.planner import EntityPlan
 from mimicanno.object_tracker.propagator import BBox
 from mimicanno.vlm_labeler import FixtureVLMLabeler, GemmaHandle
 
-
 __all__ = [
+    "FIXTURE_VLM_OK_FIRST_TRY",
     "BBox",
     "EntityPlan",
-    "FIXTURE_VLM_OK_FIRST_TRY",
     "FixtureSAM3Tracker",
     "FixtureTrackingPlanner",
     "FrameDetections",
@@ -77,17 +76,21 @@ class _FixtureVLMWithHandle(FixtureVLMLabeler):
         return GemmaHandle(model=None, processor=None, config=self._vlm_config)
 
 
+_DEFAULT_BBOX = BBox(x=0.4, y=0.4, w=0.1, h=0.1)
+
+
 def build_full_propagation(
     *,
     prompts: list[str],
-    bbox: BBox = BBox(x=0.4, y=0.4, w=0.1, h=0.1),
+    bbox: BBox | None = None,
     score: float = 0.9,
     frames: tuple[int, ...] = _DEFAULT_PROP_FRAMES,
 ) -> FrameDetections:
     """Construct propagation results yielding `(bbox, score)` for every prompt
     on every frame in *frames*. Default frames cover the synthesize_aloha_episode
     happy-path (n_frames=120 @ 30fps, stride=10)."""
-    return {f: {p: (bbox, score) for p in prompts} for f in frames}
+    box = bbox if bbox is not None else _DEFAULT_BBOX
+    return {f: {p: (box, score) for p in prompts} for f in frames}
 
 
 @contextmanager
