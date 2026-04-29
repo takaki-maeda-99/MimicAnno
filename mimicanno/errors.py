@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
 
 
 @dataclass
@@ -45,12 +45,19 @@ class VLMModelRequired(MimicAnnoError):
         )
 
 
+MissingDependencyField = Literal["--sam3-checkpoint"]
+
+
 class MissingDependencyError(MimicAnnoError):
     """A required CLI argument was not provided (spec §8 abort guard).
-    Tier-1 abort, exits non-zero. The `field` context is the missing flag name
-    (e.g., '--sam3-checkpoint')."""
 
-    def __init__(self, field: str) -> None:
+    Tier-1 abort, exits non-zero. The `field` context is the missing flag name.
+    Currently only fired for `--sam3-checkpoint` (Phase 3); `--vlm-model` has
+    its own dedicated `VLMModelRequired` for Phase 2 backwards-compat. Extend
+    `MissingDependencyField` Literal when a new Tier-1 missing-flag abort lands.
+    """
+
+    def __init__(self, field: MissingDependencyField) -> None:
         super().__init__(
             code="missing_dependency",
             message=f"required argument missing: {field}",

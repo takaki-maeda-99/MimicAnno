@@ -162,8 +162,13 @@ def annotate(
                 raise MissingDependencyError(field="--sam3-checkpoint")
             # 3. Resolve checkpoint sha256.
             sam3_checkpoint_resolved = resolve_sam3_checkpoint(sam3_checkpoint)
-            # 4. Build TrackingConfig.
-            tracking_config = TrackingConfig(track_stride_frames=track_stride_frames)
+            # 4. Build TrackingConfig. The path is carried so Task 19's
+            # orchestrator can pass it to SAM3Runtime.load(); the sha256
+            # (sam3_checkpoint_resolved) goes into ModelConfig for the hash.
+            tracking_config = TrackingConfig(
+                sam3_checkpoint=str(sam3_checkpoint),
+                track_stride_frames=track_stride_frames,
+            )
         except MimicAnnoError as e:
             write_error_json(e)
             raise typer.Exit(code=2) from None
