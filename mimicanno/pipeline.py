@@ -522,9 +522,12 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     stride = tracking_cfg.effective_stride(fps)
     image_aspect_ratio = _compute_image_aspect_ratio(probe, tracking_cfg)
 
-    sam3_checkpoint = tracking_cfg.sam3_checkpoint or "facebook/sam3"
+    # CLI Task 18 guarantees sam3_checkpoint is set when target_phase >= 3.
+    assert tracking_cfg.sam3_checkpoint is not None, (
+        "tracking.sam3_checkpoint must be set by CLI for target_phase=3"
+    )
     try:
-        sam3_runtime = SAM3Runtime.load(checkpoint=sam3_checkpoint)
+        sam3_runtime = SAM3Runtime.load(checkpoint=tracking_cfg.sam3_checkpoint)
     except SAM3InitFailed as e:
         return _degrade_to_phase3_objectless(
             req, req.config, vlm, None, "sam3_init_failed",
@@ -678,7 +681,12 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         degraded_from_phase=(req.config.target_phase if _degraded else None),
         degrade_reason=phase3_outcome.degrade_reason if _degraded else None,
     )
-    # Record coverage in pipeline_params for consumers (not a PipelineStatus field)
+    # TODO(Task 20): relocate `object_state_segment_coverage` to
+    # PipelineStatus per spec §1.3 line 188 ("pipeline_status.object_state_
+    # segment_coverage: float"). Task 20 extends PipelineStatus + adjusts
+    # to_dict() to omit when None (Phase 1/2 manifests). Stashed in
+    # pipeline_params here as a temporary holding spot so the value flows
+    # into the manifest until the schema field lands.
     pipeline_params["object_state_segment_coverage"] = object_state_coverage
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(
@@ -690,9 +698,14 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     assert vlm_cfg.resolved_checkpoint is not None, (
         "pre-flight (§2.5) must populate vlm.resolved_checkpoint before annotate_episode_phase3"
     )
+    # Spec §1.3 line 188 + §7.1 line 968: `sam3` is the model id (informational
+    # name like "facebook/sam3"); `sam3_checkpoint` is the sha256 (additive,
+    # for downstream provenance). The composite "vlm" value matches Phase 2's
+    # `annotate_episode` convention (see line 994+ below) and is preserved.
     model_versions: dict[str, str | None] = {
         "vlm": f"{vlm_cfg.model_id}:{vlm_cfg.resolved_checkpoint}",
-        "sam3": req.config.model_config.sam3_checkpoint,
+        "sam3": tracking_cfg.sam3_model_id,
+        "sam3_checkpoint": req.config.model_config.sam3_checkpoint,
     }
 
     manifest = Manifest(
