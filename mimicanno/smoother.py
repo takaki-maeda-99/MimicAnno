@@ -282,14 +282,14 @@ def _merge_short(
                 continue
             if has_left and not has_right:
                 merged = _absorb(into=current[i - 1], absorbed=seg, on_left=False)
-                current = current[: i - 1] + [merged] + current[i + 1 :]
+                current = [*current[: i - 1], merged, *current[i + 1 :]]
                 total_absorbs += 1
                 progress_in_pass = True
                 i = max(i - 1, 0)
                 continue
             if has_right and not has_left:
                 merged = _absorb(into=current[i + 1], absorbed=seg, on_left=True)
-                current = current[:i] + [merged] + current[i + 2 :]
+                current = [*current[:i], merged, *current[i + 2 :]]
                 total_absorbs += 1
                 progress_in_pass = True
                 # i unchanged — survivor is now at index i, may itself be short
@@ -323,11 +323,11 @@ def _merge_short(
                     pick_left = True   # default left preference
             if pick_left:
                 merged = _absorb(into=left, absorbed=seg, on_left=False)
-                current = current[: i - 1] + [merged] + current[i + 1 :]
+                current = [*current[: i - 1], merged, *current[i + 1 :]]
                 i = max(i - 1, 0)
             else:
                 merged = _absorb(into=right, absorbed=seg, on_left=True)
-                current = current[:i] + [merged] + current[i + 2 :]
+                current = [*current[:i], merged, *current[i + 2 :]]
                 # i unchanged
             total_absorbs += 1
             progress_in_pass = True
