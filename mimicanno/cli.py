@@ -19,16 +19,20 @@ if sys.version_info[:2] < _MIN_PY:  # pragma: no cover — runtime guard
     )
     raise SystemExit(2)
 
+from dataclasses import replace  # noqa: E402
+
 import typer  # noqa: E402
 
 from mimicanno import __version__  # noqa: E402
 from mimicanno.config import (  # noqa: E402
     AnnotationConfig,
     BoundaryConfig,
+    SmootherConfig,
     TrackingConfig,
     VLMConfig,
     build_model_config,
     load_boundary_config_yaml,
+    load_smoother_config_yaml,
 )
 from mimicanno.errors import (  # noqa: E402
     MimicAnnoError,
@@ -41,6 +45,7 @@ from mimicanno.pipeline import (  # noqa: E402
     AnnotateRequest,
     annotate_episode,
     annotate_episode_phase3,
+    annotate_episode_phase4,
 )
 from mimicanno.preflight import resolve_sam3_checkpoint, resolve_vlm_model  # noqa: E402
 
@@ -111,6 +116,20 @@ def annotate(
         None, "--track-stride-frames",
         help="SAM3 video propagation stride (frames). Default: TrackingConfig.effective_stride.",
     ),
+    smoother_config: Path | None = typer.Option(
+        None, "--smoother-config", exists=True, dir_okay=False,
+        help="YAML overriding SmootherConfig fields "
+             "(min_segment_duration_sec / forbidden_transitions / "
+             "viterbi_enabled / lambda_forbidden). Required when "
+             "--target-phase = 4 unless defaults are acceptable. "
+             "Missing fields fall back to spec §2 defaults. "
+             "--no-viterbi overrides viterbi_enabled from this file.",
+    ),
+    no_viterbi: bool = typer.Option(
+        False, "--no-viterbi",
+        help="Disable the Phase 4 Viterbi relabel step (spec §3.4). "
+             "Overrides viterbi_enabled from --smoother-config.",
+    ),
 ) -> None:
     """Annotate a single LeRobot episode and publish a Phase-1 run directory."""
     try:
@@ -173,6 +192,30 @@ def annotate(
             write_error_json(e)
             raise typer.Exit(code=2) from None
 
+    # Phase 4 prerequisite (spec §5): load + validate --smoother-config.
+    smoother_cfg: SmootherConfig | None = None
+    if target_phase >= 4:
+        try:
+            # Need allowed_labels for forbidden-transition validation. Load
+            # the labelset just for that — orchestrator will load it again.
+            from mimicanno.labelset import default_labels_path, load_label_set
+            labels_path_for_validation = labels or Path(
+                default_labels_path("manipulation"),
+            )
+            label_set_for_validation = load_label_set(labels_path_for_validation)
+            allowed_label_ids = [lbl.id for lbl in label_set_for_validation.labels]
+            if smoother_config is not None:
+                smoother_cfg = load_smoother_config_yaml(
+                    smoother_config, allowed_labels=allowed_label_ids,
+                )
+            else:
+                smoother_cfg = SmootherConfig()
+            if no_viterbi:
+                smoother_cfg = replace(smoother_cfg, viterbi_enabled=False)
+        except MimicAnnoError as e:
+            write_error_json(e)
+            raise typer.Exit(code=2) from None
+
     cfg = AnnotationConfig(
         boundary=boundary,
         target_phase=target_phase,
@@ -184,6 +227,7 @@ def annotate(
         ),
         vlm=vlm_config,
         tracking=tracking_config,
+        smoother=smoother_cfg,
     )
     req = AnnotateRequest(
         video=video,
@@ -198,7 +242,9 @@ def annotate(
         config=cfg,
     )
     try:
-        if cfg.target_phase >= 3:
+        if cfg.target_phase >= 4:
+            annotate_episode_phase4(req)
+        elif cfg.target_phase == 3:
             annotate_episode_phase3(req)
         else:
             annotate_episode(req)

@@ -1,0 +1,12 @@
+# Default Phase 4 SmootherConfig values (spec §2.1).
+# Mirrors mimicanno.config.SmootherConfig defaults verbatim.
+# Copy and edit to override per-run:
+#   mimicanno annotate ... --target-phase 4 --smoother-config <your-copy>.yaml
+
+min_segment_duration_sec: 0.30
+forbidden_transitions:
+  - [grasp_object, approach_object]
+  - [release_object, grasp_object]
+  - [lift_object, idle]
+viterbi_enabled: true
+lambda_forbidden: 0.5

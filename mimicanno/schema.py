@@ -12,7 +12,7 @@ at the I/O boundary, and avoiding the third-party dep simplifies install.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
@@ -129,6 +129,12 @@ LabelSource = Literal[
 ]
 
 
+SmoothingOpName = Literal["merge_same_label", "merge_short", "viterbi_relabel"]
+_ALLOWED_SMOOTHING_OPS: frozenset[str] = frozenset({
+    "merge_same_label", "merge_short", "viterbi_relabel",
+})
+
+
 @dataclass(slots=True)
 class SubtaskSegment:
     """One labeled (or, in Phase 1, ``unlabeled``) clip in a timeline."""
@@ -156,6 +162,9 @@ class SubtaskSegment:
     evidence: str | None
     reviewed: bool
     reviewer_id: str | None
+    # Phase 4 — additive, default empty for Phase 1/2/3 lineage (spec §4.1).
+    # Allowed entries: "merge_same_label", "merge_short", "viterbi_relabel".
+    smoothing_ops: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Reject None for list fields — the schema is opinionated to avoid
@@ -164,6 +173,11 @@ class SubtaskSegment:
             raise TypeError("failure_flags must be list[str], not None")
         if self.object_track_ids is None:
             raise TypeError("object_track_ids must be list[str], not None")
+        if self.smoothing_ops is None:
+            raise TypeError("smoothing_ops must be list[str], not None")
+        for op in self.smoothing_ops:
+            if op not in _ALLOWED_SMOOTHING_OPS:
+                raise ValueError(f"unknown smoothing op: {op!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,7 +204,49 @@ class SubtaskSegment:
             "evidence": self.evidence,
             "reviewed": self.reviewed,
             "reviewer_id": self.reviewer_id,
+            "smoothing_ops": list(self.smoothing_ops),
         }
+
+
+@dataclass(slots=True)
+class SmoothingSummary:
+    """Phase 4 smoothing summary block (spec §4.3).
+
+    Emitted as ``manifest.smoothing_summary`` only on Phase 4 runs; absent on
+    Phase 1/2/3 manifests (where ``Manifest.smoothing_summary is None`` and
+    serialization omits the key entirely).
+    """
+
+    initial_segment_count: int
+    final_segment_count: int
+    merge_same_label_rounds: int
+    merge_same_label_collapses: int
+    merge_short_absorbs: int
+    viterbi_relabels: int
+    viterbi_skipped: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "initial_segment_count": self.initial_segment_count,
+            "final_segment_count": self.final_segment_count,
+            "merge_same_label_rounds": self.merge_same_label_rounds,
+            "merge_same_label_collapses": self.merge_same_label_collapses,
+            "merge_short_absorbs": self.merge_short_absorbs,
+            "viterbi_relabels": self.viterbi_relabels,
+            "viterbi_skipped": self.viterbi_skipped,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> SmoothingSummary:
+        return cls(
+            initial_segment_count=int(d["initial_segment_count"]),
+            final_segment_count=int(d["final_segment_count"]),
+            merge_same_label_rounds=int(d["merge_same_label_rounds"]),
+            merge_same_label_collapses=int(d["merge_same_label_collapses"]),
+            merge_short_absorbs=int(d["merge_short_absorbs"]),
+            viterbi_relabels=int(d["viterbi_relabels"]),
+            viterbi_skipped=bool(d["viterbi_skipped"]),
+        )
 
 
 @dataclass(slots=True)
@@ -212,6 +268,9 @@ class Manifest:
     pipeline_status: PipelineStatus
     compat: dict[str, int]
     artifacts: list[Artifact]
+    # Phase 4 only — None on Phase 1/2/3 manifests; key omitted from to_dict
+    # output when None to preserve forward-compat with older readers (spec §4.3).
+    smoothing_summary: SmoothingSummary | None = None
 
     def artifact(self, role: str) -> Artifact:
         for a in self.artifacts:
@@ -220,7 +279,7 @@ class Manifest:
         raise KeyError(f"no artifact with role={role!r}")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "schema_version": self.schema_version,
             "episode_id": self.episode_id,
             "task": self.task.to_dict(),
@@ -239,6 +298,9 @@ class Manifest:
             "compat": dict(self.compat),
             "artifacts": [a.to_dict() for a in self.artifacts],
         }
+        if self.smoothing_summary is not None:
+            d["smoothing_summary"] = self.smoothing_summary.to_dict()
+        return d
 
 
 @dataclass(slots=True)

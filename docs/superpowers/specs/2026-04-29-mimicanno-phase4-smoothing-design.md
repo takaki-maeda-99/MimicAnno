@@ -342,8 +342,8 @@ The smoother does NOT introduce a new "smoothing_confidence" sub-component (pare
 
 After all ops, for each surviving segment:
 
-- `start_boundary` and `end_boundary` reference the original boundary candidates (by frame). Internal boundaries that were absorbed into a merged segment are dropped from the segment-level view but **remain** in `boundaries.json` (which is unchanged by smoothing).
-- The `BoundaryRef.frame` of `start_boundary[s_i+1]` always equals the `BoundaryRef.frame` of `end_boundary[s_i]` for adjacent `s_i, s_{i+1}` (no gaps, no overlaps). This invariant is asserted post-smoothing.
+- `start_boundary` and `end_boundary` reference the original boundary candidates. Internal boundaries that were absorbed into a merged segment are dropped from the segment-level view but **remain** in `boundaries.json` (which is unchanged by smoothing).
+- For adjacent segments `s_i, s_{i+1}` the **shared inner boundary** must be consistent: `s_i.end_boundary.time == s_{i+1}.start_boundary.time`. When both `candidate_id` values are non-None they must additionally be equal (i.e., reference the same boundary candidate). Sentinels (episode_start / episode_end) have `candidate_id = None` and are matched on `time` alone. (Note: `BoundaryRef` carries `time: float`, NOT a frame index — the schema field on `SubtaskSegment.start_boundary` / `end_boundary` is the time-domain reference. An earlier draft of this spec said "BoundaryRef.frame"; that was a documentation slip.) This invariant is asserted post-smoothing and any violation raises `smoother_segment_invariant_violation` (§7.1).
 
 ## 4. Schema additions
 

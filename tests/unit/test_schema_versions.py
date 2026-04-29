@@ -14,8 +14,13 @@ def test_artifact_versions_present():
         "boundaries",
         "signals",
     }
+    # Phase 4 bump (spec §4.4): annotation 0.1.0 -> 0.2.0; others stay at 0.1.0.
+    assert ARTIFACT_SCHEMA_VERSIONS["manifest"] == "0.1.0"
+    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.2.0"
+    assert ARTIFACT_SCHEMA_VERSIONS["boundaries"] == "0.1.0"
+    assert ARTIFACT_SCHEMA_VERSIONS["signals"] == "0.1.0"
     for version in ARTIFACT_SCHEMA_VERSIONS.values():
-        assert version == "0.1.0"
+        assert parse_major(version) == 0
 
 
 def test_compat_block_only_lists_in_run_artifacts():
