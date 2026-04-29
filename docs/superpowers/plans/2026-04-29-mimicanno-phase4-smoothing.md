@@ -2002,8 +2002,8 @@ def test_viterbi_unknown_observed_filled_by_transitions() -> None:
     # Segment 1 had observed=unknown. Decoder picks any non-forbidden state.
     # Tie-break rule 2: prefer earlier labelset rank → "approach_object" (rank 0).
     assert out[1].phase == "approach_object"
-    # Verb/object/target materialized from labelset YAML (or None if a
-    # mock labelset was used). Verify smoothing_ops contains viterbi_relabel.
+    # Per spec §3.4: allowed-label flips KEEP original verb/object/target;
+    # only `phase` changes. Verify smoothing_ops contains viterbi_relabel.
     assert "viterbi_relabel" in out[1].smoothing_ops
 
 
