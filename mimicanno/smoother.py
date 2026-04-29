@@ -364,9 +364,7 @@ def _materialize_label(seg: SubtaskSegment, decoded_phase: str) -> SubtaskSegmen
         new_verb = seg.verb
         new_object = seg.object
         new_target = seg.target
-    new_ops = _dedup_consecutive(
-        list(seg.smoothing_ops) + ["viterbi_relabel"],
-    )
+    new_ops = _dedup_consecutive([*seg.smoothing_ops, "viterbi_relabel"])
     return _recompute_confidence(replace(
         seg,
         phase=decoded_phase, verb=new_verb, object=new_object, target=new_target,
@@ -393,7 +391,7 @@ def _viterbi_relabel(
     if not config.viterbi_enabled or len(segments) <= 1:
         return list(segments), 0, True
 
-    # State space: labelset (declaration-ordered) ∪ {"unknown"} appended LAST.
+    # State space: labelset (declaration-ordered) plus reserved {"unknown"} LAST.
     # Append `unknown` only if it isn't already in the labelset (it shouldn't
     # be per §8.4 reserved-label rule, but be defensive).
     states: list[str] = list(labelset)
@@ -403,7 +401,7 @@ def _viterbi_relabel(
     alpha_rank: dict[str, int] = {s: i for i, s in enumerate(sorted(states))}
     forbidden = set(config.forbidden_transitions)
     lam = config.lambda_forbidden
-    T = len(segments)
+    n_steps = len(segments)
 
     def emission(seg: SubtaskSegment, q: str) -> float:
         if seg.vlm_confidence is None:
@@ -414,8 +412,7 @@ def _viterbi_relabel(
         return -lam if (a, b) in forbidden else 0.0
 
     # dp[t][q] = (cumulative_key, predecessor_q_at_t-1_or_None)
-    Cell = tuple[_CellKey, str | None]
-    dp: list[dict[str, Cell]] = []
+    dp: list[dict[str, tuple[_CellKey, str | None]]] = []
 
     def _count_match(q: str, seg: SubtaskSegment) -> int:
         """Rule 1 (spec §3.4): count an observed-label match ONLY when the
@@ -427,7 +424,7 @@ def _viterbi_relabel(
         return 1 if q == seg.phase else 0
 
     # t = 0
-    init: dict[str, Cell] = {}
+    init: dict[str, tuple[_CellKey, str | None]] = {}
     for q in states:
         e = emission(segments[0], q)
         observed = _count_match(q, segments[0])
@@ -435,9 +432,9 @@ def _viterbi_relabel(
         init[q] = (key, None)
     dp.append(init)
 
-    # t = 1 ... T-1
-    for t in range(1, T):
-        cell_t: dict[str, Cell] = {}
+    # t = 1 ... n_steps-1
+    for t in range(1, n_steps):
+        cell_t: dict[str, tuple[_CellKey, str | None]] = {}
         for q in states:
             e = emission(segments[t], q)
             observed_t = _count_match(q, segments[t])
@@ -473,7 +470,7 @@ def _viterbi_relabel(
 
     # Backtrace
     decoded: list[str] = [final_q]
-    for t in range(T - 1, 0, -1):
+    for t in range(n_steps - 1, 0, -1):
         _, prev = dp[t][decoded[-1]]
         assert prev is not None
         decoded.append(prev)
