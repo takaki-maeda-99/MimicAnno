@@ -18,6 +18,7 @@ from mimicanno.object_tracker.track_id import ROLE, make_track_id, slugify
 
 if TYPE_CHECKING:
     from mimicanno.config import TrackingConfig
+    from mimicanno.object_tracker.sam3_runtime import SAM3Runtime
 
 GapReason = Literal["sam3_lost", "sam3_low_conf"]
 
@@ -109,6 +110,53 @@ class TrackingPlan:
     entities: EntityPlan
     initial_detections: dict[tuple[ROLE, str], BBox]
     failed_prompts: list[tuple[ROLE, str]]
+
+
+# ---------------------------------------------------------------------------
+# Step B: ground_initial_detections (spec §2.4.0, Task 16)
+# ---------------------------------------------------------------------------
+
+
+def ground_initial_detections(
+    *,
+    runtime: SAM3Runtime,
+    initial_frame: np.ndarray,
+    entities: EntityPlan,
+) -> TrackingPlan:
+    """Ground each (role, prompt) on the initial frame; take top-scoring bbox.
+
+    For each prompt in entities.all_prompts_with_role(), call
+    runtime.ground_on_frame(initial_frame, prompt). Takes the highest-scoring
+    bbox; empty result -> failed_prompts entry. Returns the full TrackingPlan
+    ready for Propagator.run (Step C).
+
+    Args:
+        runtime: SAM3Runtime or test double implementing ground_on_frame.
+        initial_frame: The first frame (np.ndarray), used for grounding.
+        entities: EntityPlan from Step A, containing prompts organized by role.
+
+    Returns:
+        TrackingPlan with initial_detections (highest-score bbox per prompt)
+        and failed_prompts (prompts with no detection).
+    """
+    initial_detections: dict[tuple[ROLE, str], BBox] = {}
+    failed_prompts: list[tuple[ROLE, str]] = []
+
+    for role, prompt in entities.all_prompts_with_role():
+        results = runtime.ground_on_frame(initial_frame, prompt)
+        if not results:
+            failed_prompts.append((role, prompt))
+            continue
+        # Highest-score wins. SAM3Runtime contract returns sorted desc by spec
+        # §2.3, but be defensive: max() doesn't assume sortedness.
+        best_bbox, _best_score = max(results, key=lambda r: r[1])
+        initial_detections[(role, prompt)] = best_bbox
+
+    return TrackingPlan(
+        entities=entities,
+        initial_detections=initial_detections,
+        failed_prompts=failed_prompts,
+    )
 
 
 # ---------------------------------------------------------------------------
