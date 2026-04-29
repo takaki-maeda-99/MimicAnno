@@ -336,11 +336,164 @@ def _merge_short(
     return _renumber_segment_ids(current), total_absorbs
 
 
+def _materialize_label(seg: SubtaskSegment, decoded_phase: str) -> SubtaskSegment:
+    """Spec §3.4: materialize verb/object/target for a Viterbi-decoded label.
+
+    For decoded ``unknown`` (reserved phase, not in labels.yaml):
+        verb / object / target = None — parent §6.1 reserved-phase contract;
+        matches Phase 2 retry-exhaustion fallback shape.
+
+    For decoded allowed labels (q*_t in labels.yaml):
+        KEEP the segment's original verb / object / target. The labelset YAML's
+        ``Label`` dataclass carries only ``id``, ``verbs: list[str]``, and
+        ``requires_object: bool`` — there is no canonical (verb, object, target)
+        tuple to materialize from. The original VLM-extracted values remain the
+        best signal; ``smoothing_ops`` containing ``"viterbi_relabel"`` is the
+        downstream signal to surface for human review (Phase 5).
+    """
+    if decoded_phase == seg.phase:
+        return seg   # no relabel
+    new_verb: str | None
+    new_object: str | None
+    new_target: str | None
+    if decoded_phase == "unknown":
+        new_verb = None
+        new_object = None
+        new_target = None
+    else:
+        new_verb = seg.verb
+        new_object = seg.object
+        new_target = seg.target
+    new_ops = _dedup_consecutive(
+        list(seg.smoothing_ops) + ["viterbi_relabel"],
+    )
+    return _recompute_confidence(replace(
+        seg,
+        phase=decoded_phase, verb=new_verb, object=new_object, target=new_target,
+        smoothing_ops=new_ops,
+    ))
+
+
+# DP cell key tuple, ordered for argmax via tuple lex comparison:
+#   (score_main, count_observed, -sum_rank_labelset, -sum_alpha_rank)
+_CellKey = tuple[float, int, int, int]
+
+
+def _viterbi_relabel(
+    segments: list[SubtaskSegment],
+    *,
+    config: SmootherConfig,
+    labelset: list[str],
+) -> tuple[list[SubtaskSegment], int, bool]:
+    """Op 3 (spec §3.4). Returns ``(segments, relabels_count, viterbi_skipped)``.
+
+    Decoder tie-break is the normative lexicographic-tuple comparator
+    (spec §3.4) — no float-precision dependency.
+    """
+    if not config.viterbi_enabled or len(segments) <= 1:
+        return list(segments), 0, True
+
+    # State space: labelset (declaration-ordered) ∪ {"unknown"} appended LAST.
+    # Append `unknown` only if it isn't already in the labelset (it shouldn't
+    # be per §8.4 reserved-label rule, but be defensive).
+    states: list[str] = list(labelset)
+    if "unknown" not in states:
+        states = [*states, "unknown"]
+    label_rank: dict[str, int] = {s: i for i, s in enumerate(states)}
+    alpha_rank: dict[str, int] = {s: i for i, s in enumerate(sorted(states))}
+    forbidden = set(config.forbidden_transitions)
+    lam = config.lambda_forbidden
+    T = len(segments)
+
+    def emission(seg: SubtaskSegment, q: str) -> float:
+        if seg.vlm_confidence is None:
+            return 0.0
+        return seg.vlm_confidence if q == seg.phase else 0.0
+
+    def transition(a: str, b: str) -> float:
+        return -lam if (a, b) in forbidden else 0.0
+
+    # dp[t][q] = (cumulative_key, predecessor_q_at_t-1_or_None)
+    Cell = tuple[_CellKey, str | None]
+    dp: list[dict[str, Cell]] = []
+
+    def _count_match(q: str, seg: SubtaskSegment) -> int:
+        """Rule 1 (spec §3.4): count an observed-label match ONLY when the
+        observed phase is meaningful (i.e., not the reserved 'unknown'
+        sentinel — those segments should be dictated by transitions, not
+        preserved by Rule 1)."""
+        if seg.phase == "unknown":
+            return 0
+        return 1 if q == seg.phase else 0
+
+    # t = 0
+    init: dict[str, Cell] = {}
+    for q in states:
+        e = emission(segments[0], q)
+        observed = _count_match(q, segments[0])
+        key: _CellKey = (e, observed, -label_rank[q], -alpha_rank[q])
+        init[q] = (key, None)
+    dp.append(init)
+
+    # t = 1 ... T-1
+    for t in range(1, T):
+        cell_t: dict[str, Cell] = {}
+        for q in states:
+            e = emission(segments[t], q)
+            observed_t = _count_match(q, segments[t])
+            best_key: _CellKey | None = None
+            best_pred: str | None = None
+            # Iterate predecessors in deterministic states order
+            for q_prev in states:
+                prev_key = dp[t - 1][q_prev][0]
+                tr = transition(q_prev, q)
+                cand_key: _CellKey = (
+                    prev_key[0] + e + tr,
+                    prev_key[1] + observed_t,
+                    prev_key[2] + (-label_rank[q]),
+                    prev_key[3] + (-alpha_rank[q]),
+                )
+                if best_key is None or cand_key > best_key:
+                    best_key = cand_key
+                    best_pred = q_prev
+            assert best_key is not None
+            cell_t[q] = (best_key, best_pred)
+        dp.append(cell_t)
+
+    # Find best final state by full tuple key. Iterate states in declaration
+    # order to ensure deterministic argmax under tuple comparison.
+    final_q: str | None = None
+    final_key: _CellKey | None = None
+    for q in states:
+        k = dp[-1][q][0]
+        if final_key is None or k > final_key:
+            final_key = k
+            final_q = q
+    assert final_q is not None
+
+    # Backtrace
+    decoded: list[str] = [final_q]
+    for t in range(T - 1, 0, -1):
+        _, prev = dp[t][decoded[-1]]
+        assert prev is not None
+        decoded.append(prev)
+    decoded.reverse()
+
+    # Materialize relabels
+    out: list[SubtaskSegment] = []
+    relabels = 0
+    for seg, q_star in zip(segments, decoded, strict=True):
+        if q_star != seg.phase:
+            relabels += 1
+        out.append(_materialize_label(seg, q_star))
+    return _renumber_segment_ids(out), relabels, False
+
+
 def apply_smoothing(
     segments: list[SubtaskSegment],
     *,
     config: SmootherConfig,
     labelset: list[str],
 ) -> SmoothingResult:
-    """Phase 4 smoothing pipeline (spec §3). Stub — Tasks 9-10 fill in Op 3."""
-    raise NotImplementedError("Tasks 9-10 implement Op 3 and the orchestrator.")
+    """Phase 4 smoothing pipeline (spec §3). Stub — Task 10 wires the orchestrator."""
+    raise NotImplementedError("Task 10 implements the orchestrator.")
