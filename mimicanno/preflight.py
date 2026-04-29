@@ -14,7 +14,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from mimicanno.errors import VLMModelNotFound
+from mimicanno.errors import SAM3CheckpointNotFound, VLMModelNotFound
+from mimicanno.hashing import sha256_file
 
 SHA40_REGEX = re.compile(r"^[0-9a-f]{40}$")
 FIXTURE_URI_PREFIX = "fixture://"
@@ -93,3 +94,54 @@ def resolve_vlm_model(arg: str, *, offline: bool) -> PreflightResult:
     except Exception as e:  # network, 404, auth — all collapse into Tier 1.
         raise VLMModelNotFound(model_id=arg, reason=str(e)) from e
     return PreflightResult(model_id=model_id, resolved_checkpoint=sha)
+
+
+# SAM3 checkpoint resolution (spec §8)
+
+
+def resolve_sam3_checkpoint(path: Path) -> str:
+    """Validate a local SAM3 checkpoint file and return its sha256.
+
+    Parameters
+    ----------
+    path:
+        Filesystem path to the checkpoint file.
+
+    Returns
+    -------
+    str
+        ``"sha256:<64 hex chars>"`` for a regular, readable file.
+
+    Raises
+    ------
+    SAM3CheckpointNotFound (Tier 1 abort, spec §8) on:
+      - missing file (incl. broken symlink chains)
+      - non-regular file (e.g., directory, FIFO)
+      - permission denied
+      - sha256 read failure
+    """
+    path_str = str(path)
+
+    # `is_file()` follows symlinks AND returns False for broken links/non-files.
+    # Distinguishing "not exists" vs "not regular" needs an exists() probe first.
+    if not path.exists():
+        raise SAM3CheckpointNotFound(
+            path=path_str, reason="file not found"
+        )
+    if not path.is_file():
+        raise SAM3CheckpointNotFound(
+            path=path_str, reason="not a regular file"
+        )
+
+    try:
+        sha_hex = sha256_file(path)
+    except PermissionError as e:
+        raise SAM3CheckpointNotFound(
+            path=path_str, reason="permission denied"
+        ) from e
+    except OSError as e:
+        raise SAM3CheckpointNotFound(
+            path=path_str, reason=f"sha256 read failed: {e!r}"
+        ) from e
+
+    return f"sha256:{sha_hex}"
