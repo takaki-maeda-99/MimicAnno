@@ -280,30 +280,42 @@ If `config.viterbi_enabled is False`, skip. Otherwise:
 - Observations: the segment list `[s_1, ..., s_T]`. The "observation" of segment `s_t` is `(observed_phase_t, vlm_confidence_t)`.
 - Emission score `e(s_t, q) = vlm_confidence_t` if `q == observed_phase_t`, else `0.0`. Segments with `vlm_confidence_t is None` use `e(s_t, q) = 0.0` for all `q` (Viterbi will pick whatever transition score wins). Segments with `phase == "unknown"` and `vlm_confidence_t = 0.0` thus contribute zero emission and will be dictated by transitions.
 - Transition score `tr(q_a, q_b) = -lambda_forbidden` if `(q_a, q_b) ∈ forbidden_transitions`, else `0.0`.
-- Decoding: standard Viterbi on the segment-sequence DAG. Find `argmax_{q_1...q_T} sum_t e(s_t, q_t) + sum_t tr(q_t, q_{t+1})`.
-- For each segment `s_t` whose decoded `q*_t != s_t.phase`, replace `s_t.phase`, `verb`, `object`, `target` with the decoded label's canonical entry (looked up via labelset; `verb`/`object`/`target` come from the labelset YAML, not from the original VLM output). Append `"viterbi_relabel"` to `smoothing_ops`. Recompute `overall_confidence` per parent spec §6.4. `evidence` keeps the original VLM evidence (transparency: "VLM said X, smoother flipped to Y because X→next was forbidden").
+- Decoding: standard Viterbi on the segment-sequence DAG. Find `argmax_{q_1...q_T} sum_t e(s_t, q_t) + sum_t tr(q_t, q_{t+1})`, with ties broken per the lexicographic comparator below.
+- **Materializing the decoded label.** For each segment `s_t` whose decoded `q*_t != s_t.phase`, replace `s_t.phase` with `q*_t`, then materialize `verb` / `object` / `target` according to the rule:
+  - If `q*_t` is an allowed label (present in the run's `labels.yaml`): take `verb`, `object`, `target` from the labelset YAML's canonical entry for `q*_t`. (The labelset entry is the single source of truth — Viterbi does not invent new verb/object/target combinations.)
+  - If `q*_t == "unknown"` (reserved label, not present in `labels.yaml`): set `verb = None`, `object = None`, `target = None` (parent spec §6.1 contract for reserved phases — the segment exists but carries no committed verb/argument structure). This is the same shape Phase 2 emits when the VLM falls through to `phase="unknown"` after retry exhaustion.
+  - Append `"viterbi_relabel"` to `smoothing_ops`. Recompute `overall_confidence` per parent spec §6.4 (which yields `0.0` for `q*_t == "unknown"`). `evidence` keeps the original VLM evidence string (transparency: "VLM said X, smoother flipped to Y because X→next was forbidden").
 - After Viterbi, run Op 1 (merge_same_label) once more to collapse any newly adjacent same-phase pairs created by the relabel.
 
-Tie-breaking in Viterbi (deterministic, in priority order):
+Tie-breaking in Viterbi: **the normative rule is the lexicographic-tuple comparator below.** An additive-`ε` form is sometimes presented in pedagogical contexts but is NOT normative here, since `binary64` precision cannot guarantee the ε-tier separation the additive form would require.
 
-The decoder's score function on a candidate path `(q_1, ..., q_T)` is
+For each candidate path `p = (q_1, ..., q_T)` define the comparison key
 
 ```
-score(path) = sum_t e(s_t, q_t) + sum_t tr(q_t, q_{t+1})
-            + ε₁ * count(q_t == observed_phase_t)         # rule 1, observed-label preference
-            - ε₂ * sum_t rank_in_labelset(q_t)             # rule 2, declaration-order preference (negated)
-            - ε₃ * sum_t alpha_rank(q_t)                   # rule 3, alphabetical fallback (negated)
+key(p) = (
+    score_main(p),                              # primary: VLM emission + transition penalty
+    count_observed(p),                          # rule 1 (higher is better — observed-label preference)
+    -sum_rank_labelset(p),                      # rule 2 (higher is better → lower rank wins)
+    -sum_alpha_rank(p),                         # rule 3 (higher is better → alphabetical-earlier wins)
+)
 ```
 
-with `ε₁ = 1e-6`, `ε₂ = 1e-12`, `ε₃ = 1e-18` (each at least 6 orders of magnitude smaller than the previous tier). The argmax over this score is fully deterministic:
+where
 
-1. **Rule 1 — keep observed labels.** Higher `count(q_t == observed_phase_t)` wins. Reduces unnecessary relabels.
-2. **Rule 2 — labelset declaration order.** Lower `rank_in_labelset(q_t)` wins (note the **minus** sign — in an argmax over the path score, smaller rank → less subtracted → higher final score). `rank_in_labelset` is the 0-based index of the label in `labels.yaml`'s declaration list. Reserved labels (`unknown`) live at the end of the list (highest rank) so they are the last fallback among non-observed candidates.
-3. **Rule 3 — alphabetical.** If labels have a strict declaration order this rule is unreachable (it's included as a defensive last resort). Otherwise: lower `alpha_rank(q_t)` (the 0-based index in `sorted(Q)`) wins. Same minus-sign convention as rule 2.
+- `score_main(p) = sum_t e(s_t, q_t) + sum_t tr(q_t, q_{t+1})`
+- `count_observed(p) = | { t : q_t == observed_phase_t } |`
+- `sum_rank_labelset(p) = sum_t rank_in_labelset(q_t)`, where `rank_in_labelset` is the 0-based index of the label in the run's `labels.yaml` declaration list. Reserved labels (`unknown`) live at the end of the list (highest rank).
+- `sum_alpha_rank(p) = sum_t alpha_rank(q_t)`, where `alpha_rank` is the 0-based index of the label in `sorted(Q)`.
 
-Implementations may also express the tie-break as an explicit lexicographic comparator on path keys `(score_main, +count_observed, -sum_rank_labelset, -sum_alpha_rank)` — this is mathematically equivalent to the additive ε form when `ε₁ ≫ ε₂ ≫ ε₃` are chosen smaller than the smallest realistic difference between `score_main` values. Either form is acceptable; tests pin the resulting decoded sequence, not the implementation.
+The decoder returns `argmax_p key(p)` under tuple lexicographic order (each component compared as a real number, ties propagate to the next). This is fully deterministic for any input — no float-precision dependency, no Python `dict`/`set` iteration-order dependency.
 
-This produces a fully deterministic decoding for any input.
+Rule precedence:
+
+1. **Rule 1 — keep observed labels.** When two paths have equal `score_main`, the path that re-uses the most observed labels wins. Reduces unnecessary relabels.
+2. **Rule 2 — labelset declaration order.** When rule 1 ties, prefer paths whose label assignments come earlier in `labels.yaml`. Note that since `unknown` lives at the end of the labelset, rule 2 makes Viterbi the **last** to fall back on `unknown` among non-observed candidates.
+3. **Rule 3 — alphabetical.** Strict declaration order makes rule 3 unreachable in practice (every unique `q_t` has a unique rank); rule 3 exists as a defensive last resort if a labelset somehow contains duplicates with the same rank.
+
+**Implementation note.** A textbook Viterbi DP with O(T·|Q|²) time and per-cell tuple-keyed argmax (plus full-path key reconstruction for the back-trace) implements this directly; the back-trace key carries the four-tuple, so ties at every cell are broken consistently. Tests pin the decoded label sequence, not the implementation, but the tuple-comparator rule is what the test fixtures are computed against.
 
 ### 3.5 Confidence recomputation
 
