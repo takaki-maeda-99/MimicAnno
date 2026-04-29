@@ -94,12 +94,17 @@ mimicanno annotate --target-phase 4 [--smoother-config <yaml>] ...
   │     - boundary_confidence / overall_confidence: recomputed (§3.5)
   │
   └─ writers emit artifacts to runs/<canonical_name>/:
-        - manifest.json        (with smoothing_summary block; pipeline_status.target_phase=4)
+        - manifest.json        (pipeline_phase=4 [top-level scalar, parent spec §4.3];
+                                smoothing_summary block; pipeline_status carries the
+                                Phase 3 fields object_state_available / degraded_from_phase
+                                unchanged — Phase 4 adds NO new pipeline_status field)
         - annotation.json      (smoothed segments, each with smoothing_ops field)
         - boundaries.json      (UNCHANGED from upstream — boundaries detected on raw signals)
         - signals.json         (UNCHANGED)
         - tracks.json          (when SAM3 succeeded — UNCHANGED)
 ```
+
+**Manifest field naming (parent spec §4.3 alignment):** `pipeline_phase` is a top-level scalar on `Manifest` (`int`, valued 1–5). `pipeline_status` is a separate sub-structure carrying run-level booleans (`object_state_available`, `degraded_from_phase`, `degrade_reason`). Phase 4 sets `manifest.pipeline_phase = 4` and leaves `pipeline_status` exactly as Phase 3 wrote it.
 
 The orchestrator is **not** a chain over a Phase 3 run dir on disk; it re-runs the inner Phase 3 work in-process. This preserves the parent spec's "each phase is a self-contained run" invariant and avoids the failure mode of "Phase 4 reads a stale Phase 3 artifact, smooths it, and produces an inconsistent `manifest.config_hash`."
 
@@ -150,10 +155,6 @@ class SmootherConfig:
     """
 
     min_segment_duration_sec: float = 0.30
-    merge_threshold_sec: float = 0.20      # currently unused; reserved for future
-                                           # short-segment merge variants. Hashed
-                                           # so future work doesn't produce a
-                                           # silent config_hash drift.
     forbidden_transitions: tuple[tuple[str, str], ...] = (
         ("grasp_object",   "approach_object"),
         ("release_object", "grasp_object"),
@@ -165,7 +166,6 @@ class SmootherConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "min_segment_duration_sec": self.min_segment_duration_sec,
-            "merge_threshold_sec": self.merge_threshold_sec,
             "forbidden_transitions": [list(p) for p in self.forbidden_transitions],
             "viterbi_enabled": self.viterbi_enabled,
             "lambda_forbidden": self.lambda_forbidden,
@@ -204,7 +204,6 @@ YAML schema:
 
 ```yaml
 min_segment_duration_sec: 0.30
-merge_threshold_sec: 0.20
 forbidden_transitions:
   - [grasp_object, approach_object]
   - [release_object, grasp_object]
@@ -213,7 +212,7 @@ viterbi_enabled: true
 lambda_forbidden: 0.5
 ```
 
-`load_smoother_config_yaml(path: Path) → SmootherConfig` lives in `mimicanno/config.py`. Validation: `lambda_forbidden >= 0`, `min_segment_duration_sec >= 0`, `merge_threshold_sec >= 0`, every forbidden-transition tuple has length 2 and references known allowed labels OR a reserved label (`unlabeled`/`unknown`). Validation errors raise `ConfigError` with `error_code="smoother_config_invalid"` (§7).
+`load_smoother_config_yaml(path: Path) → SmootherConfig` lives in `mimicanno/config.py`. Validation: `lambda_forbidden >= 0`, `min_segment_duration_sec >= 0`, every forbidden-transition tuple has length 2 and references known allowed labels OR a reserved label (`unlabeled`/`unknown`). Validation errors raise `ConfigError` with `error_code="smoother_config_invalid"` (§7).
 
 ## 3. Algorithm
 
@@ -245,28 +244,33 @@ Merged-segment fields:
 | `label_version` | identical across the run; if they differ, that's a bug — assert |
 | `start_boundary` | from `s_i` (the original outer-left boundary) |
 | `end_boundary` | from `s_{i+1}` (the original outer-right boundary) |
-| `boundary_confidence` | `max(s_i.boundary_confidence, s_{i+1}.boundary_confidence)` |
-| `vlm_confidence` | duration-weighted mean of the two; `None` only if both are `None` |
-| `overall_confidence` | recomputed via parent spec §6.4 from the merged `boundary_confidence` + `vlm_confidence` (so this stays a derived value, not a max-of-merged) |
+| `boundary_confidence` | **DERIVED** per parent spec §6.1: `min(merged.start_boundary.score, merged.end_boundary.score)`. NOT a function of the inputs' `boundary_confidence`. (When the left segment's left edge and the right segment's right edge become the merged segment's edges, the inner boundary that disappears is no longer part of the segment's confidence — only the surviving outer edges matter.) |
+| `vlm_confidence` | duration-weighted mean of the two; `None` only if both are `None`. (When one is `None`: use the non-`None` value alone.) |
+| `overall_confidence` | **DERIVED** per parent spec §6.4: `0.0` if `phase ∈ {"unlabeled", "unknown"}`; else if `vlm_confidence is None`, return `boundary_confidence`; else return `sqrt(boundary_confidence * vlm_confidence)` (geometric mean). |
 | `evidence` | from the higher-`overall_confidence` segment (string); ties → `s_i` |
 | `reviewed`, `reviewer_id` | both reset to `False` / `None` (smoothing invalidates any prior review state) |
-| `smoothing_ops` | `s_i.smoothing_ops + ["merge_same_label"]` (deduped on consecutive identical entries) |
+| `smoothing_ops` | `dedup(s_i.smoothing_ops + s_{i+1}.smoothing_ops + ["merge_same_label"])` — concatenate both predecessors' op histories in order, then append `"merge_same_label"`, then collapse consecutive duplicates. **Lineage from BOTH inputs is preserved**; neither side's history is dropped. (Example: `["merge_short"] + ["viterbi_relabel"] + ["merge_same_label"]` → `["merge_short", "viterbi_relabel", "merge_same_label"]`.) |
 | `segment_id` | regenerated (§4.2) |
 
 ### 3.3 Op 2 — min-duration absorb
 
-Iterate left-to-right. For each segment with `(end_time - start_time) < min_segment_duration_sec`:
+The pass repeats until **no segment shorter than `min_segment_duration_sec` remains** (or no merge is possible). Within a single pass:
 
-1. Identify candidate neighbors: left (`s_{i-1}`) if `i > 0`, right (`s_{i+1}`) if `i < len-1`.
-2. Score each candidate as its `overall_confidence`.
-3. Pick the higher-scoring neighbor. If equal, prefer the neighbor that does **not** induce a forbidden transition with the segment on the *opposite* side after the absorb (rare tie-breaker; if both are equally good or equally bad, prefer left).
-4. Merge the short segment into the chosen neighbor using the same field-merge rules as Op 1, except `phase` (and `verb`/`object`/`target`) is taken from the neighbor (not from the higher-confidence side — neighbor wins because absorb preserves the dominant label of the surviving segment).
-5. The absorbed segment's `smoothing_ops` is appended to the neighbor's `smoothing_ops` with `"merge_short"` added (deduped).
-6. After all short segments are absorbed in one left-to-right pass, run Op 1 again (merge_same_label) to collapse any newly adjacent same-phase pairs.
+1. Walk the segment list left-to-right.
+2. At index `i`, if `(s_i.end_time - s_i.start_time) < min_segment_duration_sec`:
+   - Identify candidate neighbors: left (`s_{i-1}`) if `i > 0`, right (`s_{i+1}`) if `i < len-1`.
+   - Score each candidate as its `overall_confidence`.
+   - Pick the higher-scoring neighbor. If scores are equal, prefer the neighbor that does **not** induce a forbidden transition with the segment on the *opposite* side after the absorb (e.g., if absorbing into the left would leave the merged-left adjacent to a right-side neighbor in a forbidden pair, prefer the right). If both are equally good or equally bad, prefer **left**.
+   - **Field merge for the surviving segment:** use the same rules as Op 1, except `phase`, `verb`, `object`, `target`, and `label_source` are taken from the **neighbor** (not from higher-confidence-of-the-pair) — the dominant label of the surviving segment is preserved by definition. `start_boundary` / `end_boundary` adjust to span both: if absorbing into the left, the merged segment's `end_boundary` becomes the absorbed segment's `end_boundary`; if absorbing into the right, the merged segment's `start_boundary` becomes the absorbed segment's `start_boundary`. `boundary_confidence` and `overall_confidence` are then re-derived per §3.5.
+   - `smoothing_ops` for the surviving segment is `dedup(neighbor.smoothing_ops + absorbed.smoothing_ops + ["merge_short"])`. (Same union-and-append rule as Op 1.)
+   - Replace the two segments in the list with the merged one. Restart the pass at index `max(i - 1, 0)` (the merged segment may itself still be below threshold, or its new neighbor may now be).
+3. The pass terminates when a complete left-to-right walk performs no absorb. At that point, run Op 1 (merge_same_label) once to collapse any newly-adjacent same-phase pairs created during this Op 2 pass; then re-check if any segment is still short. If yes (rare — only if Op 1 created a new short segment, which is impossible since Op 1 strictly grows segments), iterate Op 2 again. In practice Op 2 runs once and Op 1 follows once.
 
-Edge case: a single-segment input with duration `< min_segment_duration_sec`. No neighbors → the segment survives untouched. (This is the "tiny episode" case; we don't fail.)
+Edge cases:
 
-Edge case: all segments are below threshold. The loop absorbs them pairwise; the final result is one long segment (or as few as possible).
+- **Single-segment input with duration `< min_segment_duration_sec`.** No neighbors → the segment survives untouched. (This is the "tiny episode" case; we don't fail.)
+- **All segments below threshold.** The loop absorbs them pairwise (left-to-right preference on ties) until either one segment survives or the remaining segments are all `>= min_segment_duration_sec` (which only happens when an absorb produces a long-enough survivor before the cascade completes). For an all-short, equal-confidence input, the final result is a single segment whose label comes from `s_0`'s neighbor at the time of its absorb (i.e., propagates left-to-right).
+- **Two segments, both short, equal confidence.** Default tie-break to "absorb the right into the left" (since the rule "prefer left neighbor" applies to the right-side segment's absorb decision). Result: 1 segment.
 
 ### 3.4 Op 3 — Viterbi relabel
 
@@ -280,19 +284,34 @@ If `config.viterbi_enabled is False`, skip. Otherwise:
 - For each segment `s_t` whose decoded `q*_t != s_t.phase`, replace `s_t.phase`, `verb`, `object`, `target` with the decoded label's canonical entry (looked up via labelset; `verb`/`object`/`target` come from the labelset YAML, not from the original VLM output). Append `"viterbi_relabel"` to `smoothing_ops`. Recompute `overall_confidence` per parent spec §6.4. `evidence` keeps the original VLM evidence (transparency: "VLM said X, smoother flipped to Y because X→next was forbidden").
 - After Viterbi, run Op 1 (merge_same_label) once more to collapse any newly adjacent same-phase pairs created by the relabel.
 
-Tie-breaking in Viterbi: when two paths have equal score, prefer the path that keeps the most segments at their observed label (i.e., minimizes total relabels). Implementation: include a small ε secondary score equal to `1e-6 * count(q_t == observed_phase_t)` per path; this keeps stability without affecting decisions.
+Tie-breaking in Viterbi (deterministic, in priority order):
+
+1. **Prefer the path that keeps the most segments at their observed label** (minimizes total relabels). Implementation: secondary score `+ε₁ * count(q_t == observed_phase_t)` per path with `ε₁ = 1e-6`.
+2. **If still tied** (e.g., two segments both have zero emission and the deciding segment's observed label was `"unknown"` or had `vlm_confidence is None`): prefer labels in the run's **labelset declaration order** (the order they appear in `labels.yaml`). Implementation: secondary score `+ε₂ * sum(rank_in_labelset(q_t))` with `ε₂ = 1e-12` (much smaller than `ε₁` so it never overrides rule 1). Lower rank is better → reserved label `"unknown"` lives at the end of the labelset (highest rank) and is therefore the **last** fallback among non-observed labels — Viterbi will only assign `"unknown"` if no other label fits the transition constraints.
+3. **If still tied** (label-set rank tied — impossible if labels have a strict order, included for completeness): prefer earlier alphabetical order on `q_t`.
+
+This produces a fully deterministic decoding for any input.
 
 ### 3.5 Confidence recomputation
 
-Whenever a segment is merged or relabeled, `overall_confidence` is recomputed from scratch using the parent spec §6.4 formula. The parent spec defines:
+Whenever a segment is merged or relabeled, **both** `boundary_confidence` and `overall_confidence` are recomputed as derived values per parent spec §6.1 / §6.4 — never carried over from the input.
 
-```
-overall_confidence(seg) = 0.0  if seg.phase ∈ {"unlabeled", "unknown"}
-                        = mean(boundary_confidence, vlm_confidence)  otherwise
-                        (with vlm_confidence treated as 0 if None)
+```python
+# Parent spec §6.1 — boundary_confidence is derived, not stored independently
+seg.boundary_confidence = min(seg.start_boundary.score, seg.end_boundary.score)
+
+# Parent spec §6.4 — overall_confidence formula
+def compute_overall_confidence(seg):
+    if seg.phase in {"unlabeled", "unknown"}:
+        return 0.0
+    if seg.vlm_confidence is None:
+        return seg.boundary_confidence
+    return sqrt(seg.boundary_confidence * seg.vlm_confidence)   # geometric mean
 ```
 
 The smoother does NOT introduce a new "smoothing_confidence" sub-component (parent spec §16 explicitly defers that — "add only when needed"). The smoothed segment's `overall_confidence` reflects the merged boundary and VLM signals only.
+
+**Why geometric mean and not arithmetic mean.** Per parent spec §6.4, `sqrt(boundary * vlm)` penalizes weak-link segments more sharply than the arithmetic mean: a segment with `boundary=0.9, vlm=0.1` lands at `~0.30` (geometric) versus `0.50` (arithmetic). The geometric form matches the intent that a confident label is meaningless without a confident boundary, and vice versa. The smoother MUST NOT silently switch to arithmetic mean.
 
 ### 3.6 Per-segment boundary integrity
 
@@ -335,13 +354,13 @@ for op in self.smoothing_ops:
 
 ### 4.2 `segment_id` regeneration
 
-`segment_id` is currently derived in Phase 1 bracketing as `f"{episode_id}__seg{idx:04d}"` where `idx` is the 0-based index in the bracketed list. After smoothing, the segment count and ordering change, so segment IDs must be regenerated. Phase 4 sets:
+`segment_id` is derived in Phase 1 bracketing as `f"{episode_id}__seg{idx:04d}"` where `idx` is the 0-based index in the bracketed list. After smoothing, the segment count and ordering change, so segment IDs must be regenerated. Phase 4 sets:
 
 ```python
-seg.segment_id = f"{episode_id}__seg{idx:04d}__sm"
+seg.segment_id = f"{episode_id}__seg{idx:04d}"
 ```
 
-The `__sm` suffix marks the segment as smoothed and prevents accidental ID collisions if a Phase 3 and a Phase 4 run dir end up adjacent in some downstream consumer's view. (They live under different `canonical_name`s, so this is belt-and-suspenders.)
+— the **same form** as Phase 1–3. There is no Phase-4-specific suffix. Disambiguation between a Phase 3 and a Phase 4 run for the same episode is done at the `canonical_name` level (different `target_phase` → different `run_hash` → different run directory). Adding a `__sm` suffix would have been belt-and-suspenders that broke any consumer assuming a uniform segment-id pattern, so we don't.
 
 ### 4.3 `Manifest.smoothing_summary`
 
@@ -452,15 +471,15 @@ Edge cases are handled silently:
 
 Each op tested in isolation with hand-crafted segment fixtures:
 
-- `test_smoother_merge_same_label.py` (~12 tests): adjacent same-phase pairs collapse; non-adjacent same-phase don't; multiple rounds converge; field-merge rules (max boundary_confidence, weighted-mean vlm_confidence, set-union of failure_flags, etc.); reset of `reviewed`/`reviewer_id`; segment_id regeneration with `__sm` suffix; empty input; single-segment input.
+- `test_smoother_merge_same_label.py` (~12 tests): adjacent same-phase pairs collapse; non-adjacent same-phase don't; multiple rounds converge; field-merge rules (`boundary_confidence` derived from outer edges per §3.5, geometric-mean `overall_confidence`, duration-weighted `vlm_confidence`, set-union of `failure_flags`, set-union of `object_track_ids`, lineage-preserving `smoothing_ops` concatenation per §3.2); reset of `reviewed`/`reviewer_id`; `segment_id` regenerated as `seg{idx:04d}`; empty input; single-segment input.
 - `test_smoother_merge_short.py` (~10 tests): below-threshold absorbed into higher-confidence neighbor; ties broken by left-preference; no-neighbor case (single short segment passes through); all-short cascade collapse; absorb that creates a new same-label adjacency triggers Op 1 follow-up.
-- `test_smoother_viterbi.py` (~12 tests): no-forbidden case = identity (every segment keeps its observed label); single forbidden pair flips the lower-confidence side; high-confidence segment in forbidden pair stays put (because flipping it costs more emission than gaining transition); `viterbi_enabled=False` skips entirely; `lambda_forbidden=0` skips effectively; `phase == "unknown"` segments get filled by transitions; Viterbi-then-merge produces correct same-label collapse.
-- `test_smoother_apply.py` (~6 tests): full apply_smoothing pipeline on representative inputs; SmoothingSummary counts match reality; ops_log reflects what actually happened; idempotence (apply twice = apply once for stable inputs); deterministic output for identical input + config.
-- `test_smoother_config.py` (~8 tests): YAML loader happy path; missing fields fall back to defaults; type errors raise `ConfigError`; unknown-label-in-forbidden raises `smoother_unknown_label_in_forbidden`; CLI `--no-viterbi` overrides YAML; round-trip (config → YAML → config = identity).
+- `test_smoother_viterbi.py` (~14 tests): no-forbidden case = identity (every segment keeps its observed label); single forbidden pair flips the lower-confidence side; high-confidence segment in forbidden pair stays put (because flipping it costs more emission than gaining transition); `viterbi_enabled=False` skips entirely; `lambda_forbidden=0` skips effectively; `phase == "unknown"` and `vlm_confidence is None` segments get filled by transitions; Viterbi-then-merge produces correct same-label collapse; **deterministic tie-break (§3.4)**: zero-emission ties resolve by labelset declaration order, then alphabetical — same input yields byte-identical decoding across runs and across Python dict iteration changes.
+- `test_smoother_apply.py` (~7 tests): full apply_smoothing pipeline on representative inputs; SmoothingSummary counts match reality; ops_log reflects what actually happened; idempotence (apply twice = apply once for stable inputs); deterministic output for identical input + config; **confidence-formula regression**: a hand-crafted merged segment's `boundary_confidence` equals `min(start_boundary.score, end_boundary.score)` of the merged segment, NOT a function of the input segments' `boundary_confidence` values; `overall_confidence` equals `sqrt(boundary * vlm)` (geometric mean) and is `0.0` on reserved phases.
+- `test_smoother_config.py` (~8 tests): YAML loader happy path; missing fields fall back to defaults; type errors raise `ConfigError`; unknown-label-in-forbidden raises `smoother_unknown_label_in_forbidden`; CLI `--no-viterbi` overrides YAML; round-trip (config → YAML → config = identity); `to_dict()` output excludes any field not consumed by the smoother (no stale `merge_threshold_sec`); negative `lambda_forbidden` rejected.
 
 ### 8.2 Integration (`tests/integration/`)
 
-- `test_phase4_happy_path.py`: full `mimicanno annotate --target-phase 4` against the synth_aloha fixture with FixtureVLM + FixtureSAM3 (parent spec §11 #1 pattern). Asserts `manifest.pipeline_status.target_phase=4`, smoothing_summary present, segment count is `<=` Phase 3's segment count for the same fixture, every segment has `smoothing_ops` field (possibly empty), no forbidden transition with `overall_confidence > 0.5`.
+- `test_phase4_happy_path.py`: full `mimicanno annotate --target-phase 4` against the synth_aloha fixture with FixtureVLM + FixtureSAM3 (parent spec §11 #1 pattern). Asserts `manifest.pipeline_phase=4`, smoothing_summary present, segment count is `<=` Phase 3's segment count for the same fixture, every segment has `smoothing_ops` field (possibly empty), no forbidden transition with `overall_confidence > 0.5`.
 - `test_phase4_no_phase123_regression.py`: pin `config_hash` and `run_hash` for `target_phase=1`, `target_phase=2`, `target_phase=3` runs against the synth fixture. Phase 4 code must NOT alter these hashes. Mirrors the Phase 3 hash-gating test (which exists at `tests/integration/test_phase3_no_phase12_regression.py`).
 - `test_phase4_viterbi_disabled.py`: `--no-viterbi` produces a different `config_hash` and a smoothing_summary with `viterbi_skipped=true`, `viterbi_relabels=0`. Output may differ from default Phase 4 run by the relabels Viterbi would have made.
 - `test_phase4_smoother_yaml_override.py`: `--smoother-config` with a non-default `lambda_forbidden=2.0` produces a different `config_hash` and a different relabel pattern than the default-config run on the same fixture.
@@ -492,7 +511,7 @@ Per parent spec §15.4 #16:
 
 Concretely, Phase 4 ships when:
 
-1. `mimicanno annotate --target-phase 4 ...` end-to-end produces a run dir with `pipeline_status.target_phase=4` and a non-null `smoothing_summary`.
+1. `mimicanno annotate --target-phase 4 ...` end-to-end produces a run dir with `pipeline_phase=4` and a non-null `smoothing_summary`.
 2. On the synth_aloha fixture, Phase 4 default-config segment count `<=` Phase 3 default-config segment count for the same inputs.
 3. No segment in any Phase 4 fixture run has `phase`-pair `(s_i.phase, s_{i+1}.phase) ∈ forbidden_transitions` AND `min(s_i.overall_confidence, s_{i+1}.overall_confidence) > 0.5` simultaneously.
 4. Phase 1/2/3 `config_hash` and `run_hash` are byte-identical with vs without Phase 4 code present (regression test passes).
@@ -502,13 +521,17 @@ Concretely, Phase 4 ships when:
 ## 11. Open items / deferred
 
 - **No frame-level confidence**: parent spec §16 defers per-frame label confidence; smoothing operates on segments only. If Phase 5 introduces per-frame correction, the smoother may need a re-design.
-- **`merge_threshold_sec` is currently unused.** It exists in `SmootherConfig` because parent spec §10 names it. The current spec only has `min_segment_duration_sec` (Op 2). Future work may add a separate "merge segments shorter than `merge_threshold_sec` even if their labels differ" pass; until then, the field is hashed (so future addition doesn't change `config_hash` for already-shipped Phase 4 runs) but not consumed. Plan-reviewer should flag if this asymmetry feels wrong; alternative is to drop the field now and add it back with a `lambda_forbidden`-style explicit minor bump if/when the new pass lands.
 - **No multi-step Viterbi window** (e.g., look-ahead beyond 1 transition). 1-step is sufficient for the forbidden-transition objective; longer windows are HMM territory.
 - **No `failure_flags` auto-inference from Viterbi flips.** A flipped segment is an indicator that something doesn't fit, but auto-flagging `"failed_grasp"` from a Viterbi disagreement is a bridge too far without ground-truth validation. Phase 5 may add this with a human-in-the-loop check.
+- **`merge_threshold_sec` (parent spec §10) is intentionally NOT in `SmootherConfig`.** Parent spec named `merge_threshold_sec: float = 0.20` alongside `min_segment_duration_sec`, but no Op 2-or-later consumes it (the only short-segment merge is Op 2's min-duration absorb, which uses `min_segment_duration_sec`). Carrying an unused field that participates in `config_hash` would commit us to its semantics before they're decided. If a future "merge same-label-OR-different-label segments shorter than `merge_threshold_sec`" pass lands, it gets added explicitly to `SmootherConfig.to_dict()` at that time, accepting that this **will** change `config_hash` (and thus `canonical_name`) for runs that opt into the new field — same precedent as Phase 3 introducing `tracking` to the config payload.
 
-## 12. Questions for the user (gated by spec review)
+## 12. Resolved decisions (formerly open questions)
 
-1. **`merge_threshold_sec`**: keep as a hashed-but-unused field for now, or drop it from `SmootherConfig` until a real second-pass merge feature lands? (Open item §11.)
-2. **`label_source` enum**: confirm we do NOT add `"smoothed_*"` values. Lineage-via-`smoothing_ops` is the proposal.
-3. **`segment_id` `__sm` suffix**: confirm this is desirable, or should Phase 4 segment IDs reuse the Phase 3 form `seg0001` (counting on `canonical_name` to disambiguate at the run-dir level)?
-4. **Default `lambda_forbidden=0.5`**: confirm. The intent is "a confidently-labeled VLM segment (vlm_confidence ≥ 0.5) is not flippable just to satisfy a forbidden transition." Higher values make Viterbi more aggressive.
+These were items the spec-reviewer flagged for explicit resolution; recording the answers here for the plan-writer:
+
+1. **`merge_threshold_sec`**: dropped (see §11). `SmootherConfig` carries only fields the smoother actually consumes.
+2. **`label_source` enum**: unchanged. No `"smoothed_*"` values. Smoothing lineage lives in `smoothing_ops` only.
+3. **`segment_id` form**: same as Phase 1–3 (`{episode_id}__seg{idx:04d}`). No `__sm` suffix (§4.2).
+4. **Default `lambda_forbidden = 0.5`**: kept. Rationale: a VLM segment with `vlm_confidence >= 0.5` should not be flipped purely to satisfy a forbidden transition (since the emission gain from preserving the VLM label `>=` the transition penalty avoided). Users wanting more aggressive smoothing can override via YAML.
+5. **Viterbi tie-breaking**: fully deterministic (§3.4): observed-label preference → labelset declaration order → alphabetical. No implementation-iteration-order dependency.
+6. **`smoothing_ops` merge semantics**: union of both inputs' ops in order, then append the merge op, then dedup consecutive duplicates (§3.2). Lineage from BOTH segments is preserved.
