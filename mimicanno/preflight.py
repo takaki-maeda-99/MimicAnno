@@ -1,11 +1,12 @@
-"""Pre-flight VLM model resolution (spec §2.5).
+"""Pre-flight model / checkpoint resolution.
 
-Single responsibility: parse `--vlm-model` argument, route to one of three
-resolution cases, return a frozen (model_id, resolved_checkpoint) tuple that
-the rest of the system trusts.
+- ``resolve_vlm_model`` (spec §2.5) — parse ``--vlm-model``, route to one of
+  three resolution cases, return a frozen (model_id, resolved_checkpoint)
+  tuple. The ONLY caller of ``huggingface_hub`` in the codebase.
+- ``resolve_sam3_checkpoint`` (spec §8 ``sam3_checkpoint_not_found``) —
+  validate a local SAM3 weights file and return its ``sha256:<hex>``.
 
-This module is the ONLY caller of huggingface_hub. Everything else accepts
-the resolved string verbatim.
+The rest of the system accepts the resolved strings verbatim.
 """
 from __future__ import annotations
 
