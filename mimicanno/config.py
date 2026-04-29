@@ -20,7 +20,11 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from mimicanno.errors import MimicAnnoError
+from mimicanno.errors import (
+    MimicAnnoError,
+    SmootherConfigInvalid,
+    SmootherUnknownLabelInForbidden,
+)
 from mimicanno.hashing import canonical_json, sha256_hex_of_str
 
 DEFAULT_BOUNDARY_WEIGHTS: dict[str, float] = {
@@ -226,6 +230,183 @@ class TrackingConfig:
             if self.max_gap_frames is not None
             else round(fps * 1.0)
         )
+
+
+@dataclass(slots=True, frozen=True)
+class SmootherConfig:
+    """Phase 4 smoother parameters (spec §2).
+
+    Hashed via ``to_dict`` only when ``target_phase >= 4`` (gated inside
+    ``AnnotationConfig.to_dict``). Phase 1-3 runs leave
+    ``AnnotationConfig.smoother = None`` and contribute nothing to ``config_hash``.
+    """
+
+    min_segment_duration_sec: float = 0.30
+    forbidden_transitions: tuple[tuple[str, str], ...] = (
+        ("grasp_object", "approach_object"),
+        ("release_object", "grasp_object"),
+        ("lift_object", "idle"),
+    )
+    viterbi_enabled: bool = True
+    lambda_forbidden: float = 0.5
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "min_segment_duration_sec": self.min_segment_duration_sec,
+            "forbidden_transitions": [list(p) for p in self.forbidden_transitions],
+            "viterbi_enabled": self.viterbi_enabled,
+            "lambda_forbidden": self.lambda_forbidden,
+        }
+
+
+_RESERVED_PHASES_FOR_SMOOTHER: frozenset[str] = frozenset({"unlabeled", "unknown"})
+
+
+def load_smoother_config_yaml(
+    path: Path, *, allowed_labels: list[str]
+) -> SmootherConfig:
+    """Load and validate a SmootherConfig from YAML (spec §2.1).
+
+    Missing fields fall back to ``SmootherConfig()`` defaults. ``allowed_labels``
+    is the run's labelset id list; ``forbidden_transitions`` may reference any
+    of those plus the reserved ``{"unknown", "unlabeled"}``.
+
+    Raises:
+        SmootherUnknownLabelInForbidden — when ``forbidden_transitions`` names a
+            label outside ``allowed_labels`` and the reserved set.
+        SmootherConfigInvalid — for parse / type / range / structural errors.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise SmootherConfigInvalid(
+            reason=f"could not read file: {e}", path=str(path),
+        ) from e
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise SmootherConfigInvalid(
+            reason=f"not valid YAML: {e}", path=str(path),
+        ) from e
+    if raw is None:
+        return SmootherConfig()
+    if not isinstance(raw, dict):
+        raise SmootherConfigInvalid(
+            reason=f"top level must be a mapping, got {type(raw).__name__}",
+            path=str(path),
+        )
+
+    valid_top_keys = {
+        "min_segment_duration_sec",
+        "forbidden_transitions",
+        "viterbi_enabled",
+        "lambda_forbidden",
+    }
+    unknown_keys = sorted(set(raw) - valid_top_keys)
+    if unknown_keys:
+        raise SmootherConfigInvalid(
+            reason=(
+                f"unknown key(s) {unknown_keys!r}; "
+                f"expected any of {sorted(valid_top_keys)!r}"
+            ),
+            path=str(path),
+        )
+
+    defaults = SmootherConfig()
+
+    # min_segment_duration_sec
+    raw_min = raw.get("min_segment_duration_sec", defaults.min_segment_duration_sec)
+    if not isinstance(raw_min, (int, float)) or isinstance(raw_min, bool):
+        raise SmootherConfigInvalid(
+            reason=(
+                f"'min_segment_duration_sec' must be a number, "
+                f"got {type(raw_min).__name__}"
+            ),
+            path=str(path),
+        )
+    min_dur = float(raw_min)
+    if min_dur < 0:
+        raise SmootherConfigInvalid(
+            reason=f"'min_segment_duration_sec' must be >= 0, got {min_dur}",
+            path=str(path),
+        )
+
+    # lambda_forbidden
+    raw_lam = raw.get("lambda_forbidden", defaults.lambda_forbidden)
+    if not isinstance(raw_lam, (int, float)) or isinstance(raw_lam, bool):
+        raise SmootherConfigInvalid(
+            reason=(
+                f"'lambda_forbidden' must be a number, "
+                f"got {type(raw_lam).__name__}"
+            ),
+            path=str(path),
+        )
+    lam = float(raw_lam)
+    if lam < 0:
+        raise SmootherConfigInvalid(
+            reason=f"'lambda_forbidden' must be >= 0, got {lam}",
+            path=str(path),
+        )
+
+    # viterbi_enabled
+    raw_viterbi = raw.get("viterbi_enabled", defaults.viterbi_enabled)
+    if not isinstance(raw_viterbi, bool):
+        raise SmootherConfigInvalid(
+            reason=(
+                f"'viterbi_enabled' must be a boolean, "
+                f"got {type(raw_viterbi).__name__}"
+            ),
+            path=str(path),
+        )
+    viterbi = bool(raw_viterbi)
+
+    # forbidden_transitions
+    raw_ft = raw.get("forbidden_transitions")
+    if raw_ft is None:
+        ft: tuple[tuple[str, str], ...] = defaults.forbidden_transitions
+    else:
+        if not isinstance(raw_ft, list):
+            raise SmootherConfigInvalid(
+                reason=(
+                    "'forbidden_transitions' must be a list of [str, str] pairs, "
+                    f"got {type(raw_ft).__name__}"
+                ),
+                path=str(path),
+            )
+        validated: list[tuple[str, str]] = []
+        valid_labels = set(allowed_labels) | _RESERVED_PHASES_FOR_SMOOTHER
+        for entry in raw_ft:
+            if not isinstance(entry, list) or len(entry) != 2:
+                raise SmootherConfigInvalid(
+                    reason=(
+                        f"each forbidden_transitions entry must be a length-2 list, "
+                        f"got {entry!r}"
+                    ),
+                    path=str(path),
+                )
+            a, b = entry
+            if not isinstance(a, str) or not isinstance(b, str):
+                raise SmootherConfigInvalid(
+                    reason=(
+                        f"forbidden_transitions entries must be [str, str], "
+                        f"got {entry!r}"
+                    ),
+                    path=str(path),
+                )
+            for label in (a, b):
+                if label not in valid_labels:
+                    raise SmootherUnknownLabelInForbidden(
+                        label=label, path=str(path),
+                    )
+            validated.append((a, b))
+        ft = tuple(validated)
+
+    return SmootherConfig(
+        min_segment_duration_sec=min_dur,
+        forbidden_transitions=ft,
+        viterbi_enabled=viterbi,
+        lambda_forbidden=lam,
+    )
 
 
 def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
