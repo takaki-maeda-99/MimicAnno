@@ -8,7 +8,7 @@ import json as _json
 import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -317,7 +317,9 @@ def _degrade_to_phase3_objectless(
     action_s: np.ndarray | None,
     has_eef: bool,
     disabled_sources_phase1: list[str],
-    degrade_reason: str,
+    degrade_reason: Literal[
+        "gemma_no_object_prompts", "sam3_no_initial_detection", "sam3_init_failed",
+    ],
     underlying_log: str | None = None,
 ) -> AnnotateResult:
     """Phase 3 whole-run degrade — produces a Phase 3 objectless run (spec §7.2).
