@@ -1,8 +1,9 @@
-"""Phase 3 propagator dataclasses and Propagator class (spec §2.4).
+"""Phase 3 propagator dataclasses, Step B grounding, and Propagator class.
 
-Step B (`ground_initial_detections`) lands in Task 16; Step C (`Propagator.run`)
-is implemented here (Task 8). This file holds the dataclasses and the
-propagation algorithm (spec §2.4.1).
+Holds the Phase 3 tracking dataclasses (`BBox`, `TrackSample`, `GapEvent`,
+`Track`, `TrackingPlan`), the Step B builder `ground_initial_detections`
+(spec §2.4.0), and the Step C propagation algorithm `Propagator.run`
+(spec §2.4.1).
 """
 
 from __future__ import annotations
