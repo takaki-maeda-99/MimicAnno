@@ -286,9 +286,22 @@ If `config.viterbi_enabled is False`, skip. Otherwise:
 
 Tie-breaking in Viterbi (deterministic, in priority order):
 
-1. **Prefer the path that keeps the most segments at their observed label** (minimizes total relabels). Implementation: secondary score `+ε₁ * count(q_t == observed_phase_t)` per path with `ε₁ = 1e-6`.
-2. **If still tied** (e.g., two segments both have zero emission and the deciding segment's observed label was `"unknown"` or had `vlm_confidence is None`): prefer labels in the run's **labelset declaration order** (the order they appear in `labels.yaml`). Implementation: secondary score `+ε₂ * sum(rank_in_labelset(q_t))` with `ε₂ = 1e-12` (much smaller than `ε₁` so it never overrides rule 1). Lower rank is better → reserved label `"unknown"` lives at the end of the labelset (highest rank) and is therefore the **last** fallback among non-observed labels — Viterbi will only assign `"unknown"` if no other label fits the transition constraints.
-3. **If still tied** (label-set rank tied — impossible if labels have a strict order, included for completeness): prefer earlier alphabetical order on `q_t`.
+The decoder's score function on a candidate path `(q_1, ..., q_T)` is
+
+```
+score(path) = sum_t e(s_t, q_t) + sum_t tr(q_t, q_{t+1})
+            + ε₁ * count(q_t == observed_phase_t)         # rule 1, observed-label preference
+            - ε₂ * sum_t rank_in_labelset(q_t)             # rule 2, declaration-order preference (negated)
+            - ε₃ * sum_t alpha_rank(q_t)                   # rule 3, alphabetical fallback (negated)
+```
+
+with `ε₁ = 1e-6`, `ε₂ = 1e-12`, `ε₃ = 1e-18` (each at least 6 orders of magnitude smaller than the previous tier). The argmax over this score is fully deterministic:
+
+1. **Rule 1 — keep observed labels.** Higher `count(q_t == observed_phase_t)` wins. Reduces unnecessary relabels.
+2. **Rule 2 — labelset declaration order.** Lower `rank_in_labelset(q_t)` wins (note the **minus** sign — in an argmax over the path score, smaller rank → less subtracted → higher final score). `rank_in_labelset` is the 0-based index of the label in `labels.yaml`'s declaration list. Reserved labels (`unknown`) live at the end of the list (highest rank) so they are the last fallback among non-observed candidates.
+3. **Rule 3 — alphabetical.** If labels have a strict declaration order this rule is unreachable (it's included as a defensive last resort). Otherwise: lower `alpha_rank(q_t)` (the 0-based index in `sorted(Q)`) wins. Same minus-sign convention as rule 2.
+
+Implementations may also express the tie-break as an explicit lexicographic comparator on path keys `(score_main, +count_observed, -sum_rank_labelset, -sum_alpha_rank)` — this is mathematically equivalent to the additive ε form when `ε₁ ≫ ε₂ ≫ ε₃` are chosen smaller than the smallest realistic difference between `score_main` values. Either form is acceptable; tests pin the resulting decoded sequence, not the implementation.
 
 This produces a fully deterministic decoding for any input.
 
