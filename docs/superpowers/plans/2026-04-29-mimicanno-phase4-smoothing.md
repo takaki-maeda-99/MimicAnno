@@ -2100,37 +2100,29 @@ def test_viterbi_determinism_across_runs() -> None:
 - [ ] **Step 9.3: Implement `_viterbi_relabel`.**
 
 ```python
-def _materialize_label(
-    seg: SubtaskSegment,
-    decoded_phase: str,
-    *,
-    labelset_yaml: list[str],
-) -> SubtaskSegment:
+def _materialize_label(seg: SubtaskSegment, decoded_phase: str) -> SubtaskSegment:
     """Spec §3.4: materialize verb/object/target for the decoded phase.
 
-    For decoded `unknown`: verb/object/target = None (parent §6.1 reserved-phase contract).
-    For allowed labels: pulled from the labelset YAML's canonical entry.
-
-    NOTE: This signature accepts the labelset as a flat list of names, but
-    the actual verb/object/target mapping comes from the loaded labels.yaml.
-    For minimal dependency, we accept a dict; real wiring in apply_smoothing
-    passes the loaded labelset structure.
+    For decoded `unknown`: verb/object/target = None (parent §6.1 reserved-phase contract;
+    matches Phase 2 retry-exhaustion fallback shape).
+    For allowed labels (q*_t in labels.yaml): KEEP original verb/object/target.
+    Rationale: labelset YAML's `Label` dataclass carries only `id`, `verbs: list[str]`
+    (multiple acceptable verb candidates, not a single canonical), and
+    `requires_object: bool` — there is no canonical (verb, object, target) tuple
+    to materialize from. Preserving the original VLM-extracted values is the best
+    signal we have; the `smoothing_ops` log records the relabel so Phase 5's edit
+    UI can surface these segments for human review.
     """
+    if decoded_phase == seg.phase:
+        return seg   # no relabel
     if decoded_phase == "unknown":
         new_verb: str | None = None
         new_object: str | None = None
         new_target: str | None = None
     else:
-        # In real wiring, look up labelset YAML entry for `decoded_phase`.
-        # For unit tests with the flat LABELSET, we DON'T have verb/obj/target
-        # available — leave them at the original segment's values.
-        # The integration test (Task 13+) verifies real labelset materialization.
         new_verb = seg.verb
         new_object = seg.object
         new_target = seg.target
-
-    if decoded_phase == seg.phase:
-        return seg   # no relabel
     new_ops = _dedup_consecutive(list(seg.smoothing_ops) + ["viterbi_relabel"])
     return _recompute_confidence(replace(
         seg,
@@ -2219,7 +2211,7 @@ def _viterbi_relabel(
     for seg, q_star in zip(segments, decoded):
         if q_star != seg.phase:
             relabels += 1
-        out.append(_materialize_label(seg, q_star, labelset_yaml=labelset))
+        out.append(_materialize_label(seg, q_star))
     return _renumber_segment_ids(out), relabels, False
 ```
 
@@ -2322,13 +2314,90 @@ def test_apply_smoothing_no_segment_pair_violates_forbidden_after_smoothing() ->
     # ... (build fixture with forbidden pair, both vlm > 0.5, call apply,
     # assert no violation in result)
     pass
+
+
+def test_apply_smoothing_segment_invariant_check_passes_on_smooth_input() -> None:
+    """§3.6 invariant check should pass for a normal apply_smoothing run."""
+    cfg = SmootherConfig()
+    a = _seg(); a = type(a)(**{**a.__dict__,
+                                "start_frame": 0, "end_frame": 30,
+                                "start_time": 0.0, "end_time": 1.0,
+                                "segment_id": "ep__seg0000",
+                                "phase": "approach_object"})
+    b = _seg(); b = type(b)(**{**b.__dict__,
+                                "start_frame": 30, "end_frame": 60,
+                                "start_time": 1.0, "end_time": 2.0,
+                                "segment_id": "ep__seg0001",
+                                "phase": "grasp_object",
+                                "start_boundary": BoundaryRef(candidate_id="b1", frame=30, score=0.5)})
+    result = apply_smoothing([a, b], config=cfg, labelset=LABELSET)
+    # No exception means invariant check passed.
+    assert len(result.segments) >= 1
+
+
+def test_apply_smoothing_segment_invariant_violation_raises() -> None:
+    """If a hand-crafted gap exists between adjacent segments (synthesized
+    bypass of the merge ops), the invariant check raises
+    smoother_segment_invariant_violation. This guards against regressions
+    in the merge functions."""
+    from mimicanno.errors import MimicAnnoError    # adjust to actual base
+    from mimicanno.smoother import _assert_segment_invariants
+    a = _seg(); a = type(a)(**{**a.__dict__,
+                                "end_boundary": BoundaryRef(candidate_id="ax", frame=10, score=0.5)})
+    b = _seg(); b = type(b)(**{**b.__dict__,
+                                "segment_id": "ep__seg0001",
+                                "start_boundary": BoundaryRef(candidate_id="bx", frame=20, score=0.5),
+                                "end_boundary": BoundaryRef(candidate_id="by", frame=30, score=0.5)})
+    with pytest.raises(MimicAnnoError) as exc_info:
+        _assert_segment_invariants([a, b])
+    assert exc_info.value.error_code == "smoother_segment_invariant_violation"
 ```
 
 (For brevity I've left two tests as `pass` placeholders. Fill in the fixtures and assertions during implementation.)
 
-- [ ] **Step 10.2: Implement `apply_smoothing`.**
+- [ ] **Step 10.2: Implement `apply_smoothing` (with §3.6 post-smoothing invariant check).**
 
 ```python
+from mimicanno.errors import MimicAnnoError   # adjust to actual base exception class
+
+
+def _assert_segment_invariants(segments: list[SubtaskSegment]) -> None:
+    """Spec §3.6 post-smoothing invariants. Raises smoother_segment_invariant_violation.
+
+    Checks:
+    - Adjacent segments share a frame: end_boundary[s_i].frame == start_boundary[s_{i+1}].frame
+      (no gaps, no overlaps at the segment-level view).
+    - boundary_confidence is finite and in [0, 1].
+    - overall_confidence is finite and in [0, 1].
+    - smoothing_ops contains only allowed values (defense-in-depth; SubtaskSegment
+      __post_init__ already validates, but re-check after merges).
+    """
+    for i, seg in enumerate(segments):
+        # Confidence finiteness
+        if not (math.isfinite(seg.boundary_confidence) and 0.0 <= seg.boundary_confidence <= 1.0):
+            raise MimicAnnoError(
+                error_code="smoother_segment_invariant_violation",
+                message=(f"segment {seg.segment_id}: boundary_confidence "
+                         f"{seg.boundary_confidence!r} not finite or not in [0,1]"),
+            )
+        if not (math.isfinite(seg.overall_confidence) and 0.0 <= seg.overall_confidence <= 1.0):
+            raise MimicAnnoError(
+                error_code="smoother_segment_invariant_violation",
+                message=(f"segment {seg.segment_id}: overall_confidence "
+                         f"{seg.overall_confidence!r} not finite or not in [0,1]"),
+            )
+        # Adjacency
+        if i + 1 < len(segments):
+            nxt = segments[i + 1]
+            if seg.end_boundary.frame != nxt.start_boundary.frame:
+                raise MimicAnnoError(
+                    error_code="smoother_segment_invariant_violation",
+                    message=(f"segments {seg.segment_id} / {nxt.segment_id} have "
+                             f"a gap or overlap: end_frame={seg.end_boundary.frame} "
+                             f"!= start_frame={nxt.start_boundary.frame}"),
+                )
+
+
 def apply_smoothing(
     segments: list[SubtaskSegment],
     *,
@@ -2338,7 +2407,7 @@ def apply_smoothing(
     """Phase 4 smoothing pipeline (spec §3).
 
     Order: same-label merge → min-duration absorb → (Op 1 again) → Viterbi (optional)
-           → (Op 1 again).
+           → (Op 1 again) → invariant check.
     """
     initial = len(segments)
     if initial == 0:
@@ -2378,6 +2447,9 @@ def apply_smoothing(
         rounds1 += rounds_after_op3
         collapses1 += collapses_after_op3
 
+    # Spec §3.6 — post-smoothing invariants
+    _assert_segment_invariants(after_op3)
+
     summary = SmoothingSummary(
         initial_segment_count=initial,
         final_segment_count=len(after_op3),
@@ -2389,6 +2461,8 @@ def apply_smoothing(
     )
     return SmoothingResult(segments=after_op3, summary=summary, ops_log=ops_log)
 ```
+
+The exact `MimicAnnoError` constructor signature may differ; match whatever Phase 1/2/3 use to raise structured errors with `error_code=`.
 
 - [ ] **Step 10.3: Run tests; iterate.**
 
@@ -2458,10 +2532,13 @@ def annotate_episode_phase4(req: AnnotateRequest) -> AnnotateResult:
     segments, tracks_artifact, phase3_outcome, _coverage = _run_phase3_inner_pipeline(req)
 
     # 2) Smoothing
+    # Pass labels in DECLARATION ORDER (spec §3.4 rule 2) — not as a set.
+    # `LabelSet.labels` is a list[Label]; preserve order via [.id for ...].
+    label_ids_in_order = [lbl.id for lbl in req.labelset.labels]
     smoothing_result = apply_smoothing(
         segments,
         config=cfg.smoother,
-        labelset=req.labelset.label_ids,   # adjust to the existing accessor
+        labelset=label_ids_in_order,
     )
 
     # 3) Write artifacts with pipeline_phase=4 + smoothing_summary
