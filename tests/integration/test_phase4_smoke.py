@@ -183,6 +183,56 @@ def test_phase4_no_viterbi_summary_reflects_skipped(
     assert summary["viterbi_relabels"] == 0
 
 
+def test_phase4_malformed_smoother_config_aborts_with_error_code(
+    episode, sam3_ckpt: Path, tmp_path: Path,
+) -> None:
+    """`--smoother-config` with a bad value (negative lambda) aborts the CLI
+    with the structured `smoother_config_invalid` error_code on stderr,
+    exit code 2 (spec §7.1)."""
+    runs_root = tmp_path / "runs"
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("lambda_forbidden: -1.0\n")
+    entities, sam3 = _phase4_fixtures()
+    with patch_phase3(entities=entities, sam3_tracker=sam3):
+        result = runner.invoke(
+            app,
+            _phase4_cli_args(
+                episode=episode, runs_root=runs_root, sam3_ckpt=sam3_ckpt,
+                extra=["--smoother-config", str(bad_yaml)],
+            ),
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 2, result.output + result.stderr
+    # Structured error JSON on stderr (per write_error_json contract)
+    combined = (result.output or "") + (result.stderr or "")
+    assert "smoother_config_invalid" in combined
+
+
+def test_phase4_unknown_label_in_forbidden_aborts_with_error_code(
+    episode, sam3_ckpt: Path, tmp_path: Path,
+) -> None:
+    """`--smoother-config` referencing an unknown label aborts with
+    `smoother_unknown_label_in_forbidden` (spec §7.1)."""
+    runs_root = tmp_path / "runs"
+    bad_yaml = tmp_path / "unknown_label.yaml"
+    bad_yaml.write_text(
+        "forbidden_transitions:\n  - [grasp_object, no_such_label]\n",
+    )
+    entities, sam3 = _phase4_fixtures()
+    with patch_phase3(entities=entities, sam3_tracker=sam3):
+        result = runner.invoke(
+            app,
+            _phase4_cli_args(
+                episode=episode, runs_root=runs_root, sam3_ckpt=sam3_ckpt,
+                extra=["--smoother-config", str(bad_yaml)],
+            ),
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 2, result.output + result.stderr
+    combined = (result.output or "") + (result.stderr or "")
+    assert "smoother_unknown_label_in_forbidden" in combined
+
+
 def test_phase4_distinct_run_hash_from_phase3(
     episode, sam3_ckpt: Path, tmp_path: Path,
 ) -> None:
