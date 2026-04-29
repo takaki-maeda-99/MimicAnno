@@ -17,6 +17,7 @@ from mimicanno.config import (
     DEFAULT_MERGE_WINDOW_SEC,
     DEFAULT_SCORE_THRESHOLD,
     BoundaryConfig,
+    BoundaryWeights,
     load_boundary_config_yaml,
 )
 from mimicanno.errors import MimicAnnoError
@@ -30,7 +31,8 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 def test_with_defaults_matches_spec_4_3() -> None:
     cfg = BoundaryConfig.with_defaults()
-    assert cfg.weights == DEFAULT_BOUNDARY_WEIGHTS
+    assert cfg.weights == BoundaryWeights()
+    assert cfg.weights.to_dict(target_phase=1) == DEFAULT_BOUNDARY_WEIGHTS
     assert cfg.thresholds == DEFAULT_BOUNDARY_THRESHOLDS
     assert cfg.merge_window_sec == DEFAULT_MERGE_WINDOW_SEC
     assert cfg.score_threshold == DEFAULT_SCORE_THRESHOLD
@@ -48,7 +50,7 @@ def test_partial_overlay_only_replaces_specified_fields(tmp_path: Path) -> None:
     cfg = load_boundary_config_yaml(p)
     # thresholds dict is replaced wholesale; defaults for unspecified fields stay.
     assert cfg.thresholds == {"gripper_delta": 0.15}
-    assert cfg.weights == DEFAULT_BOUNDARY_WEIGHTS
+    assert cfg.weights.to_dict(target_phase=1) == DEFAULT_BOUNDARY_WEIGHTS
     assert cfg.merge_window_sec == DEFAULT_MERGE_WINDOW_SEC
     assert cfg.score_threshold == DEFAULT_SCORE_THRESHOLD
 
@@ -70,7 +72,7 @@ def test_full_yaml_round_trips(tmp_path: Path) -> None:
         "  - action_norm_change\n",
     )
     cfg = load_boundary_config_yaml(p)
-    assert cfg.weights == {"gripper": 0.4, "velocity": 0.3, "acceleration": 0.2, "action": 0.1}
+    assert cfg.weights == BoundaryWeights(gripper=0.4, velocity=0.3, acceleration=0.2, action=0.1)
     assert cfg.thresholds == {"gripper_delta": 0.15, "velocity_valley": 0.04}
     assert cfg.merge_window_sec == 0.20
     assert cfg.score_threshold == 0.25

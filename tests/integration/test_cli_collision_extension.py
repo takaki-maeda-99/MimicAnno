@@ -16,6 +16,7 @@ def test_collision_triggers_16_hex_extension(tmp_path: Path):
     from mimicanno.config import (
         AnnotationConfig,
         BoundaryConfig,
+        BoundaryWeights,
         InputBundle,
         ModelConfig,
         compose_run_hash,
@@ -38,7 +39,7 @@ def test_collision_triggers_16_hex_extension(tmp_path: Path):
     labels = load_label_set(Path(default_labels_path("manipulation")))
     cfg = AnnotationConfig(
         boundary=BoundaryConfig(
-            weights={"gripper": 0.5, "velocity": 0.25, "acceleration": 0.15, "action": 0.1},
+            weights=BoundaryWeights(),
             thresholds={"gripper_delta": 0.3, "velocity_valley": 0.05},
             merge_window_sec=0.10,
             score_threshold=0.30,

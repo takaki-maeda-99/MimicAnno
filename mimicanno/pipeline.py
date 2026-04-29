@@ -8,7 +8,7 @@ import json as _json
 import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -19,6 +19,7 @@ from mimicanno.adapters.generic import GenericAdapter
 from mimicanno.adapters.koch import KochAdapter
 from mimicanno.adapters.so100 import SO100Adapter
 from mimicanno.boundaries import (
+    Phase3BoundaryDetector,
     detect_action_norm_change,
     detect_eef_acceleration_peak,
     detect_eef_velocity_valley,
@@ -30,19 +31,31 @@ from mimicanno.config import (
     RUN_HASH_FALLBACK_PREFIX_LEN,
     AnnotationConfig,
     InputBundle,
+    TrackingConfig,
     VLMConfig,
     compose_run_hash,
     compute_config_hash,
     compute_input_hash,
 )
-from mimicanno.errors import MimicAnnoError
+from mimicanno.errors import MimicAnnoError, SAM3InitFailed
+from mimicanno.io import write_tracks_json
 from mimicanno.io_parquet import (
     ParquetLoadError,
     load_episode_parquet,
     resolve_fps,
 )
-from mimicanno.io_video import materialize_video, probe_video
+from mimicanno.io_video import VideoProbe, materialize_video, probe_video
 from mimicanno.labelset import default_labels_path, load_label_set
+from mimicanno.object_tracker import (
+    SAM3Runtime,
+    ground_initial_detections,
+)
+from mimicanno.object_tracker.planner import (
+    EntityPlan,
+    LocalGemmaTrackingPlanner,
+)
+from mimicanno.object_tracker.propagator import Propagator
+from mimicanno.object_tracker.signals import compute_object_signals
 from mimicanno.publish import PublishOutcome, PublishRequest, publish
 from mimicanno.rundir import canonical_name_for, is_collision
 from mimicanno.schema import (
@@ -54,6 +67,12 @@ from mimicanno.schema import (
     PipelineStatus,
     SubtaskSegment,
     TaskInfo,
+    TracksFile,
+    TracksGap,
+    TracksSample,
+    TracksStats,
+    TracksTrack,
+    TracksTrackingPlan,
 )
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS, COMPAT_BLOCK
 from mimicanno.signals import (
@@ -67,6 +86,7 @@ from mimicanno.vlm_labeler import (
     LabelerFactory,
     LocalGemmaVLMLabeler,
     RunOutcome,
+    apply_phase3_labeling,
     label_run,
 )
 from mimicanno.writers import (
@@ -178,6 +198,9 @@ _WEIGHT_KEY_TO_SOURCE: dict[str, str] = {
     "velocity": "eef_velocity_valley",
     "acceleration": "eef_acceleration_peak",
     "action": "action_norm_change",
+    # Phase 3 long keys — identity mapping (already the detector source name).
+    "gripper_object_distance_threshold_crossing": "gripper_object_distance_threshold_crossing",
+    "object_motion_start_stop": "object_motion_start_stop",
 }
 
 
@@ -221,6 +244,846 @@ def _select_adapter(name: str, config_path: Path | None) -> RobotAdapter:
         f"unknown robot adapter {name!r}; expected aloha|koch|so100|generic",
         {"adapter_name": name},
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 helpers
+# ---------------------------------------------------------------------------
+
+def _extract_initial_frame(video_path: Path, n_frames: int) -> np.ndarray:
+    """Extract frame 0 (with @5% retry) as HxWx3 RGB uint8.
+
+    Per spec §11: try frame 0 first; if read fails, fall back to
+    ``int(0.05 * n_frames)``. Final failure raises MimicAnnoError.
+    """
+    import imageio_ffmpeg as _iio  # type: ignore[import-untyped]
+
+    def _read_frame(target_index: int) -> np.ndarray:
+        reader = _iio.read_frames(str(video_path))
+        meta = next(reader)
+        w, h = meta["size"]
+        for i, frame_bytes in enumerate(reader):
+            if i == target_index:
+                return np.frombuffer(frame_bytes, dtype=np.uint8).reshape(h, w, 3)
+        raise MimicAnnoError(
+            "video.read_failed",
+            f"no frame at index {target_index}",
+            {"video_path": str(video_path), "target_frame": target_index},
+        )
+
+    try:
+        return _read_frame(0)
+    except Exception:
+        target = int(0.05 * n_frames)
+        try:
+            return _read_frame(target)
+        except Exception as e2:
+            raise MimicAnnoError(
+                "video.initial_frame_failed",
+                f"failed to read frame 0 + 5% fallback: {e2!r}",
+                {"video_path": str(video_path)},
+            ) from e2
+
+
+def _compute_image_aspect_ratio(probe: VideoProbe, tracking_config: TrackingConfig) -> float:
+    """Image aspect ratio (width/height); falls back to tracking_config default
+    when probe height is 0 or width is 0."""
+    if probe.height <= 0 or probe.width <= 0:
+        return tracking_config.image_aspect_ratio_default
+    return float(probe.width) / float(probe.height)
+
+
+def _degrade_to_phase3_objectless(
+    req: AnnotateRequest,
+    config: AnnotationConfig,
+    vlm: Any,  # LocalGemmaVLMLabeler in prod; FixtureVLMLabeler in tests
+    *,
+    fps: float,
+    duration_sec: float,
+    n_frames: int,
+    episode_id: str,
+    config_hash: str,
+    input_hash: str,
+    run_hash: str,
+    label_set: Any,
+    probe: VideoProbe,
+    loaded: Any,
+    adapter: RobotAdapter,
+    adapter_config_sha: str | None,
+    timestamps: np.ndarray,
+    gripper_s: np.ndarray,
+    vel_s: np.ndarray | None,
+    accel_s: np.ndarray | None,
+    action_s: np.ndarray | None,
+    has_eef: bool,
+    disabled_sources_phase1: list[str],
+    degrade_reason: Literal[
+        "gemma_no_object_prompts", "sam3_no_initial_detection", "sam3_init_failed",
+    ],
+    underlying_log: str | None = None,
+) -> AnnotateResult:
+    """Phase 3 whole-run degrade — produces a Phase 3 objectless run (spec §7.2).
+
+    Uses Phase3BoundaryDetector with Phase 3 weights + empty object_signals;
+    labels via apply_phase2_labeling (object_state_summary=None); does NOT
+    write tracks.json; sets pipeline_status.object_state_available=False.
+    """
+    from mimicanno.object_tracker.signals import ObjectSignals
+
+    # 1) Emit underlying_log to stderr WARN (NEVER to notes — PII rule §7.2/§8).
+    if underlying_log is not None:
+        _sys.stderr.write(
+            f"WARN: phase3 degrade {degrade_reason}: {underlying_log}\n"
+        )
+        _sys.stderr.flush()
+
+    # 2) Phase 1 disabled sources + Phase 3 always-disabled object sources.
+    disabled_sources: list[str] = [
+        *disabled_sources_phase1,
+        "gripper_object_distance_threshold_crossing",
+        "object_motion_start_stop",
+    ]
+
+    # 3) Build empty ObjectSignals (NaN-filled arrays, no tracks).
+    empty_signals = ObjectSignals(
+        gripper_object_distance={},
+        object_speed={},
+        object_center={},
+        primary_object_track_id=None,
+        primary_target_track_id=None,
+        gripper_tool_track_id=None,
+    )
+
+    # 4) Phase3BoundaryDetector with Phase 3 weights.
+    bcfg = config.boundary
+    tracking_cfg = config.tracking
+    assert tracking_cfg is not None  # guaranteed by annotate_episode_phase3 pre-check
+
+    detector = Phase3BoundaryDetector(
+        fps=fps,
+        weights=bcfg.weights,
+        score_threshold=bcfg.score_threshold,
+        merge_window_sec=bcfg.merge_window_sec,
+        disabled_sources=disabled_sources,
+        tracking_config=tracking_cfg,
+    )
+    eef_vel_for_detector = vel_s if vel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    accel_for_detector = accel_s if accel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    action_for_detector = action_s if action_s is not None else np.zeros(n_frames, dtype=np.float64)
+    candidates, final_disabled = detector.detect(
+        gripper=gripper_s,
+        eef_vel=eef_vel_for_detector,
+        eef_accel=accel_for_detector,
+        action_norm=action_for_detector,
+        object_signals=empty_signals,
+        tracks=[],
+    )
+
+    # 5) Bracket into segments.
+    segments = bracket_phase1_segments(
+        episode_id=episode_id,
+        candidates=candidates,
+        fps=fps,
+        duration_sec=duration_sec,
+    )
+
+    # 6) Label via apply_phase2_labeling (object_state_summary=None → Phase 2 prompt).
+    from mimicanno.clip_features import ClipFeatureExtractor
+
+    vlm_cfg = config.vlm
+    assert vlm_cfg is not None  # guaranteed by annotate_episode_phase3 pre-check
+
+    extractor = ClipFeatureExtractor(
+        video_path=req.video,
+        fps=fps,
+        clip_features_config=vlm_cfg.clip_features,
+        image_size_px=vlm_cfg.image_size_px,
+    )
+    episode_meta = {
+        "task_text": req.task,
+        "allowed_labels": list(label_set.label_ids()),
+        "label_version": label_set.schema_version,
+        "robot_type": req.robot_adapter_name,
+        "fps": fps,
+        "episode_duration_sec": duration_sec,
+    }
+
+    def _labeler_factory(c: VLMConfig) -> Any:
+        return vlm
+
+    gripper_raw = adapter.gripper_signal(loaded.table)
+    eef_vel_raw = adapter.eef_velocity(loaded.table)
+
+    segments, _outcome, _notes = apply_phase2_labeling(
+        segments=segments,
+        extractor=extractor,
+        gripper=gripper_raw,
+        eef_velocity=eef_vel_raw,
+        episode_meta=episode_meta,
+        vlm_config=vlm_cfg,
+        labeler_factory_override=_labeler_factory,
+    )
+
+    # 7) Stamp every segment with Phase 3 degrade fields.
+    for seg in segments:
+        seg.label_source = "vlm_robot_state_only"
+        seg.object_state_unavailable = True
+        seg.object_track_ids = []
+
+    # 8) Build pipeline_status.
+    pipeline_status = PipelineStatus(
+        object_state_available=False,
+        degraded_from_phase=3,
+        degrade_reason=degrade_reason,
+        object_state_segment_coverage=0.0,
+    )
+
+    # 9) annotation.notes — exact canonical message, NO underlying_log (PII rule §7.2/§8).
+    notes = f"phase3: degraded to object-state-unavailable path (degrade_reason={degrade_reason})."
+
+    # 10) Build manifest payloads.
+    generated_at = dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
+
+    pipeline_params: dict[str, Any] = {
+        "boundary": {
+            "weights": bcfg.weights.to_dict(target_phase=config.target_phase),
+            "thresholds": dict(bcfg.thresholds),
+            "merge_window_sec": bcfg.merge_window_sec,
+            "score_threshold": bcfg.score_threshold,
+            "disabled_sources": final_disabled,
+        },
+        "vlm": vlm_cfg.to_dict(),
+        "tracking": tracking_cfg.to_dict(),
+    }
+
+    signal_channels: list[SignalChannel] = [
+        downsample_for_viewer(
+            SignalChannel(name="gripper", unit="normalized", values=gripper_s, dt_sec=1.0 / fps),
+            target_hz=30.0,
+        ),
+    ]
+    if vel_s is not None:
+        signal_channels.append(
+            downsample_for_viewer(
+                SignalChannel(name="eef_velocity", unit="m/s", values=vel_s, dt_sec=1.0 / fps),
+                target_hz=30.0,
+            )
+        )
+
+    assert vlm_cfg.resolved_checkpoint is not None, (
+        "pre-flight must populate vlm.resolved_checkpoint before _degrade_to_phase3_objectless"
+    )
+    model_versions: dict[str, str | None] = {
+        "vlm": f"{vlm_cfg.model_id}:{vlm_cfg.resolved_checkpoint}",
+        "sam3": tracking_cfg.sam3_model_id,
+        "sam3_checkpoint": config.model_config.sam3_checkpoint,
+    }
+
+    task_info = TaskInfo(text=req.task, version=None)
+    generator = GeneratorInfo(
+        name="mimicanno",
+        cli_version=__version__,
+        pipeline_phase=config.target_phase,
+    )
+
+    manifest = Manifest(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["manifest"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_params=pipeline_params,
+        inputs={
+            "video": InputRef(path=str(req.video), sha256=probe.sha256),
+            "parquet": InputRef(path=str(req.parquet), sha256=loaded.sha256),
+        },
+        time_base="video_pts_seconds",
+        fps=fps,
+        duration_sec=duration_sec,
+        pipeline_status=pipeline_status,
+        compat=COMPAT_BLOCK,
+        # spec §3.4: tracks artifact MUST NOT be present on degrade path
+        artifacts=[
+            Artifact("video", "video.mp4", "video/mp4"),
+            Artifact("annotation", "annotation.json", "application/json"),
+            Artifact("boundaries", "boundaries.json", "application/json"),
+            Artifact("signals", "signals.json", "application/json"),
+        ],
+    )
+
+    annotation = AnnotationResult(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["annotation"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_phase=config.target_phase,
+        pipeline_status=pipeline_status,
+        segments=segments,
+        boundaries_url="boundaries.json",
+        signals_url="signals.json",
+        notes=notes,
+    )
+
+    # 11) Publish — NO tracks.json written.
+    def _write_artifacts(tmp_dir: Path) -> None:
+        materialize_video(req.video, tmp_dir, link=req.link_video)
+        write_signals_json(
+            tmp_dir / "signals.json",
+            episode_id=episode_id,
+            duration_sec=duration_sec,
+            channels=signal_channels,
+        )
+        write_boundaries_json(
+            tmp_dir / "boundaries.json",
+            episode_id=episode_id,
+            candidates=candidates,
+        )
+        write_annotation_json(tmp_dir / "annotation.json", annotation)
+        write_manifest_json(tmp_dir / "manifest.json", manifest)
+        # tracks.json intentionally NOT written (spec §3.4 / §7.2)
+
+    publish_req = PublishRequest(
+        runs_root=req.runs_root,
+        episode_id=episode_id,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        task_text=req.task,
+        pipeline_phase=config.target_phase,
+        generated_at=generated_at,
+        force=req.force,
+    )
+    outcome = publish(publish_req, write_artifacts=_write_artifacts)
+
+    name = canonical_name_for(episode_id, run_hash=run_hash)
+    if is_collision(req.runs_root, canonical_name=name, expected_run_hash=run_hash):
+        name = canonical_name_for(
+            episode_id,
+            run_hash=run_hash,
+            length=RUN_HASH_FALLBACK_PREFIX_LEN,
+        )
+    return AnnotateResult(run_dir=req.runs_root / name, outcome=outcome)
+
+
+def _build_tracks_file(
+    *,
+    episode_id: str,
+    fps: float,
+    n_frames: int,
+    image_width: int,
+    image_height: int,
+    stride: int,
+    task_text: str,
+    entities: EntityPlan,
+    tracks: list[Any],
+) -> TracksFile:
+    """Convert a list of Track objects to the TracksFile wire format."""
+    from mimicanno.object_tracker.propagator import Track
+
+    tracks_wire: list[TracksTrack] = []
+    for t in tracks:
+        assert isinstance(t, Track)
+        samples_wire = [
+            TracksSample(
+                frame=s.frame,
+                time_sec=s.time_sec,
+                bbox=[s.bbox.x, s.bbox.y, s.bbox.w, s.bbox.h],
+                score=s.score,
+            )
+            for s in t.samples
+        ]
+        gaps_wire = [
+            TracksGap(
+                from_frame=g.from_frame,
+                to_frame=g.to_frame,
+                reason=g.reason,
+            )
+            for g in t.gap_events
+        ]
+        tracks_wire.append(
+            TracksTrack(
+                track_id=t.track_id,
+                role=t.role,
+                prompt=t.prompt,
+                slug=t.slug,
+                index=t.index,
+                primary=t.primary,
+                samples=samples_wire,
+                gap_events=gaps_wire,
+            )
+        )
+
+    n_samples_total = sum(len(tw.samples) for tw in tracks_wire)
+    all_scores = [s.score for tw in tracks_wire for s in tw.samples]
+    mean_score = float(np.mean(all_scores)) if all_scores else float("nan")
+
+    # failed_prompts: all (role, prompt) pairs with no grounded detection
+    # (We don't have a reference to the TrackingPlan here, so we infer from
+    # entity prompts vs. tracks produced.)
+    grounded_prompts: set[tuple[str, str]] = {(t.role, t.prompt) for t in tracks}
+    all_prompts = entities.all_prompts_with_role()
+    failed: list[tuple[str, str]] = [
+        (role, prompt) for role, prompt in all_prompts
+        if (role, prompt) not in grounded_prompts
+    ]
+
+    return TracksFile(
+        schema_version="0.1.0",
+        episode_id=episode_id,
+        fps=fps,
+        n_frames=n_frames,
+        image_width=image_width,
+        image_height=image_height,
+        track_stride_frames=stride,
+        tracking_plan=TracksTrackingPlan(
+            task_text=task_text,
+            object_prompts=list(entities.object_prompts),
+            target_prompts=list(entities.target_prompts),
+            tool_prompts=list(entities.tool_prompts),
+            failed_prompts=failed,
+        ),
+        tracks=tracks_wire,
+        stats=TracksStats(
+            n_tracks=len(tracks_wire),
+            n_samples_total=n_samples_total,
+            mean_track_score=mean_score,
+            tracking_wall_time_sec=0.0,
+        ),
+    )
+
+
+def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
+    """Phase 3 orchestrator (spec §7.1).
+
+    Stage 1a: robot signals (Phase 1 unchanged).
+    Stage 1b: tracking — Step A entity extraction → SAM3 load → Step B ground
+              → Step C propagate, with degrade gates and finally: cleanup.
+    Stage 2:  Phase3BoundaryDetector (6 sources).
+    Stage 3:  apply_phase3_labeling.
+    """
+    # Phase 3 requires VLM config + tracking config.
+    if req.config.vlm is None:
+        raise MimicAnnoError(
+            "vlm.model_required",
+            "target_phase >= 3 requires a vlm_config; got None.",
+            {"target_phase": req.config.target_phase},
+        )
+    if req.config.tracking is None:
+        raise MimicAnnoError(
+            "tracking.config_required",
+            "target_phase >= 3 requires a tracking_config; got None.",
+            {"target_phase": req.config.target_phase},
+        )
+    tracking_cfg = req.config.tracking
+
+    # 1) Resolve label set.
+    labels_path = req.labels_path or Path(default_labels_path("manipulation"))
+    label_set = load_label_set(labels_path)
+
+    # 2) Adapter selection + adapter-config sha for input_hash.
+    adapter = _select_adapter(req.robot_adapter_name, req.robot_adapter_config_path)
+    adapter_config_sha: str | None = None
+    if req.robot_adapter_config_path is not None:
+        from mimicanno.hashing import sha256_file
+
+        adapter_config_sha = "sha256:" + sha256_file(req.robot_adapter_config_path)
+
+    # 3) Probe video and load parquet.
+    probe = probe_video(req.video)
+    try:
+        loaded = load_episode_parquet(req.parquet)
+    except ParquetLoadError as e:
+        raise MimicAnnoError("parquet.load_failed", str(e), {"path": str(req.parquet)}) from e
+
+    inputs = InputBundle(
+        video_sha256=probe.sha256,
+        parquet_sha256=loaded.sha256,
+        task_text=req.task,
+        robot_adapter_name=req.robot_adapter_name,
+        robot_adapter_config_sha256=adapter_config_sha,
+        labels_yaml_sha256=label_set.sha256,
+    )
+    config_hash = compute_config_hash(req.config)
+    input_hash = compute_input_hash(inputs)
+    run_hash = compose_run_hash(config_hash, input_hash)
+
+    # 4) FPS resolution.
+    timestamps = np.asarray(loaded.table.column("timestamp").to_pylist(), dtype=np.float64)
+    try:
+        fps_from_ts = resolve_fps(timestamps)
+    except ParquetLoadError as e:
+        raise MimicAnnoError("fps.unresolvable", str(e), {}) from e
+    fps = float(probe.fps) if probe.fps > 0 else fps_from_ts
+    duration_sec = float(probe.duration_sec)
+    episode_id = req.parquet.stem
+
+    # n_frames: number of rows in parquet is the ground truth
+    n_frames = len(timestamps)
+
+    # 5) Extract robot signals.
+    gripper = adapter.gripper_signal(loaded.table)
+    eef_vel = adapter.eef_velocity(loaded.table)
+    has_eef = eef_vel is not None
+
+    action_norm: np.ndarray | None
+    if "action" in loaded.table.column_names:
+        action = np.asarray(loaded.table.column("action").to_pylist(), dtype=np.float64)
+        action_norm = np.linalg.norm(action, axis=1)
+        if (action_norm == 0).mean() >= 0.95:
+            action_norm = None
+    else:
+        action_norm = None
+
+    # 6) Smooth.
+    sigma = smoothing_sigma_for_fps(fps)
+    gripper_s = gaussian_smooth_1d(gripper, sigma=sigma)
+    if eef_vel is not None:
+        vel_s: np.ndarray | None = gaussian_smooth_1d(eef_vel, sigma=sigma)
+        accel_s: np.ndarray | None = gaussian_smooth_1d(
+            np.abs(np.diff(eef_vel, prepend=eef_vel[0])) * fps,
+            sigma=sigma,
+        )
+    else:
+        vel_s = None
+        accel_s = None
+    action_s = gaussian_smooth_1d(action_norm, sigma=sigma) if action_norm is not None else None
+
+    # Phase 1 disabled sources (computed before the degrade gates so they
+    # can be forwarded to _degrade_to_phase3_objectless when needed).
+    disabled_phase1: list[str] = []
+    if not has_eef:
+        disabled_phase1.extend(["eef_velocity_valley", "eef_acceleration_peak"])
+    if action_s is None:
+        disabled_phase1.append("action_norm_change")
+
+    # Stage 1b: tracking — Step A → SAM3 load → Step B → Step C
+
+    # Extract initial frame (frame 0 with @5% retry)
+    initial_frame = _extract_initial_frame(req.video, n_frames)
+
+    # Load shared Gemma instance
+    vlm_cfg = req.config.vlm
+    vlm = LocalGemmaVLMLabeler(vlm_cfg)
+    planner = LocalGemmaTrackingPlanner(vlm.shared_handle())
+
+    # Step A — entity extraction
+    entities = planner.extract_entities(
+        task_text=req.task,
+        initial_frame=initial_frame,
+        allowed_labels=label_set,
+        attempt_max=tracking_cfg.planner_max_retries,
+    )
+    if not entities.object_prompts:
+        return _degrade_to_phase3_objectless(
+            req, req.config, vlm,
+            fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+            episode_id=episode_id, config_hash=config_hash,
+            input_hash=input_hash, run_hash=run_hash,
+            label_set=label_set, probe=probe, loaded=loaded,
+            adapter=adapter, adapter_config_sha=adapter_config_sha,
+            timestamps=timestamps, gripper_s=gripper_s,
+            vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+            has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+            degrade_reason="gemma_no_object_prompts",
+        )
+
+    # Step B + C with try/finally for SAM3.close
+    stride = tracking_cfg.effective_stride(fps)
+    image_aspect_ratio = _compute_image_aspect_ratio(probe, tracking_cfg)
+
+    # CLI Task 18 guarantees sam3_checkpoint is set when target_phase >= 3.
+    assert tracking_cfg.sam3_checkpoint is not None, (
+        "tracking.sam3_checkpoint must be set by CLI for target_phase=3"
+    )
+    try:
+        sam3_runtime = SAM3Runtime.load(checkpoint=tracking_cfg.sam3_checkpoint)
+    except SAM3InitFailed as e:
+        return _degrade_to_phase3_objectless(
+            req, req.config, vlm,
+            fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+            episode_id=episode_id, config_hash=config_hash,
+            input_hash=input_hash, run_hash=run_hash,
+            label_set=label_set, probe=probe, loaded=loaded,
+            adapter=adapter, adapter_config_sha=adapter_config_sha,
+            timestamps=timestamps, gripper_s=gripper_s,
+            vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+            has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+            degrade_reason="sam3_init_failed",
+            underlying_log=repr(e),
+        )
+
+    try:
+        plan = ground_initial_detections(
+            runtime=sam3_runtime,
+            initial_frame=initial_frame,
+            entities=entities,
+        )
+        # Check that at least one "object" role was grounded
+        object_grounded = [
+            (role, prompt)
+            for (role, prompt) in plan.initial_detections
+            if role == "object"
+        ]
+        if not object_grounded:
+            return _degrade_to_phase3_objectless(
+                req, req.config, vlm,
+                fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+                episode_id=episode_id, config_hash=config_hash,
+                input_hash=input_hash, run_hash=run_hash,
+                label_set=label_set, probe=probe, loaded=loaded,
+                adapter=adapter, adapter_config_sha=adapter_config_sha,
+                timestamps=timestamps, gripper_s=gripper_s,
+                vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+                has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+                degrade_reason="sam3_no_initial_detection",
+            )
+        tracks = Propagator().run(
+            runtime=sam3_runtime,
+            plan=plan,
+            video_path=req.video,
+            fps=fps,
+            n_frames=n_frames,
+            stride=stride,
+            config=tracking_cfg,
+        )
+    finally:
+        sam3_runtime.close()  # free GPU before Stage 3
+
+    object_signals = compute_object_signals(
+        tracks,
+        fps=fps,
+        n_frames=n_frames,
+        image_aspect_ratio=image_aspect_ratio,
+    )
+
+    # Stage 2: Phase3BoundaryDetector (6 sources)
+    bcfg = req.config.boundary
+    detector = Phase3BoundaryDetector(
+        fps=fps,
+        weights=bcfg.weights,
+        score_threshold=bcfg.score_threshold,
+        merge_window_sec=bcfg.merge_window_sec,
+        disabled_sources=list(disabled_phase1),
+        tracking_config=tracking_cfg,
+    )
+    # Build smoothed signal arrays needed by the detector
+    eef_vel_for_detector = vel_s if vel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    accel_for_detector = accel_s if accel_s is not None else np.zeros(n_frames, dtype=np.float64)
+    action_for_detector = action_s if action_s is not None else np.zeros(n_frames, dtype=np.float64)
+    candidates, final_disabled = detector.detect(
+        gripper=gripper_s,
+        eef_vel=eef_vel_for_detector,
+        eef_accel=accel_for_detector,
+        action_norm=action_for_detector,
+        object_signals=object_signals,
+        tracks=tracks,
+    )
+
+    segments = bracket_phase1_segments(
+        episode_id=episode_id,
+        candidates=candidates,
+        fps=fps,
+        duration_sec=duration_sec,
+    )
+
+    # Stage 3: Phase 3 labeling
+    from mimicanno.clip_features import ClipFeatureExtractor
+
+    extractor = ClipFeatureExtractor(
+        video_path=req.video,
+        fps=fps,
+        clip_features_config=vlm_cfg.clip_features,
+        image_size_px=vlm_cfg.image_size_px,
+    )
+    episode_meta = {
+        "task_text": req.task,
+        "allowed_labels": list(label_set.label_ids()),
+        "label_version": label_set.schema_version,
+        "robot_type": req.robot_adapter_name,
+        "fps": fps,
+        "episode_duration_sec": duration_sec,
+    }
+    def labeler_factory(c: VLMConfig) -> LocalGemmaVLMLabeler:  # reuse already-loaded model
+        return vlm
+
+    segments, _attempts, phase3_outcome, object_state_coverage = apply_phase3_labeling(
+        segments=segments,
+        tracks=tracks,
+        object_signals=object_signals,
+        extractor=extractor,
+        gripper=gripper,
+        eef_velocity=eef_vel,
+        episode_meta=episode_meta,
+        config=vlm_cfg,
+        tracking_config=tracking_cfg,
+        labeler_factory=labeler_factory,
+    )
+
+    # Build tracks.json artifact
+    tracks_file = _build_tracks_file(
+        episode_id=episode_id,
+        fps=fps,
+        n_frames=n_frames,
+        image_width=probe.width,
+        image_height=probe.height,
+        stride=stride,
+        task_text=req.task,
+        entities=entities,
+        tracks=tracks,
+    )
+
+    # 7) Build pipeline_params for manifest.
+    pipeline_params: dict[str, Any] = {
+        "boundary": {
+            "weights": bcfg.weights.to_dict(target_phase=req.config.target_phase),
+            "thresholds": dict(bcfg.thresholds),
+            "merge_window_sec": bcfg.merge_window_sec,
+            "score_threshold": bcfg.score_threshold,
+            "disabled_sources": final_disabled,
+        },
+        "vlm": vlm_cfg.to_dict(),
+        "tracking": tracking_cfg.to_dict(),
+    }
+
+    # 8) Build per-channel signals downsampled for viewer.
+    signal_channels: list[SignalChannel] = [
+        downsample_for_viewer(
+            SignalChannel(name="gripper", unit="normalized", values=gripper_s, dt_sec=1.0 / fps),
+            target_hz=30.0,
+        ),
+    ]
+    if vel_s is not None:
+        signal_channels.append(
+            downsample_for_viewer(
+                SignalChannel(name="eef_velocity", unit="m/s", values=vel_s, dt_sec=1.0 / fps),
+                target_hz=30.0,
+            )
+        )
+
+    # 9) Build dataclass payloads.
+    generated_at = dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
+    _degraded = phase3_outcome.kind == "degraded"
+    pipeline_status = PipelineStatus(
+        object_state_available=True,
+        degraded_from_phase=(req.config.target_phase if _degraded else None),
+        degrade_reason=phase3_outcome.degrade_reason if _degraded else None,
+        object_state_segment_coverage=object_state_coverage,
+    )
+    task_info = TaskInfo(text=req.task, version=None)
+    generator = GeneratorInfo(
+        name="mimicanno",
+        cli_version=__version__,
+        pipeline_phase=req.config.target_phase,
+    )
+
+    assert vlm_cfg.resolved_checkpoint is not None, (
+        "pre-flight (§2.5) must populate vlm.resolved_checkpoint before annotate_episode_phase3"
+    )
+    # Spec §1.3 line 188 + §7.1 line 968: `sam3` is the model id (informational
+    # name like "facebook/sam3"); `sam3_checkpoint` is the sha256 (additive,
+    # for downstream provenance). The composite "vlm" value matches Phase 2's
+    # `annotate_episode` convention (see line 994+ below) and is preserved.
+    model_versions: dict[str, str | None] = {
+        "vlm": f"{vlm_cfg.model_id}:{vlm_cfg.resolved_checkpoint}",
+        "sam3": tracking_cfg.sam3_model_id,
+        "sam3_checkpoint": req.config.model_config.sam3_checkpoint,
+    }
+
+    manifest = Manifest(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["manifest"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_params=pipeline_params,
+        inputs={
+            "video": InputRef(path=str(req.video), sha256=probe.sha256),
+            "parquet": InputRef(path=str(req.parquet), sha256=loaded.sha256),
+        },
+        time_base="video_pts_seconds",
+        fps=fps,
+        duration_sec=duration_sec,
+        pipeline_status=pipeline_status,
+        compat=COMPAT_BLOCK,
+        artifacts=[
+            Artifact("video", "video.mp4", "video/mp4"),
+            Artifact("annotation", "annotation.json", "application/json"),
+            Artifact("boundaries", "boundaries.json", "application/json"),
+            Artifact("signals", "signals.json", "application/json"),
+            Artifact("tracks", "tracks.json", "application/json"),
+        ],
+    )
+
+    annotation = AnnotationResult(
+        schema_version=ARTIFACT_SCHEMA_VERSIONS["annotation"],
+        episode_id=episode_id,
+        task=task_info,
+        generated_at=generated_at,
+        generator=generator,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        model_versions=model_versions,
+        pipeline_phase=req.config.target_phase,
+        pipeline_status=pipeline_status,
+        segments=segments,
+        boundaries_url="boundaries.json",
+        signals_url="signals.json",
+        notes=None,
+    )
+
+    # 10) Publish.
+    def _write_artifacts(tmp_dir: Path) -> None:
+        materialize_video(req.video, tmp_dir, link=req.link_video)
+        write_signals_json(
+            tmp_dir / "signals.json",
+            episode_id=episode_id,
+            duration_sec=duration_sec,
+            channels=signal_channels,
+        )
+        write_boundaries_json(
+            tmp_dir / "boundaries.json",
+            episode_id=episode_id,
+            candidates=candidates,
+        )
+        write_annotation_json(tmp_dir / "annotation.json", annotation)
+        write_manifest_json(tmp_dir / "manifest.json", manifest)
+        write_tracks_json(tmp_dir / "tracks.json", tracks_file)
+
+    publish_req = PublishRequest(
+        runs_root=req.runs_root,
+        episode_id=episode_id,
+        config_hash=config_hash,
+        input_hash=input_hash,
+        run_hash=run_hash,
+        task_text=req.task,
+        pipeline_phase=req.config.target_phase,
+        generated_at=generated_at,
+        force=req.force,
+    )
+    outcome = publish(publish_req, write_artifacts=_write_artifacts)
+
+    name = canonical_name_for(episode_id, run_hash=run_hash)
+    if is_collision(req.runs_root, canonical_name=name, expected_run_hash=run_hash):
+        name = canonical_name_for(
+            episode_id,
+            run_hash=run_hash,
+            length=RUN_HASH_FALLBACK_PREFIX_LEN,
+        )
+    return AnnotateResult(run_dir=req.runs_root / name, outcome=outcome)
 
 
 def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
@@ -342,15 +1205,16 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
 
     # Translate BoundaryConfig.weights short keys to detector source names.
     # e.g. {"gripper": 0.5} → {"gripper_transition": 0.5}
-    unknown_keys = [k for k in bcfg.weights if k not in _WEIGHT_KEY_TO_SOURCE]
+    weights_dict = bcfg.weights.to_dict(target_phase=req.config.target_phase)
+    unknown_keys = [k for k in weights_dict if k not in _WEIGHT_KEY_TO_SOURCE]
     if unknown_keys:
         raise MimicAnnoError(
-            "config.unknown_weight_key",
+            "boundary_config.unknown_weight_key",
             f"BoundaryConfig.weights contains unknown key(s): {unknown_keys!r}; "
             f"expected keys: {list(_WEIGHT_KEY_TO_SOURCE)!r}",
             {"unknown_keys": unknown_keys},
         )
-    detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in bcfg.weights.items()}
+    detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in weights_dict.items()}
     candidates = integrated_candidates(
         events,
         fps=fps,
@@ -407,7 +1271,7 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
     # 10) Build pipeline_params for manifest (records what was actually used).
     pipeline_params: dict[str, Any] = {
         "boundary": {
-            "weights": dict(bcfg.weights),
+            "weights": bcfg.weights.to_dict(target_phase=req.config.target_phase),
             "thresholds": dict(bcfg.thresholds),
             "merge_window_sec": bcfg.merge_window_sec,
             "score_threshold": bcfg.score_threshold,

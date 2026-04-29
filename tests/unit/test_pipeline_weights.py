@@ -22,6 +22,7 @@ def test_annotate_episode_short_weight_keys_yield_candidates(tmp_path: Path):
     from mimicanno.config import (
         AnnotationConfig,
         BoundaryConfig,
+        BoundaryWeights,
         ModelConfig,
     )
     from mimicanno.pipeline import AnnotateRequest, annotate_episode
@@ -46,7 +47,7 @@ def test_annotate_episode_short_weight_keys_yield_candidates(tmp_path: Path):
         config=AnnotationConfig(
             boundary=BoundaryConfig(
                 # Short-key form per spec §4.3 — this is what the CLI passes.
-                weights={"gripper": 0.5, "velocity": 0.25, "acceleration": 0.15, "action": 0.1},
+                weights=BoundaryWeights(),
                 thresholds={"gripper_delta": 0.3, "velocity_valley": 0.05},
                 merge_window_sec=0.10,
                 score_threshold=0.10,
@@ -70,40 +71,18 @@ def test_annotate_episode_short_weight_keys_yield_candidates(tmp_path: Path):
 
 
 def test_annotate_episode_unknown_weight_key_raises(tmp_path: Path):
-    """An unrecognised key in BoundaryConfig.weights must raise MimicAnnoError."""
-    from mimicanno.config import (
-        AnnotationConfig,
-        BoundaryConfig,
-        ModelConfig,
-    )
-    from mimicanno.errors import MimicAnnoError
-    from mimicanno.pipeline import AnnotateRequest, annotate_episode
-    from tests.fixtures.synthesize import synthesize_aloha_episode
+    """An unrecognised key in boundary YAML weights must raise MimicAnnoError.
 
-    inputs = synthesize_aloha_episode(tmp_path / "data", n_frames=60, fps=30.0)
-    req = AnnotateRequest(
-        video=inputs.video,
-        parquet=inputs.parquet,
-        task="pick red block",
-        robot_adapter_name="aloha",
-        robot_adapter_config_path=None,
-        labels_path=None,
-        runs_root=tmp_path / "runs",
-        link_video=False,
-        force=False,
-        config=AnnotationConfig(
-            boundary=BoundaryConfig(
-                weights={"gripper": 0.5, "TYPO_KEY": 0.25},
-                thresholds={},
-                merge_window_sec=0.10,
-                score_threshold=0.10,
-                disabled_sources=[],
-            ),
-            target_phase=1,
-            model_config=ModelConfig(None, None, None, None),
-        ),
-    )
+    BoundaryWeights is now a typed dataclass; unknown keys are caught at the
+    user-facing entry point (load_boundary_config_yaml) before construction.
+    """
+    from mimicanno.config import load_boundary_config_yaml
+    from mimicanno.errors import MimicAnnoError
+
+    cfg_yaml = tmp_path / "boundary.yaml"
+    cfg_yaml.write_text("weights:\n  gripper: 0.5\n  TYPO_KEY: 0.25\n")
+
     with pytest.raises(MimicAnnoError) as exc_info:
-        annotate_episode(req)
-    assert exc_info.value.code == "config.unknown_weight_key"
+        load_boundary_config_yaml(cfg_yaml)
+    assert exc_info.value.code == "boundary_config.unknown_weight_key"
     assert "TYPO_KEY" in exc_info.value.message

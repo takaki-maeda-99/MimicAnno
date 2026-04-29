@@ -3,6 +3,7 @@
 from mimicanno.config import (
     AnnotationConfig,
     BoundaryConfig,
+    BoundaryWeights,
     InputBundle,
     ModelConfig,
     compose_run_hash,
@@ -14,7 +15,7 @@ from mimicanno.config import (
 def _make_config(score_threshold: float = 0.30) -> AnnotationConfig:
     return AnnotationConfig(
         boundary=BoundaryConfig(
-            weights={"gripper": 0.5, "velocity": 0.25, "acceleration": 0.15, "action": 0.1},
+            weights=BoundaryWeights(),
             thresholds={"gripper_delta": 0.3, "velocity_valley": 0.05},
             merge_window_sec=0.10,
             score_threshold=score_threshold,

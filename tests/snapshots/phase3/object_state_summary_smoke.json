@@ -1,0 +1,20 @@
+{
+  "gripper_object_distance_at_end": 0.41,
+  "gripper_object_distance_at_start": 0.42,
+  "gripper_object_distance_min": 0.03,
+  "object_prompts": [
+    "red block"
+  ],
+  "primary_object_at_target_at_end": true,
+  "primary_object_displacement": 0.18,
+  "primary_object_max_speed": 0.32,
+  "target_prompts": [
+    "bin A"
+  ],
+  "tool_prompts": [
+    "gripper"
+  ],
+  "visible_track_ids": [
+    "obj:red_block:0"
+  ]
+}

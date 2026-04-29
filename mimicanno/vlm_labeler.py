@@ -13,15 +13,15 @@ import json
 import math
 import re
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from contextlib import AbstractContextManager
-from typing import Any, Literal, Protocol, TypedDict, get_args
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
 
 import numpy as np
 
 from mimicanno.config import VLMConfig
-from mimicanno.schema import SubtaskSegment
+from mimicanno.schema import ObjectStateSummary, SubtaskSegment
 
 # --- Reject / runtime-fault reason enums (kept as Literal for type-checkers,
 #     and re-exported as concrete tuples for runtime exhaustiveness checks).
@@ -93,6 +93,7 @@ class VLMRequest(TypedDict):
     keyframes: list[np.ndarray]
     keyframe_offsets_sec: list[float]
     robot_state_summary: dict[str, Any]   # see clip_features.RobotStateSummary
+    object_state_summary: NotRequired[ObjectStateSummary | None]  # Phase 3; spec §5.4
 
 
 @dataclass(slots=True)
@@ -106,6 +107,7 @@ class LabelAttempt:
         phase="unknown", verb=None, object=None, target=None,
         vlm_confidence=0.0, evidence=None,
     ))
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -438,10 +440,8 @@ def _hf_load_model_and_processor(
 ) -> tuple[Any, Any]:
     """Load the HF model + processor at the pre-flight-resolved revision.
     Isolated for monkeypatching in unit tests."""
-    import torch  # type: ignore[import-not-found]
-    from transformers import (  # type: ignore[import-not-found]
-        AutoModelForVision2Seq, AutoProcessor,
-    )
+    import torch
+    from transformers import AutoModelForVision2Seq, AutoProcessor
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                    "float32": torch.float32}[dtype]
     model = AutoModelForVision2Seq.from_pretrained(
@@ -449,6 +449,20 @@ def _hf_load_model_and_processor(
     ).to(device).eval()
     processor = AutoProcessor.from_pretrained(model_id, revision=revision)
     return model, processor
+
+
+@dataclass(frozen=True)
+class GemmaHandle:
+    """Thin reference to a loaded Gemma model + processor.
+
+    Returned by ``LocalGemmaVLMLabeler.shared_handle()``. All three attributes
+    are the SAME Python objects as inside the originating labeler — no copies.
+    Callers can verify identity with ``id(handle.model) == id(labeler._model)``.
+    """
+
+    model: Any
+    processor: Any
+    config: VLMConfig
 
 
 class LocalGemmaVLMLabeler:
@@ -479,6 +493,19 @@ class LocalGemmaVLMLabeler:
         return ModelIdentity(
             vlm_model=self._config.model_id,
             vlm_checkpoint=self._config.resolved_checkpoint or "",
+        )
+
+    def shared_handle(self) -> GemmaHandle:
+        """Return a GemmaHandle exposing the same model/processor/config objects.
+
+        The returned handle holds references (not copies) to ``self._model``,
+        ``self._processor``, and ``self._config``. Identity is preserved:
+        ``id(handle.model) == id(self._model)``.
+        """
+        return GemmaHandle(
+            model=self._model,
+            processor=self._processor,
+            config=self._config,
         )
 
     def label_segment(
@@ -549,3 +576,156 @@ class LocalGemmaVLMLabeler:
             raise LabelerRuntimeError("device_unavailable") from e
         # Anything else propagates — implementation bug, NOT a runtime fault.
         raise e
+
+
+# ---------------------------------------------------------------------------
+# apply_phase3_labeling (spec §5.5, §6)
+# ---------------------------------------------------------------------------
+
+
+def _merge_response_phase3(
+    seg: SubtaskSegment,
+    resp: VLMResponse,
+    visible_track_ids: list[str],
+) -> SubtaskSegment:
+    """Merge a VLMResponse into a SubtaskSegment using Phase 3 provenance fields."""
+    seg.phase = resp["phase"]
+    seg.verb = resp["verb"]
+    seg.object = resp["object"]
+    seg.target = resp["target"]
+    seg.label_source = "vlm_with_object_state"
+    seg.vlm_confidence = resp["vlm_confidence"]
+    seg.evidence = resp["evidence"]
+    if seg.phase in ("unlabeled", "unknown"):
+        seg.overall_confidence = 0.0
+    else:
+        seg.overall_confidence = math.sqrt(
+            max(seg.boundary_confidence, 0.0) * max(seg.vlm_confidence, 0.0)
+        )
+    seg.object_state_unavailable = False
+    seg.object_track_ids = list(visible_track_ids)
+    return seg
+
+
+def apply_phase3_labeling(
+    *,
+    segments: list[SubtaskSegment],
+    tracks: list[Any],
+    object_signals: Any,
+    extractor: Any,
+    gripper: np.ndarray,
+    eef_velocity: np.ndarray | None,
+    episode_meta: dict[str, Any],
+    config: VLMConfig,
+    tracking_config: Any,
+    labeler_factory: LabelerFactory,
+) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome, float]:
+    """Phase 3 labeling orchestrator (spec §5.5, §6).
+
+    Per-segment: calls compute_object_state_summary; if None, falls back to
+    Phase 2 path for that segment only (§6). Returns a 4-tuple:
+    (labeled_segments, attempts_log, run_outcome, object_state_segment_coverage).
+
+    object_state_segment_coverage = n_segments_with_object_state / n_segments_total.
+    """
+    from mimicanno.clip_features import compute_object_state_summary
+
+    baseline = copy.deepcopy(segments)
+    working = copy.deepcopy(segments)
+    attempts: list[LabelAttempt] = []
+
+    try:
+        labeler = labeler_factory(config)
+    except Exception as e:
+        return baseline, [], RunOutcome(
+            kind="degraded", degrade_reason="vlm_init_failed",
+            underlying_error=repr(e),
+        ), 0.0
+
+    consecutive_runtime_failures = 0
+    n = len(working)
+    n_with_object_state = 0
+
+    for idx, seg in enumerate(working):
+        attempt_log = LabelAttempt(
+            segment_id=seg.segment_id, attempt_count=0, final_status="ok",
+        )
+        attempts.append(attempt_log)
+
+        # Compute per-segment object state summary (§5.2); None → fallback (§6.1)
+        object_state_summary = compute_object_state_summary(
+            tracks,
+            segment_start_frame=seg.start_frame,
+            segment_end_frame=seg.end_frame,
+            object_signals=object_signals,
+            config=tracking_config,
+        )
+
+        is_fallback = object_state_summary is None
+
+        # Build VLMRequest — include object_state_summary only for Phase 3 segments
+        request = _build_request(
+            seg, segment_index=idx + 1, segment_total=n,
+            extractor=extractor, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=config.keyframes_per_segment,
+            episode_meta=episode_meta,
+        )
+        if not is_fallback:
+            request["object_state_summary"] = object_state_summary
+        else:
+            # Explicit None → Phase 2 byte-identical prompt (§6.2 step 1)
+            request["object_state_summary"] = None
+            attempt_log.notes.append("phase3_per_segment_fallback")
+
+        last_reject: RejectReason | None = None
+        success = False
+        for attempt in range(1, config.max_retries + 1):
+            attempt_log.attempt_count = attempt
+            try:
+                resp = labeler.label_segment(
+                    request, attempt=attempt,
+                    last_reject_reason=last_reject,
+                )
+                consecutive_runtime_failures = 0
+                if is_fallback:
+                    _merge_response(seg, resp)
+                else:
+                    assert object_state_summary is not None  # narrowing
+                    _merge_response_phase3(seg, resp, object_state_summary.visible_track_ids)
+                attempt_log.final_status = "ok"
+                attempt_log.response = resp
+                success = True
+                break
+            except LabelerError as e:
+                attempt_log.reject_reasons.append(e.reject_reason)
+                last_reject = e.reject_reason
+                continue
+            except LabelerRuntimeError as e:
+                attempt_log.runtime_errors.append(e.reason)
+                if (idx == 0 and attempt == 1
+                        and e.reason in ("model_unreachable", "device_unavailable")):
+                    return baseline, attempts, RunOutcome(
+                        kind="degraded", degrade_reason="vlm_unreachable",
+                        underlying_error=repr(e),
+                    ), 0.0
+                consecutive_runtime_failures += 1
+                if consecutive_runtime_failures >= config.runtime_failure_threshold:
+                    return baseline, attempts, RunOutcome(
+                        kind="degraded", degrade_reason="vlm_runtime_failed",
+                        underlying_error=repr(e),
+                    ), 0.0
+                continue
+        if not success:
+            fallback_resp = VLMResponse(
+                phase="unknown", verb=None, object=None, target=None,
+                vlm_confidence=0.0, evidence=None,
+            )
+            _merge_response(seg, fallback_resp)
+            attempt_log.final_status = "unknown_fallback"
+            attempt_log.response = fallback_resp
+        elif not is_fallback:
+            n_with_object_state += 1
+
+    coverage = n_with_object_state / n if n > 0 else 0.0
+    return working, attempts, RunOutcome(kind="ok", degrade_reason=None,
+                                          underlying_error=None), coverage

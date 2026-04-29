@@ -11,6 +11,7 @@ at the I/O boundary, and avoiding the third-party dep simplifies install.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -62,13 +63,17 @@ class PipelineStatus:
     object_state_available: bool
     degraded_from_phase: int | None
     degrade_reason: str | None
+    object_state_segment_coverage: float | None = None  # Phase 3 only; absent for Phase 1/2 (§6.3)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "object_state_available": self.object_state_available,
             "degraded_from_phase": self.degraded_from_phase,
             "degrade_reason": self.degrade_reason,
         }
+        if self.object_state_segment_coverage is not None:
+            d["object_state_segment_coverage"] = self.object_state_segment_coverage
+        return d
 
 
 @dataclass(slots=True)
@@ -272,6 +277,422 @@ class AnnotationResult:
             "signals_url": self.signals_url,
             "notes": self.notes,
         }
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 wire-format dataclasses (spec §3)
+# ---------------------------------------------------------------------------
+
+_TRACKS_SCHEMA_VERSION = "0.1.0"
+_VALID_ROLES = frozenset({"object", "target", "tool"})
+_VALID_GAP_REASONS = frozenset({"sam3_lost", "sam3_low_conf"})
+
+
+def _is_int(x: Any) -> bool:
+    """Return True iff *x* is a plain int (not bool — isinstance(True, int) is True)."""
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+@dataclass(slots=True)
+class TracksSample:
+    """One propagation sample (spec §3.2)."""
+
+    frame: int
+    time_sec: float
+    bbox: list[float]  # [x, y, w, h] — all in [0, 1]; w > 0; h > 0; x+w ≤ 1; y+h ≤ 1
+    score: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "frame": self.frame,
+            "time_sec": self.time_sec,
+            "bbox": list(self.bbox),
+            "score": self.score,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any], *, n_frames: int) -> TracksSample:
+        frame = d["frame"]
+        if not _is_int(frame) or frame < 0 or frame >= n_frames:
+            raise ValueError(
+                f"sample frame={frame!r} is out of [0, n_frames={n_frames})"
+            )
+        score = float(d["score"])
+        if not (0.0 <= score <= 1.0):
+            raise ValueError(f"sample score={score!r} must be in [0, 1]")
+        bbox = list(d["bbox"])
+        _validate_bbox(bbox)
+        return cls(frame=frame, time_sec=float(d["time_sec"]), bbox=bbox, score=score)
+
+
+def _validate_bbox(bbox: list[float]) -> None:
+    if len(bbox) != 4:
+        raise ValueError(f"bbox must have 4 elements [x,y,w,h], got {len(bbox)}")
+    x, y, w, h = bbox
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(f"bbox w and h must be > 0; got w={w}, h={h}")
+    if x < 0.0 or x + w > 1.0 + 1e-9:
+        raise ValueError(f"bbox x out of unit square: x={x}, w={w}")
+    if y < 0.0 or y + h > 1.0 + 1e-9:
+        raise ValueError(f"bbox y out of unit square: y={y}, h={h}")
+
+
+@dataclass(slots=True)
+class TracksGap:
+    """One gap event (spec §3.2)."""
+
+    from_frame: int
+    to_frame: int
+    reason: str  # "sam3_lost" | "sam3_low_conf"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "from_frame": self.from_frame,
+            "to_frame": self.to_frame,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any], *, n_frames: int) -> TracksGap:
+        from_frame = d["from_frame"]
+        to_frame = d["to_frame"]
+        reason = d["reason"]
+        if not _is_int(from_frame) or from_frame < 0 or from_frame >= n_frames:
+            raise ValueError(
+                f"gap from_frame={from_frame!r} is out of [0, n_frames={n_frames})"
+            )
+        if not _is_int(to_frame) or to_frame < 0 or to_frame >= n_frames:
+            raise ValueError(
+                f"gap to_frame={to_frame!r} is out of [0, n_frames={n_frames})"
+            )
+        if from_frame > to_frame:
+            raise ValueError(
+                f"gap from_frame={from_frame} > to_frame={to_frame}"
+            )
+        if reason not in _VALID_GAP_REASONS:
+            raise ValueError(
+                f"gap reason={reason!r} must be one of {sorted(_VALID_GAP_REASONS)}"
+            )
+        return cls(from_frame=from_frame, to_frame=to_frame, reason=reason)
+
+
+@dataclass(slots=True)
+class TracksTrack:
+    """One full track entry (spec §3.2)."""
+
+    track_id: str
+    role: str  # "object" | "target" | "tool"
+    prompt: str
+    slug: str
+    index: int
+    primary: bool
+    samples: list[TracksSample]
+    gap_events: list[TracksGap]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "track_id": self.track_id,
+            "role": self.role,
+            "prompt": self.prompt,
+            "slug": self.slug,
+            "index": self.index,
+            "primary": self.primary,
+            "samples": [s.to_dict() for s in self.samples],
+            "gap_events": [g.to_dict() for g in self.gap_events],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any], *, n_frames: int) -> TracksTrack:
+        role = d["role"]
+        if role not in _VALID_ROLES:
+            raise ValueError(f"track role={role!r} must be one of {sorted(_VALID_ROLES)}")
+        index = d["index"]
+        if not _is_int(index) or index < 0:
+            raise ValueError(f"track index={index!r} must be int >= 0")
+        samples = [TracksSample.from_dict(s, n_frames=n_frames) for s in d["samples"]]
+        # Validate strict frame-ascending order
+        for i in range(1, len(samples)):
+            if samples[i].frame <= samples[i - 1].frame:
+                raise ValueError(
+                    f"samples must be strictly ascending in frame; "
+                    f"frame[{i}]={samples[i].frame} <= frame[{i - 1}]={samples[i - 1].frame}"
+                )
+        gap_events = [TracksGap.from_dict(g, n_frames=n_frames) for g in d["gap_events"]]
+        for i in range(1, len(gap_events)):
+            prev, curr = gap_events[i - 1], gap_events[i]
+            if prev.to_frame >= curr.from_frame:
+                raise ValueError(
+                    f"gap_events must be strictly frame-ascending and non-overlapping; "
+                    f"got prev.to_frame={prev.to_frame} >= curr.from_frame={curr.from_frame}"
+                )
+        return cls(
+            track_id=str(d["track_id"]),
+            role=role,
+            prompt=str(d["prompt"]),
+            slug=str(d["slug"]),
+            index=index,
+            primary=bool(d["primary"]),
+            samples=samples,
+            gap_events=gap_events,
+        )
+
+
+@dataclass(slots=True)
+class TracksTrackingPlan:
+    """Tracking plan wire format (spec §3.2)."""
+
+    task_text: str
+    object_prompts: list[str]
+    target_prompts: list[str]
+    tool_prompts: list[str]
+    # Each entry is (role, prompt); preserved as list[{role, prompt}] on disk
+    failed_prompts: list[tuple[str, str]]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_text": self.task_text,
+            "object_prompts": list(self.object_prompts),
+            "target_prompts": list(self.target_prompts),
+            "tool_prompts": list(self.tool_prompts),
+            "failed_prompts": [
+                {"role": role, "prompt": prompt}
+                for role, prompt in self.failed_prompts
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> TracksTrackingPlan:
+        failed: list[tuple[str, str]] = []
+        for entry in d.get("failed_prompts", []):
+            role = str(entry["role"])
+            if role not in _VALID_ROLES:
+                raise ValueError(
+                    f"failed_prompts role={role!r} must be one of {sorted(_VALID_ROLES)}"
+                )
+            failed.append((role, str(entry["prompt"])))
+        return cls(
+            task_text=str(d["task_text"]),
+            object_prompts=list(d.get("object_prompts", [])),
+            target_prompts=list(d.get("target_prompts", [])),
+            tool_prompts=list(d.get("tool_prompts", [])),
+            failed_prompts=failed,
+        )
+
+
+@dataclass(slots=True)
+class TracksStats:
+    """Stats block (spec §3.2)."""
+
+    n_tracks: int
+    n_samples_total: int
+    mean_track_score: float  # NaN serialized as None
+    tracking_wall_time_sec: float
+
+    def to_dict(self) -> dict[str, Any]:
+        mean: float | None = None if math.isnan(self.mean_track_score) else self.mean_track_score
+        return {
+            "n_tracks": self.n_tracks,
+            "n_samples_total": self.n_samples_total,
+            "mean_track_score": mean,
+            "tracking_wall_time_sec": self.tracking_wall_time_sec,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        d: dict[str, Any],
+        *,
+        expected_n_tracks: int,
+        expected_n_samples: int,
+    ) -> TracksStats:
+        n_tracks = d["n_tracks"]
+        if n_tracks != expected_n_tracks:
+            raise ValueError(
+                f"stats.n_tracks={n_tracks} does not match len(tracks)={expected_n_tracks}"
+            )
+        n_samples_total = d["n_samples_total"]
+        if n_samples_total != expected_n_samples:
+            raise ValueError(
+                f"stats.n_samples_total={n_samples_total} does not match "
+                f"sum of samples={expected_n_samples}"
+            )
+        wall_time = float(d["tracking_wall_time_sec"])
+        if wall_time < 0.0:
+            raise ValueError(
+                f"stats.tracking_wall_time_sec={wall_time!r} must be >= 0"
+            )
+        raw_mean = d.get("mean_track_score")
+        mean_score = float("nan") if raw_mean is None else float(raw_mean)
+        return cls(
+            n_tracks=n_tracks,
+            n_samples_total=n_samples_total,
+            mean_track_score=mean_score,
+            tracking_wall_time_sec=wall_time,
+        )
+
+
+@dataclass(slots=True)
+class TracksFile:
+    """Top-level tracks.json wire format (spec §3)."""
+
+    schema_version: str
+    episode_id: str
+    fps: float
+    n_frames: int
+    image_width: int
+    image_height: int
+    track_stride_frames: int
+    tracking_plan: TracksTrackingPlan
+    tracks: list[TracksTrack]
+    stats: TracksStats
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "episode_id": self.episode_id,
+            "fps": self.fps,
+            "n_frames": self.n_frames,
+            "image_size": {"width": self.image_width, "height": self.image_height},
+            "track_stride_frames": self.track_stride_frames,
+            "tracking_plan": self.tracking_plan.to_dict(),
+            "tracks": [t.to_dict() for t in self.tracks],
+            "stats": self.stats.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> TracksFile:
+        schema_version = d.get("schema_version", "")
+        if schema_version != _TRACKS_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version={schema_version!r} must be {_TRACKS_SCHEMA_VERSION!r}"
+            )
+        fps = float(d["fps"])
+        if fps <= 0.0:
+            raise ValueError(f"fps={fps!r} must be > 0")
+        n_frames = d["n_frames"]
+        if not _is_int(n_frames) or n_frames < 1:
+            raise ValueError(f"n_frames={n_frames!r} must be int >= 1")
+        image_size = d["image_size"]
+        width = image_size["width"]
+        height = image_size["height"]
+        if not _is_int(width) or width <= 0:
+            raise ValueError(f"image_size.width={width!r} must be int > 0")
+        if not _is_int(height) or height <= 0:
+            raise ValueError(f"image_size.height={height!r} must be int > 0")
+        stride = d["track_stride_frames"]
+        if not _is_int(stride) or stride < 1:
+            raise ValueError(f"track_stride_frames={stride!r} must be int >= 1")
+        tracking_plan = TracksTrackingPlan.from_dict(d["tracking_plan"])
+        tracks = [TracksTrack.from_dict(t, n_frames=n_frames) for t in d["tracks"]]
+        # Validate track_id uniqueness within file
+        seen_ids: set[str] = set()
+        for t in tracks:
+            if t.track_id in seen_ids:
+                raise ValueError(
+                    f"track_id={t.track_id!r} appears more than once within the file"
+                )
+            seen_ids.add(t.track_id)
+        # Validate at-most-one primary per role
+        primary_roles: set[str] = set()
+        for t in tracks:
+            if t.primary:
+                if t.role in primary_roles:
+                    raise ValueError(
+                        f"primary=true set on more than one track for role={t.role!r}"
+                    )
+                primary_roles.add(t.role)
+        n_samples = sum(len(t.samples) for t in tracks)
+        stats = TracksStats.from_dict(
+            d["stats"],
+            expected_n_tracks=len(tracks),
+            expected_n_samples=n_samples,
+        )
+        return cls(
+            schema_version=schema_version,
+            episode_id=str(d["episode_id"]),
+            fps=fps,
+            n_frames=n_frames,
+            image_width=width,
+            image_height=height,
+            track_stride_frames=stride,
+            tracking_plan=tracking_plan,
+            tracks=tracks,
+            stats=stats,
+        )
+
+
+@dataclass(slots=True)
+class ObjectStateSummary:
+    """Per-segment object/target/tool state derived from SAM3 tracks.
+    Used as the Phase 3 add-on to ClipFeatures and the VLM prompt."""
+
+    object_prompts: list[str]                       # visible >= visibility_threshold of seg
+    target_prompts: list[str]
+    tool_prompts:   list[str]                       # may be []
+
+    visible_track_ids: list[str]                    # track_ids that passed visibility filter (§5.5)
+
+    gripper_object_distance_at_start: float | None  # primary pair, image-width-normalized
+    gripper_object_distance_at_end:   float | None
+    gripper_object_distance_min:      float | None
+
+    primary_object_displacement: float | None       # image-width-normalized
+    primary_object_max_speed:    float | None       # image-width-normalized / sec
+
+    primary_object_at_target_at_end: bool | None    # bbox-IoU(obj_0, tgt_0) at last frame > 0.05
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "object_prompts": list(self.object_prompts),
+            "target_prompts": list(self.target_prompts),
+            "tool_prompts": list(self.tool_prompts),
+            "visible_track_ids": list(self.visible_track_ids),
+            "gripper_object_distance_at_start": self.gripper_object_distance_at_start,
+            "gripper_object_distance_at_end": self.gripper_object_distance_at_end,
+            "gripper_object_distance_min": self.gripper_object_distance_min,
+            "primary_object_displacement": self.primary_object_displacement,
+            "primary_object_max_speed": self.primary_object_max_speed,
+            "primary_object_at_target_at_end": self.primary_object_at_target_at_end,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ObjectStateSummary:
+        return cls(
+            object_prompts=list(d["object_prompts"]),
+            target_prompts=list(d["target_prompts"]),
+            tool_prompts=list(d["tool_prompts"]),
+            visible_track_ids=list(d.get("visible_track_ids", [])),
+            gripper_object_distance_at_start=(
+                float(d["gripper_object_distance_at_start"])
+                if d["gripper_object_distance_at_start"] is not None
+                else None
+            ),
+            gripper_object_distance_at_end=(
+                float(d["gripper_object_distance_at_end"])
+                if d["gripper_object_distance_at_end"] is not None
+                else None
+            ),
+            gripper_object_distance_min=(
+                float(d["gripper_object_distance_min"])
+                if d["gripper_object_distance_min"] is not None
+                else None
+            ),
+            primary_object_displacement=(
+                float(d["primary_object_displacement"])
+                if d["primary_object_displacement"] is not None
+                else None
+            ),
+            primary_object_max_speed=(
+                float(d["primary_object_max_speed"])
+                if d["primary_object_max_speed"] is not None
+                else None
+            ),
+            primary_object_at_target_at_end=(
+                bool(d["primary_object_at_target_at_end"])
+                if d["primary_object_at_target_at_end"] is not None
+                else None
+            ),
+        )
 
 
 def _deep_jsonify(value: Any) -> Any:

@@ -10,6 +10,7 @@ from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
 
+from mimicanno.io import write_json_atomic as _atomic_write_json
 from mimicanno.schema import (
     AnnotationResult,
     BoundaryCandidate,
@@ -30,12 +31,6 @@ def _load_schema(name: str) -> dict[str, Any]:
 
 def _validate(name: str, data: dict[str, Any]) -> None:
     jsonschema.validate(instance=data, schema=_load_schema(name))
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    tmp.replace(path)
 
 
 def write_manifest_json(path: Path, manifest: Manifest) -> None:
