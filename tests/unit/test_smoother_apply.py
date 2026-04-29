@@ -85,6 +85,12 @@ def _seg2(*, idx: int, phase: str, start_frame: int, end_frame: int,
           vlm: float | None = 0.7,
           start_score: float = 0.5, end_score: float = 0.5,
           ) -> SubtaskSegment:
+    """Segment fixture where adjacent edges share candidate_ids.
+
+    Convention: a segment with index ``idx`` has start_boundary candidate
+    ``b{idx}`` and end_boundary candidate ``b{idx+1}``. Adjacent segments
+    therefore share the inner boundary candidate (matching real pipeline output).
+    """
     bc = min(start_score, end_score)
     if phase in {"unlabeled", "unknown"}:
         oc = 0.0
@@ -100,10 +106,10 @@ def _seg2(*, idx: int, phase: str, start_frame: int, end_frame: int,
         failure_flags=[], label_source="vlm_with_object_state",
         object_state_unavailable=False, object_track_ids=[],
         label_version="v1",
-        start_boundary=BoundaryRef(candidate_id=f"b{idx}s",
+        start_boundary=BoundaryRef(candidate_id=f"b{idx}",
                                     time=start_frame / 30, sources=[],
                                     score=start_score),
-        end_boundary=BoundaryRef(candidate_id=f"b{idx}e",
+        end_boundary=BoundaryRef(candidate_id=f"b{idx + 1}",
                                   time=end_frame / 30, sources=[],
                                   score=end_score),
         boundary_confidence=bc, vlm_confidence=vlm, overall_confidence=oc,

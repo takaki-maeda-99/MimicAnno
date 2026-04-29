@@ -526,6 +526,18 @@ def _assert_segment_invariants(segments: list[SubtaskSegment]) -> None:
                         f"!= start_time={nxt.start_boundary.time}"
                     ),
                 )
+            # Spec §3.6: when both candidate_ids are non-None they must
+            # reference the same underlying boundary candidate.
+            left_id = seg.end_boundary.candidate_id
+            right_id = nxt.start_boundary.candidate_id
+            if left_id is not None and right_id is not None and left_id != right_id:
+                raise SmootherSegmentInvariantViolation(
+                    reason=(
+                        f"segments {seg.segment_id} / {nxt.segment_id} reference "
+                        f"different boundary candidates at their shared edge: "
+                        f"{left_id!r} vs {right_id!r}"
+                    ),
+                )
 
 
 def apply_smoothing(
