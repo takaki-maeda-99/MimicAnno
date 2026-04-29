@@ -171,6 +171,60 @@ class SAM3NoInitialDetection(MimicAnnoError):
         )
 
 
+class SmootherConfigInvalid(MimicAnnoError):
+    """`--smoother-config` YAML failed to parse / validate (spec §7.1).
+
+    Tier-1 abort, exits non-zero. Covers: unreadable file, non-mapping document,
+    wrong-typed values, out-of-range values (negative ``lambda_forbidden`` or
+    ``min_segment_duration_sec``), or malformed ``forbidden_transitions`` entries.
+    Unknown-label members of ``forbidden_transitions`` raise
+    ``SmootherUnknownLabelInForbidden`` instead.
+    """
+
+    def __init__(self, reason: str, path: str | None = None) -> None:
+        super().__init__(
+            code="smoother_config_invalid",
+            message=f"smoother config invalid: {reason}",
+            context={"path": path} if path is not None else {},
+        )
+
+
+class SmootherUnknownLabelInForbidden(MimicAnnoError):
+    """`--smoother-config` ``forbidden_transitions`` references a label that
+    is neither in the run's allowed labelset nor a reserved phase
+    (``unknown`` / ``unlabeled``). Spec §7.1, Tier-1 abort."""
+
+    def __init__(self, label: str, path: str | None = None) -> None:
+        ctx: dict[str, Any] = {"label": label}
+        if path is not None:
+            ctx["path"] = path
+        super().__init__(
+            code="smoother_unknown_label_in_forbidden",
+            message=(
+                f"smoother forbidden_transitions references unknown label "
+                f"{label!r}; must be in allowed_labels or reserved "
+                f"{{'unknown', 'unlabeled'}}"
+            ),
+            context=ctx,
+        )
+
+
+class SmootherSegmentInvariantViolation(MimicAnnoError):
+    """Post-smoothing assertion failed (spec §3.6 / §7.1).
+
+    Raised when ``apply_smoothing`` detects a gap or overlap between adjacent
+    segments, or a non-finite / out-of-[0,1] confidence value. This is a
+    programming bug in one of the merge / Viterbi operators, not a user error.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            code="smoother_segment_invariant_violation",
+            message=f"smoother post-smoothing invariant violated: {reason}",
+            context={},
+        )
+
+
 class ArtifactIntegrityError(MimicAnnoError):
     """tracks.json cross-artifact integrity mismatch (spec §3.3).
 
