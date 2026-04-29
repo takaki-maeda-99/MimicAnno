@@ -185,11 +185,162 @@ def _merge_same_label(
     return _renumber_segment_ids(current), rounds, total_collapses
 
 
+def _absorb(
+    into: SubtaskSegment, absorbed: SubtaskSegment, *, on_left: bool,
+) -> SubtaskSegment:
+    """Merge ``absorbed`` into ``into`` per spec §3.3.
+
+    ``on_left`` = True means ``absorbed`` is to the LEFT of ``into``.
+    The surviving segment's phase / verb / object / target / label_source come
+    from ``into`` regardless of confidence (spec §3.3 step 4).
+    """
+    if on_left:
+        new_start = absorbed.start_boundary
+        new_end = into.end_boundary
+        new_start_frame, new_start_time = absorbed.start_frame, absorbed.start_time
+        new_end_frame, new_end_time = into.end_frame, into.end_time
+    else:
+        new_start = into.start_boundary
+        new_end = absorbed.end_boundary
+        new_start_frame, new_start_time = into.start_frame, into.start_time
+        new_end_frame, new_end_time = absorbed.end_frame, absorbed.end_time
+
+    if into.label_version != absorbed.label_version:
+        raise AssertionError(
+            f"label_version differs across run: "
+            f"{into.label_version} vs {absorbed.label_version}",
+        )
+
+    merged = SubtaskSegment(
+        segment_id="",
+        episode_id=into.episode_id,
+        start_frame=new_start_frame, end_frame=new_end_frame,
+        start_time=new_start_time, end_time=new_end_time,
+        # Spec §3.3: surviving (`into`) side wins on label fields
+        phase=into.phase, verb=into.verb, object=into.object, target=into.target,
+        failure_flags=sorted(set(into.failure_flags) | set(absorbed.failure_flags)),
+        label_source=into.label_source,
+        object_state_unavailable=(
+            into.object_state_unavailable or absorbed.object_state_unavailable
+        ),
+        object_track_ids=sorted(
+            set(into.object_track_ids) | set(absorbed.object_track_ids),
+        ),
+        label_version=into.label_version,
+        start_boundary=new_start, end_boundary=new_end,
+        boundary_confidence=0.0,
+        vlm_confidence=_weighted_mean_vlm(into, absorbed),
+        overall_confidence=0.0,
+        evidence=into.evidence,
+        reviewed=False, reviewer_id=None,
+        smoothing_ops=_dedup_consecutive(
+            list(into.smoothing_ops)
+            + list(absorbed.smoothing_ops)
+            + ["merge_short"],
+        ),
+    )
+    return _recompute_confidence(merged)
+
+
+def _is_short(seg: SubtaskSegment, *, threshold_sec: float) -> bool:
+    return (seg.end_time - seg.start_time) < threshold_sec
+
+
+def _merge_short(
+    segments: list[SubtaskSegment],
+    *,
+    config: SmootherConfig,
+) -> tuple[list[SubtaskSegment], int]:
+    """Op 2 (spec §3.3). Returns ``(segments, total_absorbs)``.
+
+    Repeats left-to-right passes until no segment is below
+    ``min_segment_duration_sec``. After a merge, the index restarts at
+    ``max(i - 1, 0)`` so the survivor is re-evaluated. Tie-break on
+    ``overall_confidence`` prefers left; on a tie, prefers the side that
+    does NOT induce a forbidden transition with the opposite-side neighbor.
+    """
+    threshold = config.min_segment_duration_sec
+    forbidden = set(config.forbidden_transitions)
+    if len(segments) <= 1:
+        return list(segments), 0
+
+    current = list(segments)
+    total_absorbs = 0
+    while True:
+        i = 0
+        progress_in_pass = False
+        while i < len(current):
+            seg = current[i]
+            if not _is_short(seg, threshold_sec=threshold):
+                i += 1
+                continue
+            has_left = i > 0
+            has_right = i + 1 < len(current)
+            if not has_left and not has_right:
+                # Single short segment with no neighbor: pass-through.
+                i += 1
+                continue
+            if has_left and not has_right:
+                merged = _absorb(into=current[i - 1], absorbed=seg, on_left=False)
+                current = current[: i - 1] + [merged] + current[i + 1 :]
+                total_absorbs += 1
+                progress_in_pass = True
+                i = max(i - 1, 0)
+                continue
+            if has_right and not has_left:
+                merged = _absorb(into=current[i + 1], absorbed=seg, on_left=True)
+                current = current[:i] + [merged] + current[i + 2 :]
+                total_absorbs += 1
+                progress_in_pass = True
+                # i unchanged — survivor is now at index i, may itself be short
+                continue
+            # Both neighbors exist
+            left = current[i - 1]
+            right = current[i + 1]
+            if left.overall_confidence > right.overall_confidence:
+                pick_left = True
+            elif right.overall_confidence > left.overall_confidence:
+                pick_left = False
+            else:
+                # Tie: prefer the side that does NOT create a forbidden
+                # transition with the opposite-side neighbor.
+                # If absorb-left → merged-left would sit next to `right`;
+                # check (left.phase, right.phase) ∈ forbidden.
+                # If absorb-right → merged-right would sit next to `left`;
+                # check (left.phase, right.phase) ∈ forbidden.
+                # Both options yield the same adjacent pair; in that case
+                # the "forbidden-avoidance" criterion is symmetric, so
+                # default to left preference.
+                pair_after_absorb_left = (left.phase, right.phase)
+                pair_after_absorb_right = (left.phase, right.phase)
+                left_creates = pair_after_absorb_left in forbidden
+                right_creates = pair_after_absorb_right in forbidden
+                if left_creates and not right_creates:
+                    pick_left = False
+                elif right_creates and not left_creates:
+                    pick_left = True
+                else:
+                    pick_left = True   # default left preference
+            if pick_left:
+                merged = _absorb(into=left, absorbed=seg, on_left=False)
+                current = current[: i - 1] + [merged] + current[i + 1 :]
+                i = max(i - 1, 0)
+            else:
+                merged = _absorb(into=right, absorbed=seg, on_left=True)
+                current = current[:i] + [merged] + current[i + 2 :]
+                # i unchanged
+            total_absorbs += 1
+            progress_in_pass = True
+        if not progress_in_pass:
+            break
+    return _renumber_segment_ids(current), total_absorbs
+
+
 def apply_smoothing(
     segments: list[SubtaskSegment],
     *,
     config: SmootherConfig,
     labelset: list[str],
 ) -> SmoothingResult:
-    """Phase 4 smoothing pipeline (spec §3). Stub — Tasks 8-10 fill in Ops 2-3."""
-    raise NotImplementedError("Tasks 8-10 implement Ops 2-3 and the orchestrator.")
+    """Phase 4 smoothing pipeline (spec §3). Stub — Tasks 9-10 fill in Op 3."""
+    raise NotImplementedError("Tasks 9-10 implement Op 3 and the orchestrator.")
