@@ -570,6 +570,7 @@ class AnnotationConfig:
     model_config: ModelConfig
     vlm: VLMConfig | None = None  # required iff target_phase >= 2
     tracking: TrackingConfig | None = None  # required iff target_phase >= 3
+    smoother: SmootherConfig | None = None  # required iff target_phase >= 4
 
     def to_dict(self) -> dict[str, Any]:
         ann_inner: dict[str, Any] = {
@@ -579,6 +580,8 @@ class AnnotationConfig:
             ann_inner["vlm"] = self.vlm.to_dict()
         if self.target_phase >= 3 and self.tracking is not None:
             ann_inner["tracking"] = self.tracking.to_dict()
+        if self.target_phase >= 4 and self.smoother is not None:
+            ann_inner["smoother"] = self.smoother.to_dict()
         return {
             "annotation_config": ann_inner,
             "target_phase": self.target_phase,
