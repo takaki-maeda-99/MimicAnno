@@ -486,11 +486,125 @@ def _viterbi_relabel(
     return _renumber_segment_ids(out), relabels, False
 
 
+def _assert_segment_invariants(segments: list[SubtaskSegment]) -> None:
+    """Spec §3.6 post-smoothing invariants.
+
+    Raises :class:`mimicanno.errors.SmootherSegmentInvariantViolation` when:
+
+    - ``boundary_confidence`` is non-finite or outside ``[0, 1]``;
+    - ``overall_confidence`` is non-finite or outside ``[0, 1]``;
+    - adjacent segments don't share a frame at the boundary
+      (``end_boundary[i].time != start_boundary[i+1].time``).
+
+    This guards against bugs in the merge / Viterbi operators.
+    """
+    from mimicanno.errors import SmootherSegmentInvariantViolation
+    for i, seg in enumerate(segments):
+        if not (math.isfinite(seg.boundary_confidence)
+                and 0.0 <= seg.boundary_confidence <= 1.0):
+            raise SmootherSegmentInvariantViolation(
+                reason=(
+                    f"segment {seg.segment_id}: boundary_confidence "
+                    f"{seg.boundary_confidence!r} not finite or not in [0,1]"
+                ),
+            )
+        if not (math.isfinite(seg.overall_confidence)
+                and 0.0 <= seg.overall_confidence <= 1.0):
+            raise SmootherSegmentInvariantViolation(
+                reason=(
+                    f"segment {seg.segment_id}: overall_confidence "
+                    f"{seg.overall_confidence!r} not finite or not in [0,1]"
+                ),
+            )
+        if i + 1 < len(segments):
+            nxt = segments[i + 1]
+            if seg.end_boundary.time != nxt.start_boundary.time:
+                raise SmootherSegmentInvariantViolation(
+                    reason=(
+                        f"segments {seg.segment_id} / {nxt.segment_id} have "
+                        f"a gap or overlap: end_time={seg.end_boundary.time} "
+                        f"!= start_time={nxt.start_boundary.time}"
+                    ),
+                )
+
+
 def apply_smoothing(
     segments: list[SubtaskSegment],
     *,
     config: SmootherConfig,
     labelset: list[str],
 ) -> SmoothingResult:
-    """Phase 4 smoothing pipeline (spec §3). Stub — Task 10 wires the orchestrator."""
-    raise NotImplementedError("Task 10 implements the orchestrator.")
+    """Phase 4 smoothing pipeline (spec §3).
+
+    Order: Op 1 (same-label merge) → Op 2 (min-duration absorb)
+        → Op 1 follow-up (collapses any new same-label adjacencies)
+        → Op 3 (Viterbi relabel, optional)
+        → Op 1 follow-up (collapses any same-label adjacencies created by Viterbi)
+        → §3.6 post-smoothing invariant check.
+
+    Parameters
+    ----------
+    segments : list[SubtaskSegment]
+        Labeled segments emitted by Phase 3 (or Phase 2). Must be sorted by
+        start_frame and non-overlapping; pre-conditions per spec §3.1.
+    config : SmootherConfig
+        Phase 4 parameters; ``smoother`` block of ``AnnotationConfig``.
+    labelset : list[str]
+        Label IDs in declaration order from the run's ``labels.yaml``.
+        Order matters for Viterbi tie-break rule 2 (spec §3.4).
+    """
+    initial = len(segments)
+    if initial == 0:
+        return SmoothingResult(
+            segments=[],
+            summary=SmoothingSummary(
+                initial_segment_count=0, final_segment_count=0,
+                merge_same_label_rounds=0, merge_same_label_collapses=0,
+                merge_short_absorbs=0, viterbi_relabels=0, viterbi_skipped=True,
+            ),
+            ops_log=[],
+        )
+    ops_log: list[tuple[SmoothingOp, list[str]]] = []
+
+    # Op 1
+    after_op1, rounds_total, collapses_total = _merge_same_label(list(segments))
+    if collapses_total > 0:
+        ops_log.append(("merge_same_label", [s.segment_id for s in after_op1]))
+
+    # Op 2
+    after_op2, absorbs_total = _merge_short(after_op1, config=config)
+    if absorbs_total > 0:
+        ops_log.append(("merge_short", [s.segment_id for s in after_op2]))
+        # Op 1 follow-up
+        after_op2, r2, c2 = _merge_same_label(after_op2)
+        rounds_total += r2
+        collapses_total += c2
+        if c2 > 0:
+            ops_log.append(("merge_same_label", [s.segment_id for s in after_op2]))
+
+    # Op 3
+    after_op3, relabels, viterbi_skipped = _viterbi_relabel(
+        after_op2, config=config, labelset=labelset,
+    )
+    if relabels > 0:
+        ops_log.append(("viterbi_relabel", [s.segment_id for s in after_op3]))
+        # Op 1 follow-up after Viterbi (spec §3.4 final-step rule)
+        after_op3, r3, c3 = _merge_same_label(after_op3)
+        rounds_total += r3
+        collapses_total += c3
+        if c3 > 0:
+            ops_log.append(("merge_same_label", [s.segment_id for s in after_op3]))
+
+    # Spec §3.6 — post-smoothing invariants
+    _assert_segment_invariants(after_op3)
+
+    summary = SmoothingSummary(
+        initial_segment_count=initial,
+        final_segment_count=len(after_op3),
+        merge_same_label_rounds=rounds_total,
+        merge_same_label_collapses=collapses_total,
+        merge_short_absorbs=absorbs_total,
+        viterbi_relabels=relabels,
+        viterbi_skipped=viterbi_skipped,
+    )
+    return SmoothingResult(segments=after_op3, summary=summary, ops_log=ops_log)
