@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 
 from mimicanno.errors import ErrorCode, MimicAnnoError
 from mimicanno.exports.dataset_layout import resolve_episode_path
+from mimicanno.io import write_json_atomic
 
 if TYPE_CHECKING:
     from mimicanno.exports.canonical import CanonicalEpisode
@@ -47,6 +48,33 @@ def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
     os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# info.json features helper (Task 15, spec §4.4)
+# ---------------------------------------------------------------------------
+
+# Lookup keyed by canonical CanonicalEpisode source field name. Shape /
+# names follow spec §4.4.
+_FEATURE_SHAPES: dict[str, tuple[list[int], list[str] | None]] = {
+    "ee_delta_6d": ([6], ["dx", "dy", "dz", "drx", "dry", "drz"]),
+    "gripper_normalized": ([1], None),
+    "gripper_delta": ([1], None),
+}
+
+
+def _features_entry_for(
+    *, source_field: str, dtype: str
+) -> dict[str, object]:
+    """Build a LeRobot info.json features entry for a CanonicalEpisode field."""
+    if source_field not in _FEATURE_SHAPES:
+        raise MimicAnnoError(
+            ErrorCode.EXPORT_PROFILE_INVALID,
+            f"unknown extra_per_frame_columns source field {source_field!r}",
+            {"source_field": source_field},
+        )
+    shape, names = _FEATURE_SHAPES[source_field]
+    return {"dtype": dtype, "shape": list(shape), "names": names}
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +195,45 @@ class LeRobotV3SinkWriter:
         raise NotImplementedError(
             "LeRobotV3SinkWriter.write_all is not yet implemented (Phase 5 Task 16)"
         )
+
+    # -----------------------------------------------------------------
+    # Task 15: info.json features merger
+    # -----------------------------------------------------------------
+
+    def _write_info_json(
+        self,
+        *,
+        out_dir: Path,
+        source_dataset: Path,
+        profile: ExportProfile,
+    ) -> None:
+        """Write ``meta/info.json`` (spec §4.4).
+
+        Reads source ``meta/info.json`` and adds entries to ``features`` for
+        ``subtask_index`` plus each ``profile.sink.params.extra_per_frame_columns``
+        entry. All other top-level keys are preserved verbatim.
+        """
+        import json as _json
+
+        src_path = source_dataset / "meta" / "info.json"
+        info = _json.loads(src_path.read_text(encoding="utf-8"))
+        features = dict(info.get("features", {}))
+
+        features["subtask_index"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+        }
+        for entry in profile.sink.params.get("extra_per_frame_columns", []):
+            features[entry["name"]] = _features_entry_for(
+                source_field=entry["source"], dtype=entry["dtype"]
+            )
+
+        info["features"] = features
+
+        out_path = out_dir / "meta" / "info.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(out_path, info)
 
     # -----------------------------------------------------------------
     # Task 14: per-episode list-column writer
