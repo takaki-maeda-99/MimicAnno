@@ -30,6 +30,11 @@
         "pass_through_raw_action": {"type": "boolean"},
         "generic_adapter_config": {
           "type": ["object", "null"]
+        },
+        "raw_action_columns": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1},
+          "description": "Source-parquet column names to concatenate into CanonicalEpisode.raw_action when pass_through_raw_action is true. null = auto-detect via the adapter's convention (default)."
         }
       }
     },

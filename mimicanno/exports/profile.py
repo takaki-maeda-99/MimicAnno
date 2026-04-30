@@ -30,6 +30,10 @@ class SourceConfig:
     robot_adapter: Literal["aloha", "koch", "so100", "generic"]
     pass_through_raw_action: bool
     generic_adapter_config: dict[str, Any] | None = None
+    # When None, build_canonical_episode auto-detects: it concatenates all
+    # parquet columns matching ``action.*`` (LeRobot v3 convention). Explicit
+    # list overrides for datasets that mix or omit ``action.*`` columns.
+    raw_action_columns: list[str] | None = None
 
 
 @dataclass(frozen=True)
