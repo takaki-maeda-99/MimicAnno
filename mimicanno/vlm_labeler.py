@@ -435,16 +435,46 @@ def label_run(
 DEFAULT_LOCAL_GEMMA_MODEL_ID = "google/gemma-4-E2B-it"
 
 
+def _resolve_auto_model_class() -> Any:
+    """Resolve the transformers AutoModel class for image+text→text VLMs.
+
+    transformers 5.x renamed `AutoModelForVision2Seq` to
+    `AutoModelForImageTextToText`. Try the 5.x name first; fall back to the
+    4.x name. Raises ImportError if neither is available (very old or very
+    broken transformers install).
+
+    Compatibility note: transformers 4.x and 5.x are *expected* to expose
+    these names mutually exclusively — i.e. on a 5.x install
+    `AutoModelForVision2Seq` is absent and on a 4.x install
+    `AutoModelForImageTextToText` is absent. We bias towards 5.x because the
+    Phase 5 follow-up real-data smoke ran on transformers 5.6.2 + Gemma 4
+    E2B-it. If a transformers version ever exposes both names with
+    different behavior, this resolver picks 5.x silently — adjust the
+    ordering here if 4.x compatibility becomes the priority.
+    """
+    import transformers
+    for name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+        cls = getattr(transformers, name, None)
+        if cls is not None:
+            return cls
+    raise ImportError(
+        "transformers has neither AutoModelForImageTextToText (>=5.0) nor "
+        "AutoModelForVision2Seq (<5.0). Install a supported transformers "
+        "version."
+    )
+
+
 def _hf_load_model_and_processor(
     *, model_id: str, revision: str, device: str, dtype: str,
 ) -> tuple[Any, Any]:
     """Load the HF model + processor at the pre-flight-resolved revision.
     Isolated for monkeypatching in unit tests."""
     import torch
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoProcessor
+    AutoModelClass = _resolve_auto_model_class()
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                    "float32": torch.float32}[dtype]
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelClass.from_pretrained(
         model_id, revision=revision, torch_dtype=torch_dtype,
     ).to(device).eval()
     processor = AutoProcessor.from_pretrained(model_id, revision=revision)
@@ -514,14 +544,27 @@ class LocalGemmaVLMLabeler:
         attempt: int,
         last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
-        from mimicanno.vlm_prompt import build_prompt
+        from mimicanno.vlm_prompt import build_messages
 
-        prompt = build_prompt(request, attempt=attempt,
-                              last_reject_reason=last_reject_reason)
+        # transformers 5.x chat-template path: messages with explicit image
+        # content blocks → apply_chat_template inserts the right number of
+        # image placeholder tokens that align with `images=keyframes` below.
+        # Verified end-to-end on transformers 5.6.2 + Gemma 4 E2B-it
+        # (Phase 5 follow-up real-data smoke). transformers 4.x is also
+        # expected to work via apply_chat_template — most 4.x VLM
+        # processors implemented this method too — but has not been
+        # exercised in CI; if you maintain 4.x support, add a smoke test.
+        messages = build_messages(
+            request, attempt=attempt, last_reject_reason=last_reject_reason
+        )
+        prompt = self._processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         try:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"
             ).to(self._config.device)
+            input_len = inputs["input_ids"].shape[1]
             with self._timeout_guard():
                 tokens = self._model.generate(
                     **inputs,
@@ -529,15 +572,18 @@ class LocalGemmaVLMLabeler:
                     temperature=self._config.temperature,
                     max_new_tokens=self._config.max_output_tokens,
                 )
+            # Slice off the prompt portion before decoding — `decoded.startswith(
+            # prompt)` no longer matches reliably with the chat-template path
+            # because batch_decode(skip_special_tokens=True) strips template
+            # delimiters from the output but the `prompt` variable still
+            # contains them. Token-level slicing is unambiguous.
+            new_tokens = tokens[:, input_len:]
             decoded = self._processor.batch_decode(
-                tokens, skip_special_tokens=True
+                new_tokens, skip_special_tokens=True
             )[0]
         except Exception as e:
             self._raise_classified(e)
             raise  # unreachable; helps static analysis
-
-        if decoded.startswith(prompt):
-            decoded = decoded[len(prompt):]
 
         return parse_and_validate(decoded.strip(),
                                   set(request["allowed_labels"]))

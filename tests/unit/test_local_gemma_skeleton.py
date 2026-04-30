@@ -138,6 +138,7 @@ def test_label_segment_returns_validated_response_on_clean_decode(
     processor = MagicMock()
     load_mock.return_value = (model, processor)
     model.generate.return_value = MagicMock()  # token ids
+    processor.apply_chat_template.return_value = "<chat-template-string>"
     processor.batch_decode.return_value = [
         '{"phase": "idle", "vlm_confidence": 0.5}'
     ]
@@ -152,13 +153,22 @@ def test_label_segment_includes_retry_amendment_on_attempt_2(
     load_mock: MagicMock,
 ) -> None:
     """Spec §3.3: when attempt > 1 and last_reject_reason is provided, the
-    prompt MUST include the retry-strict amendment."""
+    chat-template messages MUST include the retry-strict amendment in their
+    text content."""
+    import json as _json
+
     model = MagicMock()
     processor = MagicMock()
     load_mock.return_value = (model, processor)
-    captured_prompts: list[str] = []
+    captured_messages: list[list[dict]] = []
+
+    def _capture_template(messages, *, tokenize, add_generation_prompt):
+        captured_messages.append(messages)
+        return "<chat-template-string>"
+
+    processor.apply_chat_template.side_effect = _capture_template
+
     def _capture(text, images, return_tensors):
-        captured_prompts.append(text)
         return MagicMock(to=lambda d: MagicMock())
     processor.side_effect = _capture
     model.generate.return_value = MagicMock()
@@ -169,4 +179,7 @@ def test_label_segment_includes_retry_amendment_on_attempt_2(
     lab = LocalGemmaVLMLabeler(cfg)
     lab.label_segment(_minimal_request(segment_id="s_000"), attempt=2,
                       last_reject_reason="invalid_label")
-    assert any("reject_reason=invalid_label" in p for p in captured_prompts)
+    # Walk the messages list and concat all text-block content.
+    assert captured_messages, "apply_chat_template never called"
+    flattened = _json.dumps(captured_messages[0])
+    assert "reject_reason=invalid_label" in flattened

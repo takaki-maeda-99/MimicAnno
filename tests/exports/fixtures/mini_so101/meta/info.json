@@ -1,0 +1,112 @@
+{
+  "chunks_size": 1000,
+  "codebase_version": "v3.0",
+  "data_path": "data/chunk-{chunk_index:03d}/episode_{episode_index:06d}.parquet",
+  "features": {
+    "action.ee_pos": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        3
+      ]
+    },
+    "action.ee_rotvec": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        3
+      ]
+    },
+    "action.gripper_pos": {
+      "dtype": "float64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "action.joint_pos": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        6
+      ]
+    },
+    "episode_index": {
+      "dtype": "int64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "frame_index": {
+      "dtype": "int64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "index": {
+      "dtype": "int64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "observation.state": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        6
+      ]
+    },
+    "observation.state.ee_pos": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        3
+      ]
+    },
+    "observation.state.ee_rotvec": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        3
+      ]
+    },
+    "observation.state.gripper_pos": {
+      "dtype": "float64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "observation.state.joint_pos": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        6
+      ]
+    },
+    "task_index": {
+      "dtype": "int64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    },
+    "timestamp": {
+      "dtype": "float64",
+      "names": null,
+      "shape": [
+        1
+      ]
+    }
+  },
+  "fps": 15,
+  "splits": {
+    "train": "0:3"
+  },
+  "total_episodes": 3,
+  "total_frames": 60,
+  "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/episode_{episode_index:06d}.mp4"
+}

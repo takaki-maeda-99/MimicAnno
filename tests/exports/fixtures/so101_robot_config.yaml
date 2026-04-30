@@ -1,0 +1,22 @@
+# SO101 GenericAdapter v0.2.0 robot-config — for Phase 5 export real-data smoke.
+#
+# Status (2026-04-30):
+#   - Phase 5 export wiring confirmed in tests/exports/test_bulk.py + test_cli_export.py
+#     against the mini_so101 fixture which mirrors this column layout.
+#   - End-to-end Phase 4 → export on the user's actual SO101 dataset at
+#     ~/MimicRec/datasets/SO101/ is BLOCKED by mimicanno/io_parquet.py:REQUIRED_COLUMNS,
+#     which insists on a single aggregated `observation.state` column. SO101 splits
+#     state into observation.state.{joint_pos, ee_pos, ee_rotvec, gripper_pos}.
+#     Fix is small (relax the upstream check; adapters already assert their own columns)
+#     but is a Phase 1 change, out of scope for the Phase 5 export sub-project.
+#
+# Once the Phase 1 fix lands, this file is the canonical robot-config to feed to:
+#   mimicanno annotate --robot generic --robot-config <this file> ...
+schema_version: "0.2.0"
+name: so101
+gripper_column: observation.state.gripper_pos
+gripper_scale_min: 0.0
+gripper_scale_max: 100.0  # observed range on episode 0: 4.258..38.837; 100 is conservative
+eef_xyz_column: observation.state.ee_pos
+eef_rotvec_column: observation.state.ee_rotvec
+eef_quat_column: null

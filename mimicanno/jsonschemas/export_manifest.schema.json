@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mimicanno/export_manifest.schema.json",
+  "title": "MimicAnno export manifest",
+  "description": ".mimicanno-export.json file written at the root of an export output dataset (spec §8).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "profile",
+    "source_dataset_path",
+    "runs_root",
+    "target_phase",
+    "output_mode",
+    "runs_used",
+    "run_hashes",
+    "episode_count",
+    "subtask_count",
+    "sidecar_schema_version",
+    "mimicanno_version",
+    "generated_at",
+    "cli_args",
+    "host"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1"]},
+    "kind": {"type": "string", "enum": ["mimicanno.export"]},
+    "profile": {
+      "type": "object",
+      "required": ["name", "hash", "schema_version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "schema_version": {"type": "string"}
+      }
+    },
+    "source_dataset_path": {"type": "string"},
+    "runs_root": {"type": "string"},
+    "target_phase": {"type": "integer", "minimum": 1, "maximum": 4},
+    "config_hash_filter": {"type": ["string", "null"]},
+    "output_mode": {
+      "type": "string",
+      "enum": ["symlink", "copy", "in_place"]
+    },
+    "runs_used": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "run_hashes": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "episode_count": {"type": "integer", "minimum": 0},
+    "subtask_count": {"type": "integer", "minimum": 0},
+    "sidecar_schema_version": {"type": "string"},
+    "mimicanno_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "cli_args": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "host": {
+      "type": "object",
+      "required": ["platform", "python"],
+      "additionalProperties": false,
+      "properties": {
+        "platform": {"type": "string"},
+        "python": {"type": "string"}
+      }
+    }
+  }
+}

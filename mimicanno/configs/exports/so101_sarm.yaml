@@ -1,0 +1,43 @@
+# mimicanno/configs/exports/so101_sarm.yaml
+# Default SO101 -> LeRobot v3 SARM-trainable export profile.
+# Body-frame ee_delta_6d + normalized gripper, mimicanno-prefixed annotation columns.
+schema_version: "1"
+name: so101_sarm
+description: |
+  Default SO101 -> LeRobot v3 SARM-trainable export.
+  Body-frame ee_delta_6d + gripper, mimicanno-prefixed annotation columns.
+source:
+  robot_adapter: generic
+  pass_through_raw_action: true
+  generic_adapter_config:
+    schema_version: "0.2.0"
+    name: so101
+    gripper_column: observation.state.gripper_pos
+    # SO101 gripper is reported in raw 0..100 units (observed ep0 range: 4.26..38.84).
+    # 0..100 is conservative; values >1 after normalization are clipped. Tune if your
+    # dataset uses a different gripper scale.
+    gripper_scale_min: 0.0
+    gripper_scale_max: 100.0
+    eef_xyz_column: observation.state.ee_pos
+    eef_rotvec_column: observation.state.ee_rotvec
+    eef_quat_column: null
+canonical:
+  delta_basis: body_frame_t
+  rotation_repr: rotvec
+  gripper_source: observation
+sink:
+  writer: lerobot_v3
+  params:
+    annotation_prefix: mimicanno
+    subtask_registry_path: meta/subtasks.parquet
+    extra_per_frame_columns:
+      - {name: mimicanno.ee_delta_6d, source: ee_delta_6d, dtype: float32}
+      - {name: mimicanno.gripper_normalized, source: gripper_normalized, dtype: float32}
+      - {name: mimicanno.gripper_delta, source: gripper_delta, dtype: float32}
+sidecar:
+  enabled: true
+  path: meta/mimicanno_segments.parquet
+gates:
+  require_reviewed: false
+  forbid_degraded_pipeline: false
+  forbid_unlabeled_segments: false

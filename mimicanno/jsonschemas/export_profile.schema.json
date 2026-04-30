@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mimicanno/export_profile.schema.json",
+  "title": "MimicAnno ExportProfile",
+  "description": "YAML profile describing how to export a Phase 1-4 mimicanno run dir + a source LeRobot v3 dataset to a SARM-trainable LeRobot v3 dataset (spec §5.1).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "source",
+    "canonical",
+    "sink",
+    "sidecar",
+    "gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1"]},
+    "name": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "source": {
+      "type": "object",
+      "required": ["robot_adapter", "pass_through_raw_action"],
+      "additionalProperties": false,
+      "properties": {
+        "robot_adapter": {
+          "type": "string",
+          "enum": ["aloha", "koch", "so100", "generic"]
+        },
+        "pass_through_raw_action": {"type": "boolean"},
+        "generic_adapter_config": {
+          "type": ["object", "null"]
+        },
+        "raw_action_columns": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1},
+          "description": "Source-parquet column names to concatenate into CanonicalEpisode.raw_action when pass_through_raw_action is true. null = auto-detect via the adapter's convention (default)."
+        }
+      }
+    },
+    "canonical": {
+      "type": "object",
+      "required": ["delta_basis", "rotation_repr", "gripper_source"],
+      "additionalProperties": false,
+      "properties": {
+        "delta_basis": {
+          "type": "string",
+          "enum": ["body_frame_t", "world", "base"]
+        },
+        "rotation_repr": {"type": "string", "enum": ["rotvec"]},
+        "gripper_source": {
+          "type": "string",
+          "enum": ["observation", "action"]
+        }
+      }
+    },
+    "sink": {
+      "type": "object",
+      "required": ["writer", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "writer": {"type": "string", "enum": ["lerobot_v3"]},
+        "params": {
+          "type": "object",
+          "required": [
+            "annotation_prefix",
+            "subtask_registry_path",
+            "extra_per_frame_columns"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "annotation_prefix": {"type": ["string", "null"]},
+            "subtask_registry_path": {"type": "string"},
+            "extra_per_frame_columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "source", "dtype"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {"type": "string"},
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "ee_delta_6d",
+                      "gripper_normalized",
+                      "gripper_delta",
+                      "ee_pose_world"
+                    ]
+                  },
+                  "dtype": {
+                    "type": "string",
+                    "enum": ["float32", "float64"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sidecar": {
+      "type": "object",
+      "required": ["enabled", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "path": {"type": "string"}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "required": [
+        "require_reviewed",
+        "forbid_degraded_pipeline",
+        "forbid_unlabeled_segments"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "require_reviewed": {"type": "boolean"},
+        "forbid_degraded_pipeline": {"type": "boolean"},
+        "forbid_unlabeled_segments": {"type": "boolean"}
+      }
+    }
+  }
+}

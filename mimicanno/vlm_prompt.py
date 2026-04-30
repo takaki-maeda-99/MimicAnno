@@ -1,12 +1,20 @@
 """Phase 2 VLM prompt assembly (spec §3.3); Phase 3 extension (spec §5.4).
 
-Builds the system+user text portion of the prompt as a single string. The
-caller (FixtureVLMLabeler / LocalGemmaVLMLabeler) is responsible for
-splicing in image tokens at the [KEYFRAMES] marker.
+Two output forms:
+- ``build_prompt(...)`` returns a single string with the literal
+  ``[KEYFRAMES]`` marker — the legacy form kept for fixture-VLM tests and
+  human-readable debug dumps.
+- ``build_messages(...)`` returns a chat-template messages list
+  (``[{"role": "user", "content": [...]}]``) with explicit image content
+  blocks. transformers 5.x removed auto-insertion of image placeholder
+  tokens from the bare ``processor(text=..., images=...)`` path; the
+  chat-template API is the recommended way to align image tokens with
+  image features. ``LocalGemmaVLMLabeler`` uses this form.
 """
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from mimicanno.vlm_labeler import REJECT_REASONS, RejectReason, VLMRequest
 
@@ -134,3 +142,39 @@ def build_prompt(
             "Re-emit the JSON object exactly per the schema.\n"
         )
     return body
+
+
+def build_messages(
+    request: VLMRequest,
+    attempt: int,
+    last_reject_reason: RejectReason | None,
+) -> list[dict[str, Any]]:
+    """Construct chat-template messages for transformers 5.x VLM processors.
+
+    Splits the same prompt content built by ``build_prompt`` around the
+    ``[KEYFRAMES]`` marker into:
+        text-before-keyframes  +  N image blocks (one per keyframe)
+                               +  text-after-keyframes  +  optional retry text
+
+    transformers 5.x's ``processor.apply_chat_template(messages, ...)`` resolves
+    the right number of image placeholder tokens to match the number of
+    images later passed to ``processor(text=..., images=...)``. The number
+    of ``{"type": "image"}`` content blocks here MUST equal
+    ``len(request["keyframes"])`` — both equal one image per keyframe.
+
+    Returns a single user-role message; a system role is not used because
+    Gemma 4-IT's chat template merges system + user into one user turn.
+    """
+    text = build_prompt(request, attempt=attempt,
+                        last_reject_reason=last_reject_reason)
+    before, _, after = text.partition(KEYFRAMES_MARKER)
+    if not _:
+        # Should be unreachable — build_prompt always emits the marker.
+        raise RuntimeError(f"prompt missing {KEYFRAMES_MARKER}")
+
+    n_keyframes = len(request["keyframes"])
+    content: list[dict[str, Any]] = [{"type": "text", "text": before.rstrip("\n")}]
+    content.extend({"type": "image"} for _ in range(n_keyframes))
+    # Strip leading newline left over from the marker line.
+    content.append({"type": "text", "text": after.lstrip("\n")})
+    return [{"role": "user", "content": content}]
