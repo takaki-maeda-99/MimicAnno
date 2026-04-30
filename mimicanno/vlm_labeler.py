@@ -435,16 +435,37 @@ def label_run(
 DEFAULT_LOCAL_GEMMA_MODEL_ID = "google/gemma-4-E2B-it"
 
 
+def _resolve_auto_model_class() -> Any:
+    """Resolve the transformers AutoModel class for image+text→text VLMs.
+
+    transformers 5.x renamed `AutoModelForVision2Seq` to
+    `AutoModelForImageTextToText`. Try the 5.x name first; fall back to the
+    4.x name. Raises ImportError if neither is available (very old or very
+    broken transformers install).
+    """
+    import transformers
+    for name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+        cls = getattr(transformers, name, None)
+        if cls is not None:
+            return cls
+    raise ImportError(
+        "transformers has neither AutoModelForImageTextToText (>=5.0) nor "
+        "AutoModelForVision2Seq (<5.0). Install a supported transformers "
+        "version."
+    )
+
+
 def _hf_load_model_and_processor(
     *, model_id: str, revision: str, device: str, dtype: str,
 ) -> tuple[Any, Any]:
     """Load the HF model + processor at the pre-flight-resolved revision.
     Isolated for monkeypatching in unit tests."""
     import torch
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoProcessor
+    AutoModelClass = _resolve_auto_model_class()
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                    "float32": torch.float32}[dtype]
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelClass.from_pretrained(
         model_id, revision=revision, torch_dtype=torch_dtype,
     ).to(device).eval()
     processor = AutoProcessor.from_pretrained(model_id, revision=revision)
