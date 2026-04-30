@@ -550,6 +550,7 @@ class LocalGemmaVLMLabeler:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"
             ).to(self._config.device)
+            input_len = inputs["input_ids"].shape[1]
             with self._timeout_guard():
                 tokens = self._model.generate(
                     **inputs,
@@ -557,15 +558,18 @@ class LocalGemmaVLMLabeler:
                     temperature=self._config.temperature,
                     max_new_tokens=self._config.max_output_tokens,
                 )
+            # Slice off the prompt portion before decoding — `decoded.startswith(
+            # prompt)` no longer matches reliably with the chat-template path
+            # because batch_decode(skip_special_tokens=True) strips template
+            # delimiters from the output but the `prompt` variable still
+            # contains them. Token-level slicing is unambiguous.
+            new_tokens = tokens[:, input_len:]
             decoded = self._processor.batch_decode(
-                tokens, skip_special_tokens=True
+                new_tokens, skip_special_tokens=True
             )[0]
         except Exception as e:
             self._raise_classified(e)
             raise  # unreachable; helps static analysis
-
-        if decoded.startswith(prompt):
-            decoded = decoded[len(prompt):]
 
         return parse_and_validate(decoded.strip(),
                                   set(request["allowed_labels"]))
