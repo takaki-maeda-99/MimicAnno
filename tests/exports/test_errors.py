@@ -747,9 +747,11 @@ def test_export_ee_pose_unavailable(tmp_path: Path) -> None:
                 "annotation_prefix": "mimicanno",
                 "subtask_registry_path": "meta/subtasks.parquet",
                 "extra_per_frame_columns": [
+                    # Profile demands ee_delta_6d -> EXPORT_EE_POSE_UNAVAILABLE
+                    # when adapter has no eef columns configured.
                     {
-                        "name": "mimicanno.gripper_normalized",
-                        "source": "gripper_normalized",
+                        "name": "mimicanno.ee_delta_6d",
+                        "source": "ee_delta_6d",
                         "dtype": "float32",
                     },
                 ],

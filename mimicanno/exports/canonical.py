@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
+import pyarrow as pa
 import yaml  # type: ignore[import-untyped]
 
 from mimicanno.__version__ import __version__ as _MIMICANNO_VERSION  # noqa: N812
@@ -285,9 +286,31 @@ def build_canonical_episode(
     """Source dataset + mimicanno run -> CanonicalEpisode (spec §2.3)."""
     adapter = _select_adapter(profile)
 
-    parquet_path, _row_filter = resolve_episode_path(
+    parquet_path, row_filter = resolve_episode_path(
         dataset_root, episode_index=episode_index
     )
+
+    # v1 limitation: v2-aggregate datasets (multiple episodes per file, e.g.
+    # lerobot/svla_so100_pickplace's data/chunk-000/file-000.parquet) are not
+    # supported because the sink writer's output-layout assumes one parquet per
+    # episode_index. Workaround: extract per-episode files first using
+    # `python tools/extract_lerobot_episode.py <ds-snapshot> <episode_index> <out-dir>`
+    # and re-run mimicanno export against the extracted dataset.
+    if row_filter is not None:
+        raise MimicAnnoError(
+            ErrorCode.EXPORT_DATASET_NOT_FOUND,
+            (
+                f"v2-aggregate datasets (data_path with {{file_index}}) are not "
+                "supported in v1 of mimicanno export. Extract per-episode files "
+                "first via tools/extract_lerobot_episode.py and re-export."
+            ),
+            {
+                "parquet_path": str(parquet_path),
+                "row_filter": row_filter,
+                "episode_index": episode_index,
+            },
+        )
+
     loaded = load_episode_parquet(parquet_path)
     table = loaded.table
     num_frames = table.num_rows
@@ -331,15 +354,25 @@ def build_canonical_episode(
     # Apply gates on metadata before computing canonical arrays (cheap).
     _apply_gates(annotation=annotation, manifest=manifest, profile=profile)
 
-    # ee_pose_world (T, 6)
+    # Spec §2.3 step 6: only require eef_pose when the profile demands
+    # ee_pose_world or ee_delta_6d as a per-frame column. Joint-only robots
+    # (so100, koch) may set extras to gripper-only and skip ee_delta_6d.
+    extra_cols_raw = profile.sink.params.get("extra_per_frame_columns", [])
+    extra_sources: set[str] = {ec["source"] for ec in extra_cols_raw}
+    pose_required = bool({"ee_pose_world", "ee_delta_6d"} & extra_sources)
+
     pose_raw = adapter.eef_pose(table)
     pose = _normalize_ee_pose(pose_raw)
     if pose is None:
-        raise MimicAnnoError(
-            ErrorCode.EXPORT_EE_POSE_UNAVAILABLE,
-            f"adapter {profile.source.robot_adapter!r} returned no eef_pose",
-            {"adapter": profile.source.robot_adapter},
-        )
+        if pose_required:
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_EE_POSE_UNAVAILABLE,
+                f"adapter {profile.source.robot_adapter!r} returned no eef_pose "
+                "but profile demands ee_pose_world or ee_delta_6d",
+                {"adapter": profile.source.robot_adapter, "extra_sources": sorted(extra_sources)},
+            )
+        # Joint-only fallback: zeros that won't be written anywhere downstream.
+        pose = np.zeros((num_frames, 6), dtype=np.float64)
 
     ee_delta = compute_ee_delta_6d(pose, basis=profile.canonical.delta_basis)
 

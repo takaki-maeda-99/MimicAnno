@@ -517,9 +517,11 @@ class LeRobotV3SinkWriter:
         ``profile.sink.params.extra_per_frame_columns`` is pulled from the
         ``CanonicalEpisode`` and cast to the profile-specified dtype.
         """
-        src_path, _filter = resolve_episode_path(
+        src_path, _row_filter = resolve_episode_path(
             source_dataset, episode_index=episode.episode_index
         )
+        # v2-aggregate datasets are rejected upstream by build_canonical_episode;
+        # by the time we reach the sink, _row_filter is guaranteed None.
         src_table = pq.read_table(src_path)  # type: ignore[no-untyped-call]
         n_frames = src_table.num_rows
         if n_frames != episode.num_frames:

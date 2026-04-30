@@ -461,3 +461,84 @@ def test_gate_unlabeled_present_raises(tmp_path: Path) -> None:
             profile=profile,
         )
     assert ei.value.code == ErrorCode.EXPORT_UNLABELED_PRESENT
+
+
+def _write_v2_aggregate_parquet(p: Path, episode_indices: list[int], frames_per: int) -> None:
+    """v2-style aggregate file with multiple episodes, all rows concatenated."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    timestamps = []
+    fis = []
+    eis = []
+    grippers = []
+    ee_pos = []
+    ee_rotvec = []
+    states = []
+    actions = []
+    for ep in episode_indices:
+        for f in range(frames_per):
+            timestamps.append(f / 30 + ep * 100)
+            fis.append(f)
+            eis.append(ep)
+            grippers.append(10.0 + f * 5)
+            ee_pos.append([0.0, 0.0, ep * 0.1])
+            ee_rotvec.append([0.0, 0.0, 0.0])
+            states.append([0.0] * 6)
+            actions.append([0.0] * 6)
+    table = pa.table({
+        "timestamp": pa.array(timestamps),
+        "frame_index": pa.array(fis),
+        "episode_index": pa.array(eis),
+        "observation.state.gripper_pos": pa.array(grippers),
+        "observation.state.ee_pos": pa.array(ee_pos),
+        "observation.state.ee_rotvec": pa.array(ee_rotvec),
+        "observation.state": pa.array(states),
+        "action.gripper_pos": pa.array(grippers),
+        "action.ee_pos": pa.array(ee_pos),
+        "action.ee_rotvec": pa.array(ee_rotvec),
+        "action": pa.array(actions),
+    })
+    pq.write_table(table, p)
+
+
+def _write_info_json_v2(dataset_root: Path, n_episodes: int) -> None:
+    """Like _write_info_json but with v2-style data_path (file-{file_index:03d})."""
+    meta = dataset_root / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / "info.json").write_text(json.dumps({
+        "codebase_version": "v3.0",
+        "total_episodes": n_episodes,
+        "chunks_size": 1000,
+        "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+        "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+        "fps": 30,
+        "splits": {"train": f"0:{n_episodes}"},
+        "features": {},
+    }))
+
+
+def test_v2_aggregate_layout_rejected_with_actionable_message(tmp_path: Path) -> None:
+    """v1 limitation: v2-aggregate datasets (multiple episodes per parquet,
+    e.g. lerobot/svla_so100_pickplace) are rejected with a clear error message
+    pointing to the extract_lerobot_episode.py workaround. Real fix is post-v1."""
+    parquet_path = tmp_path / "data" / "chunk-000" / "file-000.parquet"
+    _write_v2_aggregate_parquet(parquet_path, episode_indices=[0, 1, 2], frames_per=3)
+    _write_info_json_v2(tmp_path, n_episodes=3)
+
+    annotation = _make_annotation(
+        episode_id="episode_000001",
+        segments=[_make_segment(episode_id="episode_000001", start_frame=0, end_frame=2, phase="approach")],
+    )
+    manifest = _make_manifest(episode_id="episode_000001")
+    profile = _make_profile(pass_through_raw_action=False)
+
+    with pytest.raises(MimicAnnoError) as ei:
+        build_canonical_episode(
+            dataset_root=tmp_path,
+            episode_index=1,
+            annotation=annotation,
+            manifest=manifest,
+            profile=profile,
+        )
+    assert ei.value.code == ErrorCode.EXPORT_DATASET_NOT_FOUND
+    assert "extract_lerobot_episode.py" in str(ei.value)
