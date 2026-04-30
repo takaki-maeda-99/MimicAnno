@@ -207,6 +207,106 @@ class SubtaskSegment:
             "smoothing_ops": list(self.smoothing_ops),
         }
 
+    def to_sidecar_row(self) -> dict[str, Any]:
+        """Flat row dict for ``meta/mimicanno_segments.parquet`` (spec §3.1).
+
+        Emits the segment-derived columns. Provenance columns
+        (``episode_index``, ``segment_index``, ``run_hash``, ``config_hash``,
+        ``input_hash``, ``pipeline_phase``, ``mimicanno_version``,
+        ``generated_at``) are added by the sink writer using the manifest /
+        ``CanonicalEpisode`` context.
+
+        Per-edge per-source ``BoundaryRef`` scores beyond ``score`` /
+        ``sources`` are not represented (lossy; they live in
+        ``boundaries.json``, see spec §3.3).
+        """
+        return {
+            "segment_id": self.segment_id,
+            "phase": self.phase,
+            "verb": self.verb,
+            "object": self.object,
+            "target": self.target,
+            "failure_flags": list(self.failure_flags),
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "label_source": self.label_source,
+            "object_state_unavailable": self.object_state_unavailable,
+            "object_track_ids": list(self.object_track_ids),
+            "label_version": self.label_version,
+            "boundary_confidence": self.boundary_confidence,
+            "vlm_confidence": self.vlm_confidence,
+            "overall_confidence": self.overall_confidence,
+            "evidence": self.evidence,
+            "reviewed": self.reviewed,
+            "reviewer_id": self.reviewer_id,
+            "smoothing_ops": list(self.smoothing_ops),
+            "boundary_source_start": list(self.start_boundary.sources),
+            "boundary_source_end": list(self.end_boundary.sources),
+        }
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> SubtaskSegment:
+        """Inverse of :meth:`to_sidecar_row`.
+
+        Rebuilds a SubtaskSegment from a sidecar row. The row may carry
+        provenance columns (``episode_index``, ``run_hash``, etc.) from the
+        sink writer; those are ignored here. Per-edge per-source BoundaryRef
+        scores are not recoverable from the sidecar (lossy field, spec §3.3) —
+        the reconstructed BoundaryRefs carry ``candidate_id=None``,
+        ``time=start_time`` (or ``end_time`` for the end edge) and
+        ``score=boundary_confidence``. Reading ``boundaries.json`` from the
+        original run dir is required to recover the per-source detail.
+
+        ``episode_id`` is also not on the segment-level columns; callers that
+        need it should pass it via the surrounding ``CanonicalEpisode``.
+        We use ``""`` as the sidecar-roundtrip-only sentinel because the row
+        does not carry it. Round-trippers that care should set
+        ``episode_id`` on the reconstructed segment after the fact.
+        """
+        boundary_confidence = float(row["boundary_confidence"])
+        start_boundary = BoundaryRef(
+            candidate_id=None,
+            time=float(row["start_time"]),
+            sources=list(row["boundary_source_start"]),
+            score=boundary_confidence,
+        )
+        end_boundary = BoundaryRef(
+            candidate_id=None,
+            time=float(row["end_time"]),
+            sources=list(row["boundary_source_end"]),
+            score=boundary_confidence,
+        )
+        vlm_conf_raw = row.get("vlm_confidence")
+        vlm_conf = None if vlm_conf_raw is None else float(vlm_conf_raw)
+        return cls(
+            segment_id=str(row["segment_id"]),
+            episode_id=str(row.get("episode_id", "")),
+            start_frame=int(row["start_frame"]),
+            end_frame=int(row["end_frame"]),
+            start_time=float(row["start_time"]),
+            end_time=float(row["end_time"]),
+            phase=str(row["phase"]),
+            verb=row["verb"],
+            object=row["object"],
+            target=row["target"],
+            failure_flags=list(row["failure_flags"]),
+            label_source=row["label_source"],
+            object_state_unavailable=bool(row["object_state_unavailable"]),
+            object_track_ids=list(row["object_track_ids"]),
+            label_version=str(row["label_version"]),
+            start_boundary=start_boundary,
+            end_boundary=end_boundary,
+            boundary_confidence=boundary_confidence,
+            vlm_confidence=vlm_conf,
+            overall_confidence=float(row["overall_confidence"]),
+            evidence=row["evidence"],
+            reviewed=bool(row["reviewed"]),
+            reviewer_id=row["reviewer_id"],
+            smoothing_ops=list(row["smoothing_ops"]),
+        )
+
 
 @dataclass(slots=True)
 class SmoothingSummary:
