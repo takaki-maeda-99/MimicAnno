@@ -1,173 +1,199 @@
 # MimicAnno
 
-Offline subtask annotation pipeline for robot imitation-learning episodes. Takes recorded LeRobot v3 episodes (video + robot state + action), automatically segments them into robot-executable subtask phases, and produces SARM-trainable LeRobot datasets augmented with subtask labels and canonical action features.
-
-Designed to be used standalone (`mimicanno annotate`, `mimicanno export`) or embedded in [MimicRec](https://github.com/takaki-maeda-99/MimicRec) as the annotator backend.
-
-## Status
-
-| Phase | What | Status |
-|---|---|---|
-| **1** | Signal-based boundary detection (gripper / EEF velocity / action-norm transitions) + read-only React/Vite viewer | Shipped on `main` |
-| **2** | VLM (Gemma 4) per-segment phase labeling with allowed-label enforcement | Shipped on `main` |
-| **3** | SAM3 object tracking + integrated boundary score + object-aware relabeling | Shipped on `main` |
-| **4** | Temporal smoothing (same-label merge / min-duration absorb / Viterbi) | Shipped on `main` |
-| **5C** | **`mimicanno export`** — SARM-trainable LeRobot v3 export | Branch `phase5-export-impl`, ready for review |
-| 5A/B/D/E | Persistence backend / Edit UI / Evaluation harness / MimicRec integration | Not started |
-
-859 tests pass (`uv run pytest`); mypy `--strict` clean for the `mimicanno/exports/` Phase 5 surface.
-
-## What this gives you
-
-Given a LeRobot v3 dataset and a single-line command, you get back a new LeRobot v3 dataset where every frame has a `subtask_index` column pointing into a `meta/subtasks.parquet` registry, every episode metadata row carries `<prefix>_subtask_names` / `_start_frames` / `_end_frames` lists, and every per-frame parquet has additional `mimicanno.ee_delta_6d` / `gripper_normalized` / `gripper_delta` columns suitable for [SARM](https://github.com/takaki-maeda-99/MimicRec/tree/main/lerobot/src/lerobot/policies/sarm) training.
-
-A lossless `meta/mimicanno_segments.parquet` sidecar preserves the full mimicanno schema (verb / object / target / failure_flags / confidences / boundaries / provenance) for evaluation and review tooling.
-
-Verified end-to-end on real SO101 data (`~/MimicRec/datasets/SO101/episode_000000`, "Put the tape into the bottle", 151 frames):
+Offline subtask annotation for robot imitation-learning episodes. Take a LeRobot v3 dataset, get back per-frame subtask labels (`approach_object`, `grasp_object`, …) and a SARM-trainable parquet output.
 
 ```
-seg0 [  0.. 14] approach_object  verb=move   object=tape   target=bottle   conf=0.7
-seg1 [ 15.. 30] approach_object  ...
-...
-seg7 [121..150] grasp_object     verb=grasp  object=bottle target=bottle   conf=0.95
+LeRobot v3 episode (video + state + action + task text)
+        │
+        ▼  mimicanno annotate
+runs/<canonical>/{annotation.json, manifest.json, ...}
+        │
+        ▼  mimicanno export
+SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 ```
+
+## Features
+
+- **Signal-driven boundary detection** — gripper transitions, EEF velocity valleys, action-norm change points (no ML for boundaries).
+- **VLM phase labeling** — Gemma 4 (or any image-text-to-text HF model) per segment, with allowed-label enforcement and JSON-schema validation.
+- **SAM3 object tracking** — task-text-driven prompt generation, sampled-frame propagation, integrated boundary score.
+- **Temporal smoothing** — same-label merge, min-duration absorb, optional Viterbi relabel.
+- **SARM-ready export** — per-frame `subtask_index`, per-episode subtask lists, lossless `mimicanno_segments.parquet` sidecar, atomic publish, idempotent reuse.
+- **Read-only React/Vite viewer** — timeline + waveforms + boundary markers (`frontend/`).
+- **Pluggable robot adapters** — built-in for SO100 / Koch / Aloha; YAML-configurable for SO101 and arbitrary LeRobot v3 layouts.
 
 ## Install
 
-Requires Python 3.11+, [uv](https://github.com/astral-sh/uv), and (for VLM/SAM3) a CUDA-capable GPU with driver ≥ 12.8.
+Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
 git clone git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
-uv sync                         # core deps: pyarrow, scipy, typer, ...
-uv sync --extra dev             # + pytest, mypy, ruff
-uv sync --extra vlm             # + transformers (for Phase 2 Gemma)
-uv sync --extra sam3            # + transformers, torch, torchvision (for Phase 3 SAM3)
+uv sync                     # core
+uv sync --extra dev         # + pytest / mypy / ruff (recommended for development)
+uv sync --extra vlm         # + transformers   (Phase 2 — Gemma)
+uv sync --extra sam3        # + transformers + torch + torchvision (Phase 3 — SAM3)
 ```
 
-If your CUDA driver is < 13.0, install a matching torch wheel after the sync:
+GPU users with CUDA driver < 13.0 (e.g. Ubuntu 24.04 with driver 12.8) need a matching torch wheel:
 
 ```bash
-# driver 12.8 → torch cu128
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-uv pip install transformers Pillow   # uv pip install can drop these; reinstall
+uv pip install transformers Pillow
 ```
 
-## Quickstart: end-to-end annotation + export
+Verify CUDA:
 
-### 1. Phase 4 annotation on a single episode
+```bash
+uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+## Quickstart
+
+### 1. Annotate one episode
 
 ```bash
 mimicanno annotate \
-  --video    /path/to/dataset/videos/chunk-000/observation.images.front/episode_000000.mp4 \
-  --parquet  /path/to/dataset/data/chunk-000/episode_000000.parquet \
-  --task     "Put the tape into the bottle" \
-  --robot    generic \
+  --video        path/to/dataset/videos/.../episode_000000.mp4 \
+  --parquet      path/to/dataset/data/.../episode_000000.parquet \
+  --task         "Put the tape into the bottle" \
+  --robot        generic \
   --robot-config tests/exports/fixtures/so101_robot_config.yaml \
   --target-phase 4 \
   --vlm-model    "google/gemma-4-E2B-it@<sha>" \
   --sam3-checkpoint /path/to/sam3.ckpt \
-  --runs-root ./runs
+  --runs-root    ./runs
 ```
 
-Produces a versioned run directory at `runs/<canonical_name>/` with `manifest.json`, `annotation.json`, `boundaries.json`, `signals.json`, `tracks.json`. Re-running with the same config and inputs is a no-op (idempotent).
+Produces `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json`. Re-running with the same config and inputs is a no-op.
 
-CPU-only? Add `--vlm-device cpu --vlm-timeout-sec 600` and use `--target-phase 2` (Phase 3 needs SAM3 weights, Phase 4 needs Phase 3). Expect ~1 min per episode on GPU, ~1 hour on CPU.
+Phases are cumulative: `--target-phase 1` (boundaries only, no VLM/SAM3 needed), `--target-phase 2` (+ VLM), `--target-phase 3` (+ SAM3, requires checkpoint), `--target-phase 4` (+ smoothing).
 
-### 2. Phase 5 export to a SARM-trainable dataset
+CPU-only or driver-mismatched? Add:
+
+```bash
+--vlm-device cpu --vlm-timeout-sec 600
+```
+
+(Expect roughly 1 hour on CPU vs ~1 minute on a recent GPU for an 8-segment episode.)
+
+### 2. Export to a SARM-trainable dataset
 
 ```bash
 mimicanno export \
-  --dataset    /path/to/dataset \
-  --runs-root  ./runs \
+  --dataset      path/to/dataset \
+  --runs-root    ./runs \
   --target-phase 4 \
-  --profile    so101_sarm \
-  --out        /path/to/dataset_annotated \
-  --episode    0
+  --profile      so101_sarm \
+  --out          path/to/dataset_annotated
 ```
 
-Default mode (`--symlink-data`) creates `dataset_annotated/` with `videos/` symlinked from the source, `data/` rebuilt with subtask annotations, fresh `meta/`, and a `.mimicanno-export.json` provenance manifest. `--copy-data` copies videos instead. `--in-place` (requires `--yes-i-mean-it`) mutates the source dataset, creating a `.mimicanno-backup-<ISO>/` directory for rollback.
+Default `--symlink-data` mode produces `dataset_annotated/` with `videos/` symlinked from the source, `data/` augmented with `subtask_index` + canonical action columns, and a fresh `meta/` containing `subtasks.parquet`, `episodes/.../file-NNN.parquet` (with `<prefix>_subtask_*` lists), and a lossless `mimicanno_segments.parquet` sidecar.
 
-Repeated runs with identical args short-circuit (idempotent reuse).
+Other modes:
+- `--copy-data` — fully independent copy (no symlinks).
+- `--in-place --yes-i-mean-it` — mutate the source dataset; creates `<source>/.mimicanno-backup-<ISO>/` for rollback.
+
+Idempotent: re-running with identical args short-circuits to a no-op.
+
+### 3. Inspect the output
+
+```bash
+uv run python -c "
+import pyarrow.parquet as pq
+sub = pq.read_table('dataset_annotated/meta/subtasks.parquet')
+print('phases used:', sub.to_pylist())
+
+ep0 = pq.read_table('dataset_annotated/data/chunk-000/episode_000000.parquet')
+print('per-frame subtask_index distribution:')
+sti = ep0.column('subtask_index').to_pylist()
+for v in sorted(set(sti)):
+    print(f'  index={v} ({sub.to_pylist()[v][\"subtask\"]}): {sti.count(v)} frames')
+"
+```
+
+Example output for SO101 ep0 ("Put the tape into the bottle"):
+
+```
+phases used: [{'subtask': 'approach_object', 'subtask_index': 0, 'description': ''},
+              {'subtask': 'grasp_object',    'subtask_index': 1, 'description': ''}]
+per-frame subtask_index distribution:
+  index=0 (approach_object): 121 frames
+  index=1 (grasp_object):     30 frames
+```
+
+### 4. Programmatic API
+
+```python
+from mimicanno import export, ExportProfile
+
+result = export(
+    dataset_root="/path/to/dataset",
+    runs_root="./runs",
+    target_phase=4,
+    profile="so101_sarm",            # name, or path to a YAML
+    out="/path/to/dataset_annotated",
+    output_mode="symlink",           # "symlink" | "copy" | "in_place"
+)
+print(result.episode_count, result.subtask_count, result.reused)
+```
 
 ## Supported robots
 
-| Adapter | Layout |
+| Adapter | Notes |
 |---|---|
-| `aloha` | LeRobot v3 with aggregated `observation.state` (14-D), Cartesian EEF available |
+| `aloha` | LeRobot v3 with aggregated 14-D `observation.state`, Cartesian EEF available |
 | `koch` | Joint-only, 6-D `observation.state` |
-| `so100` | Joint-only, 6-D `observation.state` |
-| `generic` | Configurable via YAML — see `tests/exports/fixtures/so101_robot_config.yaml` for the SO101 example (split state columns + rotvec + scaled gripper) |
+| `so100` | Joint-only, 6-D `observation.state` (used by `lerobot/svla_so100_pickplace`) |
+| `generic` | Configurable via YAML — supports split-state layouts (SO101 etc.) and direct rotvec passthrough |
 
-The `generic` adapter (schema 0.2.0) supports both LeRobot v2-style aggregated state and v3-style split columns (`observation.state.{ee_pos, ee_rotvec, gripper_pos, ...}`), with optional gripper scaling and rotvec passthrough.
+Generic adapter example for SO101 (`tests/exports/fixtures/so101_robot_config.yaml`):
 
-To support a new robot, write a YAML config naming the columns and the gripper range. See `mimicanno/adapters/generic.py` for the full schema.
+```yaml
+schema_version: "0.2.0"
+name: so101
+gripper_column:        observation.state.gripper_pos
+gripper_scale_min:     0.0
+gripper_scale_max:     100.0
+eef_xyz_column:        observation.state.ee_pos
+eef_rotvec_column:     observation.state.ee_rotvec
+eef_quat_column:       null
+```
+
+To support a new robot, copy this template, name the right columns, and pass it via `--robot-config`. No code changes required.
 
 ## Export profiles
 
-Three profiles ship under `mimicanno/configs/exports/`:
+Three default profiles ship under `mimicanno/configs/exports/`:
 
-- `so101_sarm.yaml` — SO101-specific (uses `generic` adapter with the column mapping inlined). Ships ee_delta_6d + gripper extras as per-frame columns and a `mimicanno_*`-prefixed list-column convention.
-- `aloha_sarm.yaml` — Aloha. Same structure, dedicated adapter.
-- `generic.yaml` — minimal template; user fills in the adapter config. Use this for new datasets.
+- `so101_sarm.yaml` — SO101 via the generic adapter, body-frame `ee_delta_6d` + gripper extras, `mimicanno_*` column prefix.
+- `aloha_sarm.yaml` — Aloha-specific.
+- `generic.yaml` — minimal template for new datasets.
 
-Profiles are validated against `mimicanno/jsonschemas/export_profile.schema.json`. The export records a SHA256 hash of the resolved profile in `.mimicanno-export.json` so reuse / verification is deterministic.
+Profile YAML controls everything about the export: source adapter, action representation (`body_frame_t` / `world` / `base` delta basis), per-frame extra columns, sidecar location, and gates (`require_reviewed`, `forbid_unlabeled_segments`, `forbid_degraded_pipeline`). Validated against `mimicanno/jsonschemas/export_profile.schema.json`.
 
-## Repository layout
+## Viewer
 
-```
-mimicanno/
-  adapters/        # per-robot column accessors (aloha, koch, so100, generic)
-  exports/         # Phase 5 export pipeline (this sub-project)
-  jsonschemas/     # JSON schemas for manifest / annotation / boundaries / signals / export
-  configs/         # default label sets + export profiles
-  pipeline.py      # Phase 1-4 orchestrators
-  boundaries.py    # signal-based boundary detection
-  vlm_labeler.py   # Gemma 4 VLM phase labeling
-  vlm_prompt.py    # prompt assembly (legacy build_prompt + chat-template build_messages)
-  smoother.py      # Phase 4 temporal smoothing
-  schema.py        # SubtaskSegment, AnnotationResult, Manifest, ...
-  cli.py           # `mimicanno annotate` + `mimicanno export`
-
-frontend/          # React/Vite read-only viewer (Phase 1)
-tests/exports/     # Phase 5 tests including mini_so101 + mini_runs fixtures
-
-docs/superpowers/
-  specs/           # design specs (one per phase / sub-project)
-  plans/           # implementation plans (TDD-style task lists)
+```bash
+cd frontend
+pnpm install
+pnpm dev          # http://localhost:5173/?run=<canonical_name>
 ```
 
-The most recent design + plan documents:
-
-- `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md` — parent spec for all phases
-- `docs/superpowers/specs/2026-04-30-mimicanno-phase5-export-design.md` — Phase 5 export sub-project
-- `docs/superpowers/plans/2026-04-30-mimicanno-phase5-export.md` — TDD plan that built it
+Read-only timeline / waveform viewer for run directories. Edit affordances are deferred to Phase 5B (not started).
 
 ## Development
 
 ```bash
-cd ~/MimicAnno
-env -u PYTHONPATH uv run pytest -q                    # full suite, ~40 s
+env -u PYTHONPATH uv run pytest -q                    # full suite (~40 s)
 env -u PYTHONPATH uv run mypy --strict mimicanno/     # type check
 env -u PYTHONPATH uv run ruff check mimicanno/        # lint
 ```
 
-`PYTHONPATH=` strips a ROS2 humble pollution that some setups leak.
+`PYTHONPATH=` strips a ROS2 humble path leak that some hosts inject; harmless if you don't have ROS2.
 
-CI gate (per phase): all tests pass, mypy strict clean for the touched module(s), ruff clean for new code. Spec / plan documents are reviewed via the superpowers `spec-document-reviewer` and `plan-document-reviewer` subagents before code starts; final pre-merge code review uses the `superpowers:code-reviewer` agent.
-
-## Contributing
-
-This codebase uses the [superpowers](https://github.com/anthropics/superpowers) skills workflow:
-
-1. **Brainstorming**: scope and tradeoffs go through `superpowers:brainstorming` (or its plugin equivalent).
-2. **Spec**: written design + reviewer approval (`spec-document-reviewer`).
-3. **Plan**: TDD task list (`writing-plans`), reviewed by `plan-document-reviewer`.
-4. **Implementation**: per-task TDD (failing test → minimal implementation → pass → commit). Subagent-driven for large phases.
-5. **Pre-merge**: `superpowers:code-reviewer` final review, address blockers/should-fixes.
-
-See `CLAUDE.md` for project-specific guidance (notably the autonomous-mode directive used during Phase 5 development).
+Architecture and design rationale: `docs/superpowers/specs/`. Implementation plans (TDD task lists): `docs/superpowers/plans/`. The parent design document is `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md`.
 
 ## License
 
-MIT (see `LICENSE`).
+MIT (see [`LICENSE`](LICENSE)).
