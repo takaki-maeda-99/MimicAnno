@@ -1,4 +1,4 @@
-"""LeRobot v3 sink writer (Phase 5 Tasks 10–16, spec §4).
+"""LeRobot v3 sink writer (Phase 5 Tasks 10-16, spec section 4).
 
 Writes a fresh LeRobot v3 dataset under ``out_dir`` using a list of
 ``CanonicalEpisode`` and an ``ExportProfile``. Each sub-write is individually
@@ -192,9 +192,173 @@ class LeRobotV3SinkWriter:
         profile: ExportProfile,
         source_dataset: Path,
     ) -> None:
-        raise NotImplementedError(
-            "LeRobotV3SinkWriter.write_all is not yet implemented (Phase 5 Task 16)"
+        """Run the full export pipeline (spec §1.1 / §4).
+
+        Order of operations:
+
+        1. Build subtasks registry (collects phases across all episodes).
+        2. Per-episode data parquet writes (using the registry).
+        3. Per-chunk per-episode metadata parquet writes.
+        4. info.json features merge.
+        5. Sidecar parquet (lossless segment mirror).
+
+        Each sub-write is individually atomic via tmp-file + ``os.replace``.
+        Transaction-level atomicity (the whole output dir publish) is the
+        ``output_layout`` module's responsibility (Phase D).
+        """
+        registry = self._write_subtasks_registry(
+            out_dir=out_dir, episodes=episodes
         )
+        for ep in episodes:
+            self._write_data_parquet(
+                out_dir=out_dir,
+                source_dataset=source_dataset,
+                episode=ep,
+                registry=registry,
+                profile=profile,
+            )
+        self._write_episodes_metadata(
+            out_dir=out_dir,
+            source_dataset=source_dataset,
+            episodes=episodes,
+            profile=profile,
+        )
+        self._write_info_json(
+            out_dir=out_dir, source_dataset=source_dataset, profile=profile
+        )
+        self._write_sidecar(out_dir=out_dir, episodes=episodes)
+
+        self._validate_output(
+            out_dir=out_dir, episodes=episodes, profile=profile
+        )
+
+    # -----------------------------------------------------------------
+    # Task 16: post-write validation
+    # -----------------------------------------------------------------
+
+    def _validate_output(
+        self,
+        *,
+        out_dir: Path,
+        episodes: list[CanonicalEpisode],
+        profile: ExportProfile,
+    ) -> None:
+        """Re-read written files and assert schemas match expectations.
+
+        Raises ``EXPORT_SINK_VALIDATION_FAILED`` on any mismatch.
+        """
+        # subtasks.parquet
+        subtasks_path = out_dir / "meta" / "subtasks.parquet"
+        if not subtasks_path.is_file():
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                f"missing {subtasks_path}",
+                {"path": str(subtasks_path)},
+            )
+        subtasks = pq.read_table(subtasks_path)  # type: ignore[no-untyped-call]
+        if list(subtasks.column_names) != [
+            "subtask",
+            "subtask_index",
+            "description",
+        ]:
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                (
+                    "subtasks.parquet schema mismatch: expected "
+                    "[subtask, subtask_index, description], got "
+                    f"{list(subtasks.column_names)}"
+                ),
+                {"columns": list(subtasks.column_names)},
+            )
+        if subtasks.num_rows < 1:
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                "subtasks.parquet has zero rows",
+                {},
+            )
+
+        # data parquets
+        extras = [
+            entry["name"]
+            for entry in profile.sink.params.get("extra_per_frame_columns", [])
+        ]
+        for ep in episodes:
+            src_rel = (
+                f"data/chunk-{ep.episode_index // 1000:03d}/"
+                f"episode_{ep.episode_index:06d}.parquet"
+            )
+            data_path = out_dir / src_rel
+            if not data_path.is_file():
+                raise MimicAnnoError(
+                    ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                    f"missing data parquet {data_path}",
+                    {"path": str(data_path)},
+                )
+            t = pq.read_table(data_path)  # type: ignore[no-untyped-call]
+            cols = set(t.column_names)
+            missing = []
+            if "subtask_index" not in cols:
+                missing.append("subtask_index")
+            for x in extras:
+                if x not in cols:
+                    missing.append(x)
+            if missing:
+                raise MimicAnnoError(
+                    ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                    (
+                        f"data parquet {data_path} missing required columns: "
+                        f"{missing}"
+                    ),
+                    {"path": str(data_path), "missing_columns": missing},
+                )
+
+        # per-episode metadata parquets
+        prefix = profile.sink.params.get("annotation_prefix")
+        if prefix is None:
+            ep_required = (
+                "subtask_names",
+                "subtask_start_frames",
+                "subtask_end_frames",
+            )
+        else:
+            ep_required = (
+                f"{prefix}_subtask_names",
+                f"{prefix}_subtask_start_frames",
+                f"{prefix}_subtask_end_frames",
+            )
+        episodes_root = out_dir / "meta" / "episodes"
+        for ep_path in sorted(episodes_root.glob("chunk-*/file-*.parquet")):
+            t = pq.read_table(ep_path)  # type: ignore[no-untyped-call]
+            cols = set(t.column_names)
+            missing = [c for c in ep_required if c not in cols]
+            if missing:
+                raise MimicAnnoError(
+                    ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                    (
+                        f"per-episode parquet {ep_path} missing required list "
+                        f"columns: {missing}"
+                    ),
+                    {"path": str(ep_path), "missing_columns": missing},
+                )
+
+        # sidecar parquet
+        sidecar_path = out_dir / "meta" / "mimicanno_segments.parquet"
+        if not sidecar_path.is_file():
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                f"missing sidecar {sidecar_path}",
+                {"path": str(sidecar_path)},
+            )
+        sidecar = pq.read_table(sidecar_path)  # type: ignore[no-untyped-call]
+        if len(sidecar.column_names) != 31:
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                (
+                    f"sidecar parquet has {len(sidecar.column_names)} columns; "
+                    "expected 31 (spec §3.1)"
+                ),
+                {"columns": list(sidecar.column_names)},
+            )
 
     # -----------------------------------------------------------------
     # Task 15: info.json features merger

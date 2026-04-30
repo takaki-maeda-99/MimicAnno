@@ -9,7 +9,6 @@ import pyarrow.parquet as pq
 from mimicanno.exports.sink_lerobot_v3 import LeRobotV3SinkWriter
 from tests.exports._helpers import make_canonical_episode, make_segment
 
-
 SIDECAR_COLUMNS = [
     "episode_index",
     "segment_index",

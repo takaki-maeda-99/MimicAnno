@@ -1,4 +1,4 @@
-"""Shared synthetic builders for Phase 5 sink-writer tests (Tasks 11–16).
+"""Shared synthetic builders for Phase 5 sink-writer tests (Tasks 11-16).
 
 Avoids depending on the mini_so101 fixture (Task 24) by constructing a minimal
 LeRobot v3 dataset + CanonicalEpisode + ExportProfile entirely in-memory /
