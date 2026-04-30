@@ -323,6 +323,76 @@ def test_in_place_creates_backup(tmp_path: Path) -> None:
     assert (dataset_root / "meta" / "mimicanno_segments.parquet").is_file()
 
 
+def test_sarm_load_episode_annotations_consumes_export(tmp_path: Path) -> None:
+    """Spec §13 exit criterion #6 — the LeRobot SARM policy's
+    `_load_episode_annotations(annotation_type='mimicanno')` returns
+    non-None lists for an exported dataset.
+
+    We replicate SARM's exact column-name fallback logic
+    (`<annotation_type>_subtask_<suffix>` then bare `subtask_<suffix>`)
+    against the exported per-episode metadata parquet — does not
+    import SARM itself, so this regression test runs without the
+    SARM repo present. The literal SARM source is at
+    ~/MimicRec/lerobot/src/lerobot/policies/sarm/processor_sarm.py:160-189.
+    """
+    import pyarrow.parquet as pq
+
+    dataset_root, runs_root, _ = _build_fixture(tmp_path, episode_count=2)
+    profile = make_profile(tmp_dir=tmp_path)
+    out = tmp_path / "OUT"
+
+    bulk_export(
+        dataset_root=dataset_root,
+        runs_root=runs_root,
+        target_phase=4,
+        profile=profile,
+        out=out,
+        output_mode="symlink",
+    )
+
+    # Load the per-episode metadata parquet that SARM would read.
+    ep_meta_path = out / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    assert ep_meta_path.is_file()
+    ep_meta_table = pq.read_table(ep_meta_path)
+    columns = set(ep_meta_table.column_names)
+
+    annotation_type = "mimicanno"
+
+    def col(suffix: str) -> str:
+        """Mirror SARM processor_sarm._load_episode_annotations:173-175."""
+        prefixed = f"{annotation_type}_{suffix}"
+        return prefixed if prefixed in columns else suffix
+
+    names_col = col("subtask_names")
+    starts_col = col("subtask_start_frames")
+    ends_col = col("subtask_end_frames")
+
+    # The default profile uses annotation_prefix="mimicanno" → prefixed columns.
+    assert names_col == "mimicanno_subtask_names"
+    assert starts_col == "mimicanno_subtask_start_frames"
+    assert ends_col == "mimicanno_subtask_end_frames"
+
+    rows = ep_meta_table.to_pylist()
+    for ep_idx in range(len(rows)):
+        row = rows[ep_idx]
+        names = list(row[names_col])
+        starts = list(row[starts_col])
+        ends = list(row[ends_col])
+        # SARM expects (non-None, non-None, non-None) for episodes that have
+        # mimicanno annotations.
+        assert names, f"ep{ep_idx} has empty subtask_names list"
+        assert starts and ends, f"ep{ep_idx} has empty start/end lists"
+        # Lengths must match (SARM iterates with strict=True via zip).
+        assert len(names) == len(starts) == len(ends)
+        # Inclusive frame ranges, ordered.
+        for i in range(len(names) - 1):
+            assert starts[i] <= ends[i]
+            assert ends[i] < starts[i + 1], (
+                f"ep{ep_idx} segment {i} end_frame {ends[i]} >= "
+                f"segment {i+1} start_frame {starts[i+1]}"
+            )
+
+
 def test_in_place_idempotency_short_circuits_no_extra_backup(tmp_path: Path) -> None:
     """Spec §9.1: a second in_place run with the same profile + runs_used
     must short-circuit (reused=True) and NOT create another backup dir."""
