@@ -50,6 +50,9 @@ packages = ["mimicanno"]
 "mimicanno/jsonschemas/annotation.schema.json" = "mimicanno/jsonschemas/annotation.schema.json"
 "mimicanno/jsonschemas/boundaries.schema.json" = "mimicanno/jsonschemas/boundaries.schema.json"
 "mimicanno/jsonschemas/signals.schema.json" = "mimicanno/jsonschemas/signals.schema.json"
+"mimicanno/jsonschemas/export_profile.schema.json" = "mimicanno/jsonschemas/export_profile.schema.json"
+"mimicanno/jsonschemas/export_manifest.schema.json" = "mimicanno/jsonschemas/export_manifest.schema.json"
+"mimicanno/jsonschemas/mimicanno_segments.schema.json" = "mimicanno/jsonschemas/mimicanno_segments.schema.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
