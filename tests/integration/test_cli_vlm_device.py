@@ -98,3 +98,18 @@ def test_vlm_device_default_unchanged(tmp_path: Path) -> None:
     captured, result = _run_with_captured_config(tmp_path, [])
     assert captured, f"pipeline never reached; output={result.output}"
     assert captured[0].device == "cuda"
+
+
+def test_vlm_timeout_sec_flag_propagates(tmp_path: Path) -> None:
+    captured, result = _run_with_captured_config(
+        tmp_path, ["--vlm-timeout-sec", "600"]
+    )
+    assert captured, f"pipeline never reached; output={result.output}"
+    assert captured[0].timeout_sec == 600.0
+
+
+def test_vlm_timeout_sec_default_unchanged(tmp_path: Path) -> None:
+    """No --vlm-timeout-sec → VLMConfig.timeout_sec == 30.0 (existing)."""
+    captured, result = _run_with_captured_config(tmp_path, [])
+    assert captured, f"pipeline never reached; output={result.output}"
+    assert captured[0].timeout_sec == 30.0

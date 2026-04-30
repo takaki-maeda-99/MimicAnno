@@ -109,6 +109,11 @@ def annotate(
         help="Device for VLM model load (cpu|cuda|cuda:N). Default: VLMConfig "
              "default (cuda). Use cpu when no GPU or driver mismatch.",
     ),
+    vlm_timeout_sec: float | None = typer.Option(
+        None, "--vlm-timeout-sec",
+        help="Per-attempt inference timeout (sec). Default: VLMConfig default "
+             "(30s, sized for GPU). Bump to 300+ for CPU runs.",
+    ),
     offline: bool = typer.Option(
         False, "--offline",
         help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
@@ -167,6 +172,8 @@ def annotate(
             )
             if vlm_device is not None:
                 vlm_config_kwargs["device"] = vlm_device
+            if vlm_timeout_sec is not None:
+                vlm_config_kwargs["timeout_sec"] = vlm_timeout_sec
             vlm_config = VLMConfig(**vlm_config_kwargs)
             if vlm_config.keyframes_per_segment < 1:
                 raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
