@@ -27,6 +27,41 @@
 
 ---
 
+## Phase 0 — Reality checks (Task 0)
+
+### Task 0: Verify SO101 column names + locate adapter / io / runindex APIs
+
+This is a 10-minute "look before you write" pass. No tests, no commits — just record findings to inform Tasks 3, 4, 9, 20.
+
+**Steps:**
+
+- [ ] **Step 1: SO101 column inventory.**
+
+```bash
+uv run python -c "
+import pyarrow.parquet as pq
+t = pq.read_schema('/home/takakimaeda/MimicRec/datasets/SO101/data/chunk-000/episode_000000.parquet')
+for f in t: print(f'  {f.name}: {f.type}')
+"
+```
+
+Confirm column names assumed by `so101_sarm.yaml` (Task 3) match reality:
+- `observation.state.gripper_pos` (scalar double)
+- `observation.state.ee_pos` (list<float>, 3-vec)
+- `observation.state.ee_rotvec` (list<float>, 3-vec)
+
+Also sample gripper range with `pq.read_table(...).column('observation.state.gripper_pos').to_pylist()` → confirm `gripper_scale_max` value (~100 or another constant) for the YAML.
+
+- [ ] **Step 2: Confirm `mimicanno.io` does NOT yet have JSON loaders for annotation / manifest.** Run `grep -n "def read_" mimicanno/io.py`. The current state is loader-light: `read_tracks_json` exists but `read_annotation_result` / `read_manifest` do not. Task 9 must implement them as a sub-step (see updated Task 9 Step 0).
+
+- [ ] **Step 3: Confirm `mimicanno.runindex` API surface.** Run `grep -n "^def\|^class" mimicanno/runindex.py`. Expect `read_index`, `write_index_atomic`, `upsert_row` (or similar). There is **no** `find_runs_for_episode` helper — Task 20 implements its own filter on top of `read_index().rows`.
+
+- [ ] **Step 4: Confirm Phase 4 has been run on at least one SO101 episode.** `ls runs/` (in worktree). If empty, Task 30 Step 1 will need to run Phase 4 first; if populated, that step short-circuits.
+
+No commit — findings flow into the next tasks.
+
+---
+
 ## Phase A — Foundation: errors, schemas, profile (Tasks 1–5)
 
 ### Task 1: EXPORT_* error codes
@@ -418,6 +453,9 @@ from mimicanno.errors import ErrorCode, MimicAnnoError
 @dataclass(frozen=True)
 class SourceConfig:
     robot_adapter: Literal["aloha", "koch", "so100", "generic"]
+    # NOTE: SO101 routes through "generic" (no so101.py adapter); spec §5.2's example
+    # YAML mentioning "so101" is outdated. Default profile so101_sarm.yaml uses "generic"
+    # with an embedded generic_adapter_config block.
     pass_through_raw_action: bool
     generic_adapter_config: dict[str, Any] | None = None
 
@@ -819,12 +857,16 @@ def test_round_trip_minimal_segment():
 ### Task 9: build_canonical_episode integrator
 
 **Files:**
+- **Modify (sub-step 0): `mimicanno/io.py`** — add `read_annotation_result(path: Path) -> AnnotationResult` and `read_manifest(path: Path) -> Manifest` JSON loaders. They do not exist yet (Task 0 confirmed). They should validate against the existing JSON schemas (`annotation.schema.json`, `manifest.schema.json`) and return typed dataclasses. Add tests in `tests/io/test_read_annotation_manifest.py` (3-4 tests covering happy path + schema-violation rejection).
 - Modify: `mimicanno/exports/canonical.py` — add `build_canonical_episode`
 - Create: `mimicanno/exports/dataset_layout.py` — episode-path resolution from `meta/info.json`
 - Test: `tests/exports/test_build_canonical.py`
 - Test: `tests/exports/test_dataset_layout.py`
+- Test: `tests/io/test_read_annotation_manifest.py` (new — Step 0 sub-step)
 
 **Steps:**
+
+- [ ] **Step 0: Implement JSON loaders in `mimicanno/io.py` first** (TDD: write tests for the loaders, confirm fail, implement, pass, commit as a separate `feat(io): read_annotation_result + read_manifest JSON loaders` commit before continuing).
 
 - [ ] **Step 1: Write failing test for `dataset_layout`** (resolve `(dataset_root, episode_index) → (parquet_path, row_filter)`):
 
@@ -1121,7 +1163,7 @@ def test_resolve_episode_path_v2_combined_file(tmp_path):
 
 - [ ] **Step 2: Confirm failure.**
 
-- [ ] **Step 3: Implement.** Read `runs/index.json` (existing `mimicanno.runindex` module), filter by episode_id / target_phase / config_hash, return mapping.
+- [ ] **Step 3: Implement.** Use existing `mimicanno.runindex.read_index()` (returns rows with `canonical_name`, `episode_id`, `config_hash`, `target_phase`, `run_hash` etc.), filter the rows in `run_resolution.py` (do not extend `runindex.py` — Task 0 confirmed there's no pre-existing `find_runs_for_episode` helper). Return `dict[episode_index → canonical_name]`.
 
 - [ ] **Step 4: Pass + mypy. Commit**: `feat(phase5/exports): run_resolution (canonical_name per episode)`
 
