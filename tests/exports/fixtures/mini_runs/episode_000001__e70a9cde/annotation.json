@@ -1,0 +1,229 @@
+{
+  "boundaries_url": "boundaries.json",
+  "config_hash": "sha256:e7f99a14c666cf32c8f24ffcedae0d03cbf62dfd72b3b12603071f0ea895f4c1",
+  "episode_id": "episode_000001",
+  "generated_at": "2026-04-30T12:00:00Z",
+  "generator": {
+    "cli_version": "0.1.0",
+    "name": "mimicanno",
+    "pipeline_phase": 4
+  },
+  "input_hash": "sha256:c35c347d1d6119ce01ef231caa4fbb8ee08fc06993c05e89124499ed407dfd65",
+  "model_versions": {},
+  "notes": null,
+  "pipeline_phase": 4,
+  "pipeline_status": {
+    "degrade_reason": null,
+    "degraded_from_phase": null,
+    "object_state_available": false
+  },
+  "run_hash": "sha256:e70a9cde4dc5c1f2da2a015fe416aa2a8f088e789224809ebf71f10a3d2326cc",
+  "schema_version": "1.0",
+  "segments": [
+    {
+      "boundary_confidence": 0.85,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 0.85,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.2
+      },
+      "end_frame": 3,
+      "end_time": 0.2,
+      "episode_id": "episode_000001",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.8,
+      "phase": "idle",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "episode_000001_seg00",
+      "smoothing_ops": [],
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 0.85,
+        "sources": [
+          "episode_start"
+        ],
+        "time": 0.0
+      },
+      "start_frame": 0,
+      "start_time": 0.0,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.86,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 0.86,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.5333333333333333
+      },
+      "end_frame": 8,
+      "end_time": 0.5333333333333333,
+      "episode_id": "episode_000001",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.81,
+      "phase": "approach_object",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "episode_000001_seg01",
+      "smoothing_ops": [],
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 0.86,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.26666666666666666
+      },
+      "start_frame": 4,
+      "start_time": 0.26666666666666666,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.87,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 0.87,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.8
+      },
+      "end_frame": 12,
+      "end_time": 0.8,
+      "episode_id": "episode_000001",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.8200000000000001,
+      "phase": "grasp_object",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "episode_000001_seg02",
+      "smoothing_ops": [],
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 0.87,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.6
+      },
+      "start_frame": 9,
+      "start_time": 0.6,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.88,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 0.88,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 1.0666666666666667
+      },
+      "end_frame": 16,
+      "end_time": 1.0666666666666667,
+      "episode_id": "episode_000001",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.8300000000000001,
+      "phase": "lift_object",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "episode_000001_seg03",
+      "smoothing_ops": [],
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 0.88,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 0.8666666666666667
+      },
+      "start_frame": 13,
+      "start_time": 0.8666666666666667,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    },
+    {
+      "boundary_confidence": 0.89,
+      "end_boundary": {
+        "candidate_id": null,
+        "score": 0.89,
+        "sources": [
+          "episode_end"
+        ],
+        "time": 1.2666666666666666
+      },
+      "end_frame": 19,
+      "end_time": 1.2666666666666666,
+      "episode_id": "episode_000001",
+      "evidence": null,
+      "failure_flags": [],
+      "label_source": "signals_only",
+      "label_version": "manipulation.v1",
+      "object": null,
+      "object_state_unavailable": true,
+      "object_track_ids": [],
+      "overall_confidence": 0.8400000000000001,
+      "phase": "retreat",
+      "reviewed": false,
+      "reviewer_id": null,
+      "segment_id": "episode_000001_seg04",
+      "smoothing_ops": [],
+      "start_boundary": {
+        "candidate_id": null,
+        "score": 0.89,
+        "sources": [
+          "gripper_delta"
+        ],
+        "time": 1.1333333333333333
+      },
+      "start_frame": 17,
+      "start_time": 1.1333333333333333,
+      "target": null,
+      "verb": null,
+      "vlm_confidence": null
+    }
+  ],
+  "signals_url": "signals.json",
+  "task": {
+    "text": "mini test",
+    "version": null
+  }
+}

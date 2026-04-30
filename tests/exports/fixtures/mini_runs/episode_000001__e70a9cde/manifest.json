@@ -1,0 +1,30 @@
+{
+  "artifacts": [],
+  "compat": {},
+  "config_hash": "sha256:e7f99a14c666cf32c8f24ffcedae0d03cbf62dfd72b3b12603071f0ea895f4c1",
+  "duration_sec": 1.3333333333333333,
+  "episode_id": "episode_000001",
+  "fps": 15.0,
+  "generated_at": "2026-04-30T12:00:00Z",
+  "generator": {
+    "cli_version": "0.1.0",
+    "name": "mimicanno",
+    "pipeline_phase": 4
+  },
+  "input_hash": "sha256:c35c347d1d6119ce01ef231caa4fbb8ee08fc06993c05e89124499ed407dfd65",
+  "inputs": {},
+  "model_versions": {},
+  "pipeline_params": {},
+  "pipeline_status": {
+    "degrade_reason": null,
+    "degraded_from_phase": null,
+    "object_state_available": false
+  },
+  "run_hash": "sha256:e70a9cde4dc5c1f2da2a015fe416aa2a8f088e789224809ebf71f10a3d2326cc",
+  "schema_version": "1.0",
+  "task": {
+    "text": "mini test",
+    "version": null
+  },
+  "time_base": "frame"
+}

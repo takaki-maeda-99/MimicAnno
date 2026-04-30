@@ -1,0 +1,38 @@
+{
+  "runs": [
+    {
+      "config_hash_short": "58a314a1",
+      "episode_id": "episode_000000",
+      "generated_at": "2026-04-30T12:00:00Z",
+      "input_hash_short": "f806c7c5",
+      "manifest_url": "episode_000000__fd2b8004/manifest.json",
+      "pipeline_phase": 4,
+      "run_hash": "sha256:fd2b80042203b8c77c685ca90934121fde66ff2b23753a3df051a1fdebb3ef8a",
+      "run_hash_short": "fd2b8004",
+      "task_text": "mini test"
+    },
+    {
+      "config_hash_short": "e7f99a14",
+      "episode_id": "episode_000001",
+      "generated_at": "2026-04-30T12:00:00Z",
+      "input_hash_short": "c35c347d",
+      "manifest_url": "episode_000001__e70a9cde/manifest.json",
+      "pipeline_phase": 4,
+      "run_hash": "sha256:e70a9cde4dc5c1f2da2a015fe416aa2a8f088e789224809ebf71f10a3d2326cc",
+      "run_hash_short": "e70a9cde",
+      "task_text": "mini test"
+    },
+    {
+      "config_hash_short": "7fa53b24",
+      "episode_id": "episode_000002",
+      "generated_at": "2026-04-30T12:00:00Z",
+      "input_hash_short": "c2fe1914",
+      "manifest_url": "episode_000002__392200ec/manifest.json",
+      "pipeline_phase": 4,
+      "run_hash": "sha256:392200ec5fc905e38d6aaed09c575c8e7bb7eefee8fb3befff426cfd65a0fbdb",
+      "run_hash_short": "392200ec",
+      "task_text": "mini test"
+    }
+  ],
+  "schema_version": "1.0"
+}
