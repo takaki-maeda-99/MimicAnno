@@ -49,16 +49,34 @@ class TestLoad:
         result = load_episode_parquet(p)
         assert result.table.num_rows == 1
 
-    def test_missing_state_raises(self, tmp_path: Path):
-        bad = pa.table(
+    def test_missing_timestamp_raises(self, tmp_path: Path):
+        # timestamp is the only universally-required column
+        bad = pa.table({"action": pa.array([[0.0]])})
+        p = _write_parquet(bad, tmp_path / "no_ts.parquet")
+        with pytest.raises(ParquetLoadError, match="timestamp"):
+            load_episode_parquet(p)
+
+    def test_split_state_layout_loads(self, tmp_path: Path):
+        """SO101 / LeRobot v3 with observation.state split into per-field columns
+        (no aggregated `observation.state` column). Loader must accept this —
+        adapters that need specific columns validate them themselves."""
+        n = 10
+        split = pa.table(
             {
-                "action": pa.array([[0.0]]),
-                "timestamp": pa.array([0.0]),
+                "timestamp": pa.array((np.arange(n) / 30.0).tolist()),
+                "frame_index": pa.array(list(range(n))),
+                "episode_index": pa.array([0] * n),
+                "observation.state.joint_pos": pa.array([[0.0] * 6 for _ in range(n)]),
+                "observation.state.ee_pos": pa.array([[0.0] * 3 for _ in range(n)]),
+                "observation.state.ee_rotvec": pa.array([[0.0] * 3 for _ in range(n)]),
+                "observation.state.gripper_pos": pa.array([0.0] * n),
+                "action.joint_pos": pa.array([[0.0] * 6 for _ in range(n)]),
+                "action.gripper_pos": pa.array([0.0] * n),
             }
         )
-        p = _write_parquet(bad, tmp_path / "bad.parquet")
-        with pytest.raises(ParquetLoadError, match=r"observation\.state"):
-            load_episode_parquet(p)
+        p = _write_parquet(split, tmp_path / "so101.parquet")
+        result = load_episode_parquet(p)
+        assert result.table.num_rows == n
 
 
 class TestResolveFps:

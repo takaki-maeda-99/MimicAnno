@@ -23,7 +23,13 @@ class LoadedEpisode:
     sha256: str  # "sha256:<hex>"
 
 
-REQUIRED_COLUMNS: tuple[str, ...] = ("observation.state", "timestamp")
+# Only `timestamp` is universally required at the loader layer. Adapter-specific
+# state columns (e.g. legacy aggregated `observation.state`, or split
+# `observation.state.{joint_pos, ee_pos, ...}` for LeRobot v3 / SO101) are the
+# adapter's responsibility — they raise their own error on first access if
+# missing. This decoupling lets one loader handle both v2 (aggregated state
+# vector) and v3 (split per-field) parquet layouts.
+REQUIRED_COLUMNS: tuple[str, ...] = ("timestamp",)
 # action is optional in Phase 1 (spec §7.1)
 OPTIONAL_COLUMNS: tuple[str, ...] = ("action", "frame_index", "episode_index")
 
