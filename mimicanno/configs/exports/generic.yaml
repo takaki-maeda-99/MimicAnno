@@ -1,0 +1,41 @@
+# mimicanno/configs/exports/generic.yaml
+# Stub profile for arbitrary LeRobot v3 datasets. Fill in generic_adapter_config
+# to point at your dataset's column names, then customize gates as needed.
+schema_version: "1"
+name: generic
+description: |
+  Generic LeRobot v3 export stub. Replace generic_adapter_config fields marked
+  <REQUIRED> with your dataset's actual column names; pick gripper_scale_min /
+  gripper_scale_max to bracket your gripper's operating range.
+source:
+  robot_adapter: generic
+  pass_through_raw_action: true
+  generic_adapter_config:
+    schema_version: "0.2.0"
+    name: generic
+    gripper_column: <REQUIRED>           # e.g. observation.state.gripper_pos
+    gripper_scale_min: 0.0
+    gripper_scale_max: 1.0               # tune to your dataset's gripper range
+    eef_xyz_column: null                 # set to e.g. observation.state.ee_pos
+    eef_rotvec_column: null              # mutually exclusive with eef_quat_column
+    eef_quat_column: null                # mutually exclusive with eef_rotvec_column
+canonical:
+  delta_basis: body_frame_t
+  rotation_repr: rotvec
+  gripper_source: observation
+sink:
+  writer: lerobot_v3
+  params:
+    annotation_prefix: mimicanno
+    subtask_registry_path: meta/subtasks.parquet
+    extra_per_frame_columns:
+      - {name: mimicanno.ee_delta_6d, source: ee_delta_6d, dtype: float32}
+      - {name: mimicanno.gripper_normalized, source: gripper_normalized, dtype: float32}
+      - {name: mimicanno.gripper_delta, source: gripper_delta, dtype: float32}
+sidecar:
+  enabled: true
+  path: meta/mimicanno_segments.parquet
+gates:
+  require_reviewed: false
+  forbid_degraded_pipeline: false
+  forbid_unlabeled_segments: false

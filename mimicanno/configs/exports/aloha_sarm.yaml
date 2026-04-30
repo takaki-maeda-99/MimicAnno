@@ -1,0 +1,32 @@
+# mimicanno/configs/exports/aloha_sarm.yaml
+# Default ALOHA -> LeRobot v3 SARM-trainable export profile.
+# Uses the dedicated AlohaAdapter; no generic_adapter_config is required.
+schema_version: "1"
+name: aloha_sarm
+description: |
+  Default ALOHA -> LeRobot v3 SARM-trainable export.
+  Body-frame ee_delta_6d + gripper, mimicanno-prefixed annotation columns.
+source:
+  robot_adapter: aloha
+  pass_through_raw_action: true
+  generic_adapter_config: null
+canonical:
+  delta_basis: body_frame_t
+  rotation_repr: rotvec
+  gripper_source: observation
+sink:
+  writer: lerobot_v3
+  params:
+    annotation_prefix: mimicanno
+    subtask_registry_path: meta/subtasks.parquet
+    extra_per_frame_columns:
+      - {name: mimicanno.ee_delta_6d, source: ee_delta_6d, dtype: float32}
+      - {name: mimicanno.gripper_normalized, source: gripper_normalized, dtype: float32}
+      - {name: mimicanno.gripper_delta, source: gripper_delta, dtype: float32}
+sidecar:
+  enabled: true
+  path: meta/mimicanno_segments.parquet
+gates:
+  require_reviewed: false
+  forbid_degraded_pipeline: false
+  forbid_unlabeled_segments: false

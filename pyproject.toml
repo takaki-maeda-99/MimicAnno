@@ -53,6 +53,9 @@ packages = ["mimicanno"]
 "mimicanno/jsonschemas/export_profile.schema.json" = "mimicanno/jsonschemas/export_profile.schema.json"
 "mimicanno/jsonschemas/export_manifest.schema.json" = "mimicanno/jsonschemas/export_manifest.schema.json"
 "mimicanno/jsonschemas/mimicanno_segments.schema.json" = "mimicanno/jsonschemas/mimicanno_segments.schema.json"
+"mimicanno/configs/exports/so101_sarm.yaml" = "mimicanno/configs/exports/so101_sarm.yaml"
+"mimicanno/configs/exports/aloha_sarm.yaml" = "mimicanno/configs/exports/aloha_sarm.yaml"
+"mimicanno/configs/exports/generic.yaml" = "mimicanno/configs/exports/generic.yaml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
