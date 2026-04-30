@@ -6,6 +6,12 @@ config_hash_filter, output_mode, mimicanno_version, generated_at, cli_args,
 host) so that the bulk-export idempotency short-circuit (spec §9.1) and
 downstream consumers can verify provenance.
 
+Privacy note (S7): paths under ``$HOME`` in ``cli_args`` and
+``source_dataset_path`` / ``runs_root`` are rewritten to ``$HOME/...`` form so
+publishing the resulting dataset (e.g. uploading to a hub) does not leak the
+absolute home path. This is best-effort sanitization — only ``$HOME`` is
+collapsed; other absolute paths (``/abs/path/...``) are preserved as-is.
+
 Validated against ``mimicanno/jsonschemas/export_manifest.schema.json`` before
 write; schema mismatch raises :class:`MimicAnnoError` with code
 ``EXPORT_INTERNAL_MANIFEST_INVALID`` (this is a mimicanno bug, not user input —
@@ -16,6 +22,7 @@ distinct from ``EXPORT_PROFILE_INVALID`` which surfaces malformed user
 from __future__ import annotations
 
 import json
+import os
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -27,6 +34,32 @@ from mimicanno.exports.profile import ExportProfile
 from mimicanno.io import write_json_atomic
 
 EXPORT_MANIFEST_FILENAME = ".mimicanno-export.json"
+
+
+def _user_home() -> str:
+    """Resolved current-user $HOME, with no trailing slash. Empty string if
+    HOME is unset or empty (in which case _sanitize_home is a no-op)."""
+    home = os.path.expanduser("~")
+    if not home or home == "~":
+        return ""
+    return home.rstrip("/")
+
+
+def _sanitize_home(s: str, home: str) -> str:
+    """Replace a leading ``$HOME`` path with the literal token ``$HOME``.
+
+    Examples (with home=``/home/alice``):
+        ``/home/alice/dataset`` → ``$HOME/dataset``
+        ``/abs/elsewhere``      → ``/abs/elsewhere`` (unchanged)
+        ``--out``               → ``--out`` (unchanged)
+    """
+    if not home or not s:
+        return s
+    if s == home:
+        return "$HOME"
+    if s.startswith(home + "/"):
+        return "$HOME" + s[len(home):]
+    return s
 
 
 def _load_schema() -> dict[str, Any]:
@@ -58,6 +91,7 @@ def write_export_manifest(
     sidecar_schema_version: str = "1",
 ) -> Path:
     """Write ``out / .mimicanno-export.json`` per spec §8 and return its path."""
+    home = _user_home()
     payload: dict[str, Any] = {
         "schema_version": "1",
         "kind": "mimicanno.export",
@@ -66,8 +100,8 @@ def write_export_manifest(
             "hash": profile.hash(),
             "schema_version": profile.schema_version,
         },
-        "source_dataset_path": str(source_dataset),
-        "runs_root": str(runs_root),
+        "source_dataset_path": _sanitize_home(str(source_dataset), home),
+        "runs_root": _sanitize_home(str(runs_root), home),
         "target_phase": target_phase,
         "config_hash_filter": config_hash_filter,
         "output_mode": output_mode,
@@ -78,7 +112,7 @@ def write_export_manifest(
         "sidecar_schema_version": sidecar_schema_version,
         "mimicanno_version": mimicanno_version,
         "generated_at": generated_at,
-        "cli_args": list(cli_args),
+        "cli_args": [_sanitize_home(a, home) for a in cli_args],
         "host": dict(host),
     }
 

@@ -112,7 +112,15 @@ class CanonicalEpisode:
     gripper_normalized: np.ndarray       # (T,)
     gripper_delta: np.ndarray            # (T,)
 
-    # Per-frame raw (optional pass-through)
+    # Per-frame raw (optional pass-through). The sink writer does NOT
+    # consume these — it re-reads the source parquet and appends columns
+    # there directly. The fields exist for two purposes:
+    # (1) Validation: their None-vs-not-None status confirms the
+    #     `pass_through_raw_action=true` profile invariant before the sink
+    #     runs, raising EXPORT_RAW_ACTION_MISSING fail-fast at the IR
+    #     boundary instead of deep inside parquet write.
+    # (2) Debug / inspection: tests and downstream tools can introspect
+    #     what the export *would* have written without re-reading parquet.
     raw_action: np.ndarray | None
     raw_action_columns: tuple[str, ...] | None
 

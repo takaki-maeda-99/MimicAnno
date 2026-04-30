@@ -442,6 +442,15 @@ def _resolve_auto_model_class() -> Any:
     `AutoModelForImageTextToText`. Try the 5.x name first; fall back to the
     4.x name. Raises ImportError if neither is available (very old or very
     broken transformers install).
+
+    Compatibility note: transformers 4.x and 5.x are *expected* to expose
+    these names mutually exclusively — i.e. on a 5.x install
+    `AutoModelForVision2Seq` is absent and on a 4.x install
+    `AutoModelForImageTextToText` is absent. We bias towards 5.x because the
+    Phase 5 follow-up real-data smoke ran on transformers 5.6.2 + Gemma 4
+    E2B-it. If a transformers version ever exposes both names with
+    different behavior, this resolver picks 5.x silently — adjust the
+    ordering here if 4.x compatibility becomes the priority.
     """
     import transformers
     for name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
@@ -540,6 +549,11 @@ class LocalGemmaVLMLabeler:
         # transformers 5.x chat-template path: messages with explicit image
         # content blocks → apply_chat_template inserts the right number of
         # image placeholder tokens that align with `images=keyframes` below.
+        # Verified end-to-end on transformers 5.6.2 + Gemma 4 E2B-it
+        # (Phase 5 follow-up real-data smoke). transformers 4.x is also
+        # expected to work via apply_chat_template — most 4.x VLM
+        # processors implemented this method too — but has not been
+        # exercised in CI; if you maintain 4.x support, add a smoke test.
         messages = build_messages(
             request, attempt=attempt, last_reject_reason=last_reject_reason
         )

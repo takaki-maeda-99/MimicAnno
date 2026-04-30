@@ -81,6 +81,52 @@ def test_optional_config_hash_filter(tmp_path: Path) -> None:
     assert raw["config_hash_filter"] == "sha256:" + "c" * 64
 
 
+def test_home_paths_sanitized_in_provenance(tmp_path: Path, monkeypatch) -> None:
+    """S7: $HOME-prefixed paths in cli_args / source_dataset_path / runs_root
+    are rewritten to $HOME/... so publishing the dataset doesn't leak the
+    user's absolute home path."""
+    fake_home = "/home/alice_test"
+    monkeypatch.setenv("HOME", fake_home)
+    out = tmp_path / "OUT"
+    out.mkdir()
+    kwargs = _kwargs(tmp_path)
+    kwargs["source_dataset"] = Path(f"{fake_home}/datasets/SO101")
+    kwargs["runs_root"] = Path(f"{fake_home}/runs")
+    kwargs["cli_args"] = [
+        "annotate",
+        "--video", f"{fake_home}/data/ep0.mp4",
+        "--task", "pick",
+        "--robot", "so100",
+    ]
+    write_export_manifest(out, **kwargs)
+    raw = json.loads((out / ".mimicanno-export.json").read_text())
+    assert raw["source_dataset_path"] == "$HOME/datasets/SO101"
+    assert raw["runs_root"] == "$HOME/runs"
+    assert raw["cli_args"] == [
+        "annotate",
+        "--video", "$HOME/data/ep0.mp4",
+        "--task", "pick",
+        "--robot", "so100",
+    ]
+
+
+def test_non_home_paths_preserved_in_provenance(tmp_path: Path, monkeypatch) -> None:
+    """Non-$HOME absolute paths and bare flags are left as-is (no
+    over-aggressive sanitization)."""
+    monkeypatch.setenv("HOME", "/home/alice_test")
+    out = tmp_path / "OUT"
+    out.mkdir()
+    kwargs = _kwargs(tmp_path)
+    kwargs["source_dataset"] = Path("/srv/datasets/foo")
+    kwargs["runs_root"] = Path("/var/lib/mimicanno/runs")
+    kwargs["cli_args"] = ["--target-phase", "4", "--profile", "so101_sarm"]
+    write_export_manifest(out, **kwargs)
+    raw = json.loads((out / ".mimicanno-export.json").read_text())
+    assert raw["source_dataset_path"] == "/srv/datasets/foo"
+    assert raw["runs_root"] == "/var/lib/mimicanno/runs"
+    assert raw["cli_args"] == ["--target-phase", "4", "--profile", "so101_sarm"]
+
+
 def test_invalid_target_phase_rejected(tmp_path: Path) -> None:
     """Schema enforces target_phase in [1, 4]."""
     out = tmp_path / "OUT"

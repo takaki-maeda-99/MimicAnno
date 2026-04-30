@@ -353,27 +353,28 @@ def bulk_export(
 
         # Step 9: copy meta verbatim (symlink/copy modes only — for in_place,
         # the source's meta/* files are already where they need to be and we
-        # only overwrite the files the sink writer touches).
+        # only overwrite the files the sink writer touches). Exclusions are
+        # derived from the profile so that a profile renaming the registry
+        # path (e.g. `subtask_registry_path: meta/custom_subtasks.parquet`)
+        # still excludes the right file.
         if output_mode != "in_place":
-            copy_meta_verbatim(dataset_root, staging)
+            registry_rel = effective_profile.sink.params.get(
+                "subtask_registry_path", "meta/subtasks.parquet"
+            )
+            sidecar_rel = effective_profile.sidecar.path
+            registry_name = Path(registry_rel).name
+            sidecar_name = Path(sidecar_rel).name
+            exclusions = frozenset({
+                registry_name, sidecar_name, "info.json", "episodes",
+            })
+            copy_meta_verbatim(dataset_root, staging, exclusions=exclusions)
 
         # Step 10: provenance manifest.
-        # subtask_count = number of unique phases across exported episodes
-        # (matches meta/subtasks.parquet row count via the registry).
-        unique_phases: set[str] = set()
-        gap_present = False
-        for ep in episodes:
-            covered = [False] * ep.num_frames
-            for seg in ep.segments:
-                unique_phases.add(seg.phase)
-                for f in range(seg.start_frame, seg.end_frame + 1):
-                    if 0 <= f < ep.num_frames:
-                        covered[f] = True
-            if not all(covered):
-                gap_present = True
-        subtask_count = len(unique_phases) + (
-            1 if gap_present and "unlabeled" not in unique_phases else 0
-        )
+        # subtask_count is exactly len(registry) — share the single source of
+        # truth with the sink writer (avoids drift if either side's
+        # gap-detection / first-appearance logic ever changes).
+        from mimicanno.exports.sink_lerobot_v3 import compute_subtasks_registry
+        subtask_count = len(compute_subtasks_registry(episodes))
 
         write_export_manifest(
             staging,

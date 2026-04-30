@@ -146,6 +146,26 @@ def _episodes_have_coverage_gaps(episodes: list[CanonicalEpisode]) -> bool:
     return False
 
 
+def compute_subtasks_registry(episodes: list[CanonicalEpisode]) -> dict[str, int]:
+    """Build the ``{phase → subtask_index}`` registry that
+    ``meta/subtasks.parquet`` will materialize (spec §4.2).
+
+    Single source of truth shared by ``LeRobotV3SinkWriter._write_subtasks_registry``
+    (which writes the parquet) and ``bulk_export`` (which uses ``len(...)`` for
+    the ``subtask_count`` provenance field). Order is first-appearance across
+    all episodes' segments, scanned in ``episode_index`` order then segment
+    order. ``unlabeled`` is injected when needed for gap-filling.
+    """
+    registry: dict[str, int] = {}
+    for ep in sorted(episodes, key=lambda e: e.episode_index):
+        for seg in ep.segments:
+            if seg.phase not in registry:
+                registry[seg.phase] = len(registry)
+    if _episodes_have_coverage_gaps(episodes) and "unlabeled" not in registry:
+        registry["unlabeled"] = len(registry)
+    return registry
+
+
 # ---------------------------------------------------------------------------
 # Sidecar parquet (Task 11, spec §3.1)
 # ---------------------------------------------------------------------------
@@ -601,17 +621,7 @@ class LeRobotV3SinkWriter:
         when needed for gap-filling (spec §4.1) so the data parquet writer can
         always assign every frame a valid subtask_index.
         """
-        registry: dict[str, int] = {}
-        for ep in sorted(episodes, key=lambda e: e.episode_index):
-            for seg in ep.segments:
-                if seg.phase not in registry:
-                    registry[seg.phase] = len(registry)
-
-        # Detect gap risk: any episode where the union of segment ranges does
-        # not cover [0, num_frames). If so, ``unlabeled`` must be in the
-        # registry so the data writer can assign gap frames.
-        if _episodes_have_coverage_gaps(episodes) and "unlabeled" not in registry:
-            registry["unlabeled"] = len(registry)
+        registry = compute_subtasks_registry(episodes)
 
         rows = [
             {"subtask": phase, "subtask_index": idx, "description": ""}
