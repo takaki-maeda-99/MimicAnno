@@ -1,5 +1,7 @@
 # MimicAnno
 
+**English** | [日本語](README.ja.md)
+
 Offline subtask annotation for robot imitation-learning episodes. Take a LeRobot v3 dataset, get back per-frame subtask labels (`approach_object`, `grasp_object`, …) and a SARM-trainable parquet output.
 
 ```
