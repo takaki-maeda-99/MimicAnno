@@ -104,6 +104,11 @@ def annotate(
         3, "--vlm-max-retries",
         help="Max attempts per segment before unknown_fallback.",
     ),
+    vlm_device: str | None = typer.Option(
+        None, "--vlm-device",
+        help="Device for VLM model load (cpu|cuda|cuda:N). Default: VLMConfig "
+             "default (cuda). Use cpu when no GPU or driver mismatch.",
+    ),
     offline: bool = typer.Option(
         False, "--offline",
         help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
@@ -153,13 +158,16 @@ def annotate(
             if vlm_model is None:
                 raise VLMModelRequired(target_phase=target_phase)
             preflight = resolve_vlm_model(vlm_model, offline=offline)
-            vlm_config = VLMConfig(
+            vlm_config_kwargs: dict[str, object] = dict(
                 model_id=preflight.model_id,
                 resolved_checkpoint=preflight.resolved_checkpoint,
                 fixture_path=preflight.fixture_path,
                 keyframes_per_segment=vlm_keyframes,
                 max_retries=vlm_max_retries,
             )
+            if vlm_device is not None:
+                vlm_config_kwargs["device"] = vlm_device
+            vlm_config = VLMConfig(**vlm_config_kwargs)
             if vlm_config.keyframes_per_segment < 1:
                 raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
         except MimicAnnoError as e:
