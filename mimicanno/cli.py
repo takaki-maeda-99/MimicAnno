@@ -108,6 +108,16 @@ def annotate(
         3, "--vlm-max-retries",
         help="Max attempts per segment before unknown_fallback.",
     ),
+    vlm_device: str | None = typer.Option(
+        None, "--vlm-device",
+        help="Device for VLM model load (cpu|cuda|cuda:N). Default: VLMConfig "
+             "default (cuda). Use cpu when no GPU or driver mismatch.",
+    ),
+    vlm_timeout_sec: float | None = typer.Option(
+        None, "--vlm-timeout-sec",
+        help="Per-attempt inference timeout (sec). Default: VLMConfig default "
+             "(30s, sized for GPU). Bump to 300+ for CPU runs.",
+    ),
     offline: bool = typer.Option(
         False, "--offline",
         help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
@@ -164,6 +174,12 @@ def annotate(
                 keyframes_per_segment=vlm_keyframes,
                 max_retries=vlm_max_retries,
             )
+            # Apply optional CLI overrides via dataclasses.replace for typed
+            # kwargs (mypy --strict won't accept **dict[str, object] expansion).
+            if vlm_device is not None:
+                vlm_config = replace(vlm_config, device=vlm_device)
+            if vlm_timeout_sec is not None:
+                vlm_config = replace(vlm_config, timeout_sec=vlm_timeout_sec)
             if vlm_config.keyframes_per_segment < 1:
                 raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
         except MimicAnnoError as e:
