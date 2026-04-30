@@ -239,11 +239,15 @@ def bulk_export(
         loaded[ep_idx] = (manifest, annotation)
         run_hashes[ep_idx] = manifest.run_hash
 
-    # Step 4: idempotency check (only meaningful for symlink/copy out paths
-    # that are distinct from dataset_root, but the manifest match works for
-    # in_place too if .mimicanno-export.json already exists).
-    if output_mode != "in_place" and out.exists() and not force:
-        existing = read_export_manifest(out)
+    # Step 4: idempotency check (spec §9.1). Applies to all output modes —
+    # for symlink/copy the manifest lives at <out>/.mimicanno-export.json;
+    # for in_place it lives at <dataset_root>/.mimicanno-export.json. A
+    # match short-circuits the entire export (no rewrite, no backup, no
+    # stale-data window) — important for in_place because each non-idempotent
+    # run accumulates another `.mimicanno-backup-<ISO>/` directory.
+    manifest_dir = dataset_root if output_mode == "in_place" else out
+    if not force and manifest_dir.exists():
+        existing = read_export_manifest(manifest_dir)
         if existing is not None:
             existing_profile_hash = existing.get("profile", {}).get("hash")
             existing_runs_used = existing.get("runs_used", {})
@@ -259,9 +263,9 @@ def bulk_export(
                 )
                 sys.stderr.flush()
                 return ExportResult(
-                    out_path=out,
-                    manifest_path=out / ".mimicanno-export.json",
-                    sidecar_path=out / "meta" / "mimicanno_segments.parquet",
+                    out_path=manifest_dir,
+                    manifest_path=manifest_dir / ".mimicanno-export.json",
+                    sidecar_path=manifest_dir / "meta" / "mimicanno_segments.parquet",
                     episode_count=int(existing.get("episode_count", 0)),
                     subtask_count=int(existing.get("subtask_count", 0)),
                     runs_used=dict(runs_used),
@@ -271,8 +275,8 @@ def bulk_export(
             raise MimicAnnoError(
                 ErrorCode.EXPORT_OUT_EXISTS,
                 (
-                    f"output {out} already contains a different export; "
-                    f"pass --force to replace"
+                    f"output {manifest_dir} already contains a different "
+                    f"export; pass --force to replace"
                 ),
                 {
                     "existing": existing,

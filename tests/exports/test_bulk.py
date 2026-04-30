@@ -323,6 +323,39 @@ def test_in_place_creates_backup(tmp_path: Path) -> None:
     assert (dataset_root / "meta" / "mimicanno_segments.parquet").is_file()
 
 
+def test_in_place_idempotency_short_circuits_no_extra_backup(tmp_path: Path) -> None:
+    """Spec §9.1: a second in_place run with the same profile + runs_used
+    must short-circuit (reused=True) and NOT create another backup dir."""
+    dataset_root, runs_root, _ = _build_fixture(tmp_path, episode_count=2)
+    profile = make_profile(tmp_dir=tmp_path)
+
+    first = bulk_export(
+        dataset_root=dataset_root,
+        runs_root=runs_root,
+        target_phase=4,
+        profile=profile,
+        out=dataset_root,
+        output_mode="in_place",
+    )
+    assert first.reused is False
+    backups_after_first = sorted(dataset_root.glob(".mimicanno-backup-*"))
+    assert len(backups_after_first) == 1
+
+    second = bulk_export(
+        dataset_root=dataset_root,
+        runs_root=runs_root,
+        target_phase=4,
+        profile=profile,
+        out=dataset_root,
+        output_mode="in_place",
+    )
+    assert second.reused is True
+    backups_after_second = sorted(dataset_root.glob(".mimicanno-backup-*"))
+    assert backups_after_second == backups_after_first, (
+        "second idempotent run must not create another backup directory"
+    )
+
+
 def test_dataset_not_found(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
