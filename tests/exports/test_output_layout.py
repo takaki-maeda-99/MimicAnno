@@ -6,6 +6,7 @@ Covers spec §7.1 (symlink), §7.2 (copy), §7.3 (in-place), §7.4 (atomicity).
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,73 @@ def test_finalize_symlink_success_overwrites_existing_out(tmp_path: Path) -> Non
     # Old contents replaced.
     assert not (out / "stale.txt").exists()
     assert (out / "videos").is_symlink()
+
+
+def test_finalize_replaces_existing_out_atomically_no_missing_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §7.4: replacing an existing OUT must never leave a window where
+    OUT does not exist (a concurrent reader — e.g. SARM training reading the
+    dataset — must see either the old or the new tree, never FileNotFoundError).
+
+    We expose the window deterministically by patching `shutil.rmtree` with
+    a slowed-down version (sleeps 100ms before returning). A reader thread
+    polls `out.is_dir()` continuously through finalize. If finalize used a
+    naive `rmtree(out); os.replace(staging, out)` sequence, every poll
+    during the 100ms sleep would observe `is_dir()=False`. The atomic
+    finalize keeps OUT present by renaming it aside before publishing.
+    """
+    import threading
+    import time as _time
+
+    import mimicanno.exports.output_layout as ol_module
+
+    source = tmp_path / "src"
+    out = tmp_path / "out"
+    _make_source_dataset(source)
+
+    out.mkdir()
+    (out / "OLD.marker").write_text("old")
+
+    real_rmtree = shutil.rmtree
+
+    def slow_rmtree(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # Sleep AFTER deletion so the test window matches the real bug —
+        # the gap between rmtree returning and os.replace running.
+        result = real_rmtree(*args, **kwargs)
+        _time.sleep(0.1)
+        return result
+
+    monkeypatch.setattr(ol_module.shutil, "rmtree", slow_rmtree)
+
+    staging = prepare_layout("symlink", source, out)
+
+    out_present_observations: list[bool] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            out_present_observations.append(out.is_dir())
+            _time.sleep(0.001)
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    try:
+        finalize("symlink", source, out, staging, success=True)
+    finally:
+        stop.set()
+        t.join(timeout=2.0)
+
+    assert out.is_dir()
+    assert (out / "videos").is_symlink()
+    assert not (out / "OLD.marker").exists()
+    missing = out_present_observations.count(False)
+    assert missing == 0, (
+        f"OUT went missing during finalize "
+        f"({missing} of {len(out_present_observations)} polls saw FileNotFound). "
+        "Atomic publish requires a rename-aside-then-replace dance, not "
+        "rmtree-then-replace."
+    )
 
 
 def test_finalize_symlink_failure_keeps_staging(tmp_path: Path) -> None:

@@ -137,14 +137,38 @@ def finalize(
         raise ValueError(f"mode={mode!r} requires `out`")
     if not success:
         return
-    # Remove an existing OUT atomically: os.replace overwrites a target file
-    # but rejects a non-empty target directory. So clear the dir first.
+    # Atomic publish (spec §7.4): a concurrent reader (e.g. a SARM training
+    # job that opened the dataset before re-export) must always see EITHER
+    # the old tree or the new tree, never a missing-OUT window. Naive
+    # `rmtree(out); os.replace(staging, out)` opens a window of arbitrary
+    # length (rmtree of N files takes O(N)). The rename-aside-then-replace
+    # dance keeps OUT continuously present:
+    #
+    #   1. rename existing OUT to a sibling stash (atomic);
+    #   2. os.replace(staging, OUT) — atomic; OUT is now the new tree;
+    #   3. rmtree the stash on a best-effort basis.
+    #
+    # `os.replace` rejects a non-empty target directory on POSIX, so the
+    # stash rename is essential — without step 1 the replace would fail.
     if out.exists() or out.is_symlink():
         if out.is_symlink() or out.is_file():
             out.unlink()
+            os.replace(staging, out)
         else:
-            shutil.rmtree(out)
-    os.replace(staging, out)
+            stash = out.parent / f"{out.name}.old.{os.getpid()}"
+            # Defensive: if a previous crashed run left a same-pid stash, drop it.
+            if stash.exists():
+                shutil.rmtree(stash)
+            os.replace(out, stash)            # OUT-was → stash (atomic)
+            try:
+                os.replace(staging, out)      # staging → OUT     (atomic)
+            except OSError:
+                # Restore the old tree if the publish failed.
+                os.replace(stash, out)
+                raise
+            shutil.rmtree(stash, ignore_errors=True)
+    else:
+        os.replace(staging, out)
 
 
 def copy_meta_verbatim(
