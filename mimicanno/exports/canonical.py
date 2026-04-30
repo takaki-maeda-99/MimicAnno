@@ -18,7 +18,7 @@ from typing import Literal
 import numpy as np
 import yaml  # type: ignore[import-untyped]
 
-from mimicanno import __version__ as _MIMICANNO_VERSION  # noqa: N812
+from mimicanno.__version__ import __version__ as _MIMICANNO_VERSION  # noqa: N812
 from mimicanno.adapters.aloha import AlohaAdapter
 from mimicanno.adapters.base import RobotAdapter
 from mimicanno.adapters.generic import GenericAdapter

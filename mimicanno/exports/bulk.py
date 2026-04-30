@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from mimicanno import __version__ as _MIMICANNO_VERSION  # noqa: N812
+from mimicanno.__version__ import __version__ as _MIMICANNO_VERSION  # noqa: N812
 from mimicanno.errors import ErrorCode, MimicAnnoError
 from mimicanno.exports.canonical import (
     CanonicalEpisode,
