@@ -326,7 +326,7 @@ One row per segment. Schema (Arrow logical types):
 | `object_state_unavailable` | `bool` | parent §6.1 |
 | `object_track_ids` | `list<string>` | empty list allowed |
 | `label_version` | `string` | e.g. `manipulation.v1` |
-| `boundary_confidence` | `float32` | derived from start/end BoundaryRef.score |
+| `boundary_confidence` | `float32` | `min(start_boundary.score, end_boundary.score)` per parent §6.1 |
 | `vlm_confidence` | `float32` (nullable) | None for Phase 1 runs |
 | `overall_confidence` | `float32` | parent §6.4 (reserved phases = 0.0) |
 | `evidence` | `string` (nullable) | parent §6.1 |
@@ -406,6 +406,8 @@ For each per-episode metadata row, three list columns are added (with `<annotati
 | `mimicanno_subtask_end_frames` | `list<int64>` | inclusive |
 
 If `profile.sink.params.annotation_prefix` is `null`, the columns use the bare `subtask_names` / `subtask_start_frames` / `subtask_end_frames` names instead. The SARM `_load_episode_annotations` `col(...)` fallback reads either form.
+
+**Bare-prefix collision:** `annotation_prefix: null` is intended for datasets that do **not** already carry native LeRobot `subtask_*` list columns. If the source episodes parquet already has those columns (some upstream LeRobot tooling may add them), bare-prefix mode will silently overwrite them. Implementation must detect this case and raise `EXPORT_SINK_VALIDATION_FAILED` with a hint to set `annotation_prefix: mimicanno` (or another non-null prefix) instead. Default profiles all use the `mimicanno` prefix to avoid this hazard.
 
 ### 4.4 `meta/info.json`
 
@@ -680,6 +682,10 @@ Requires `--yes-i-mean-it` co-flag → otherwise `EXPORT_INPLACE_NO_CONFIRM`.
 
 If any per-file write fails partway: backup remains, partially-written data files are reverted from backup if possible, error is raised with the backup path.
 
+**Repeated in-place exports:** if a previous `mimicanno export --in-place` ran on this dataset, files like `meta/subtasks.parquet` and `meta/mimicanno_segments.parquet` already exist (they're "new" only on the first export). The second invocation:
+- Backs up `meta/subtasks.parquet` and `meta/mimicanno_segments.parquet` (because they exist now); the per-frame `subtask_index` column also gets backed up via the data parquet copy.
+- Backup files always include any pre-existing file at the target path — implementation rule: **back up everything that the export would write to, regardless of whether the file existed before the very first export**.
+
 `mimicanno export-undo --dataset <DATASET> --backup <ISO8601>` is **deferred** to sub-project E. The backup directory is created and documented in this spec, but the restore tool is out of scope.
 
 ### 7.4 Atomicity
@@ -744,7 +750,7 @@ When `--out` already exists and contains a `.mimicanno-export.json`:
 1. Load `existing.profile.hash` and `existing.runs_used`.
 2. Compute `current.profile.hash` from the resolved profile.
 3. Compute `current.runs_used` from the resolved canonical_names.
-4. If both match exactly: log `INFO: existing export matches current request; no-op` and exit 0 with the same stdout summary as a fresh run. (This is reuse, not replacement.)
+4. If both match exactly: log `INFO: existing export matches current request; no-op` and exit 0 with the existing manifest's stdout summary. The `generated_at` in the summary is the **original** export timestamp (read from `existing.generated_at`), not the reuse moment, so downstream consumers can rely on it as a stable identifier of when the data was actually produced. Add a separate `reused_at: <ISO8601>` field to the in-memory CLI summary (not written back to disk) for any consumer that wants to know when the no-op happened.
 5. If they differ and `--force` is set: replace via the standard `.tmp.<pid>` + `os.replace` flow.
 6. If they differ and `--force` is not set: raise `EXPORT_OUT_EXISTS` with both manifests printed in the error JSON for diff.
 
