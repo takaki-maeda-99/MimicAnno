@@ -169,6 +169,103 @@ class LeRobotV3SinkWriter:
         )
 
     # -----------------------------------------------------------------
+    # Task 14: per-episode list-column writer
+    # -----------------------------------------------------------------
+
+    def _write_episodes_metadata(
+        self,
+        *,
+        out_dir: Path,
+        source_dataset: Path,
+        episodes: list[CanonicalEpisode],
+        profile: ExportProfile,
+    ) -> None:
+        """Write ``meta/episodes/<chunk>/file-NNN.parquet`` (spec §4.3).
+
+        Source rows are preserved; three list columns are appended per row:
+        ``<prefix>_subtask_names`` / ``_start_frames`` / ``_end_frames``.
+
+        When ``profile.sink.params.annotation_prefix`` is None, the columns are
+        bare-named. If the source already has any of those bare columns, this
+        method raises ``EXPORT_SINK_VALIDATION_FAILED`` (spec §4.3 collision).
+        """
+        prefix = profile.sink.params.get("annotation_prefix")
+        if prefix is None:
+            name_col = "subtask_names"
+            start_col = "subtask_start_frames"
+            end_col = "subtask_end_frames"
+        else:
+            name_col = f"{prefix}_subtask_names"
+            start_col = f"{prefix}_subtask_start_frames"
+            end_col = f"{prefix}_subtask_end_frames"
+
+        ep_by_index = {ep.episode_index: ep for ep in episodes}
+
+        # Discover per-chunk episodes parquet files under source.
+        episodes_root = source_dataset / "meta" / "episodes"
+        if not episodes_root.is_dir():
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                f"source dataset has no meta/episodes/ directory: {episodes_root}",
+                {"path": str(episodes_root)},
+            )
+
+        for src_path in sorted(episodes_root.glob("chunk-*/file-*.parquet")):
+            src_table = pq.read_table(src_path)  # type: ignore[no-untyped-call]
+            if prefix is None:
+                # Bare-prefix collision check: any of the three bare names
+                # already in source -> hazard.
+                collisions = [
+                    c for c in (name_col, start_col, end_col)
+                    if c in src_table.column_names
+                ]
+                if collisions:
+                    raise MimicAnnoError(
+                        ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                        (
+                            f"source meta/episodes parquet already has "
+                            f"{collisions}; set annotation_prefix to a non-null "
+                            "value (e.g. 'mimicanno') to avoid silent overwrite"
+                        ),
+                        {
+                            "path": str(src_path),
+                            "collisions": collisions,
+                        },
+                    )
+
+            src_indices = src_table.column("episode_index").to_pylist()
+
+            names_col: list[list[str]] = []
+            starts_col: list[list[int]] = []
+            ends_col: list[list[int]] = []
+            for ep_idx in src_indices:
+                ep = ep_by_index.get(int(ep_idx))
+                if ep is None:
+                    # Source row references an episode we did not export
+                    # (e.g. partial export). Append empty lists so the row
+                    # is preserved without modification.
+                    names_col.append([])
+                    starts_col.append([])
+                    ends_col.append([])
+                    continue
+                names_col.append([seg.phase for seg in ep.segments])
+                starts_col.append([seg.start_frame for seg in ep.segments])
+                ends_col.append([seg.end_frame for seg in ep.segments])
+
+            out_table = src_table.append_column(
+                name_col, pa.array(names_col, type=pa.list_(pa.string()))
+            )
+            out_table = out_table.append_column(
+                start_col, pa.array(starts_col, type=pa.list_(pa.int64()))
+            )
+            out_table = out_table.append_column(
+                end_col, pa.array(ends_col, type=pa.list_(pa.int64()))
+            )
+
+            rel = src_path.relative_to(source_dataset)
+            _atomic_write_parquet(out_dir / rel, out_table)
+
+    # -----------------------------------------------------------------
     # Task 13: per-frame data parquet writer
     # -----------------------------------------------------------------
 
