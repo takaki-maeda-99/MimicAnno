@@ -461,9 +461,22 @@ description: |
   Body-frame ee_delta_6d + gripper, mimicanno-prefixed annotation columns.
 
 source:
-  robot_adapter: so101                # so101 | aloha | koch | generic
+  # SO101 has no dedicated adapter — it uses GenericAdapter v0.2.0 with an
+  # embedded column-mapping config. The default profile so101_sarm.yaml
+  # ships this exact block (see mimicanno/configs/exports/so101_sarm.yaml).
+  # Aloha/Koch/SO100 each have a dedicated adapter and use
+  # `robot_adapter: <name>` with `generic_adapter_config: null`.
+  robot_adapter: generic              # aloha | koch | so100 | generic
   pass_through_raw_action: true       # write raw action.* columns through to OUT
-  generic_adapter_config: null        # required when robot_adapter == "generic"
+  generic_adapter_config:             # required when robot_adapter == "generic"
+    schema_version: "0.2.0"
+    name: so101
+    gripper_column: observation.state.gripper_pos
+    gripper_scale_min: 0.0
+    gripper_scale_max: 100.0
+    eef_xyz_column: observation.state.ee_pos
+    eef_rotvec_column: observation.state.ee_rotvec
+    eef_quat_column: null
 
 canonical:
   delta_basis: body_frame_t           # body_frame_t | world | base
@@ -497,7 +510,7 @@ Validated against `mimicanno/jsonschemas/export_profile.schema.json`.
 ```python
 @dataclass(frozen=True)
 class SourceConfig:
-    robot_adapter: Literal["so101", "aloha", "koch", "generic"]
+    robot_adapter: Literal["aloha", "koch", "so100", "generic"]
     pass_through_raw_action: bool
     generic_adapter_config: dict | None
 
