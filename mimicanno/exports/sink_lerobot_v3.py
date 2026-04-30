@@ -43,9 +43,16 @@ def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
 
     Mirrors the pattern in ``mimicanno.io.write_json_atomic`` /
     ``mimicanno.publish``: write to a sibling tmp file, then atomically rename.
+
+    A leftover ``.tmp.<pid>`` from a same-PID prior crash is unlinked before
+    writing to prevent partial-write contamination (pyarrow's writer would
+    overwrite from byte 0 but might leave trailing bytes from the old write
+    if the new table is shorter).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    if tmp.exists():
+        tmp.unlink()
     pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
     os.replace(tmp, path)
 

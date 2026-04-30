@@ -8,7 +8,9 @@ downstream consumers can verify provenance.
 
 Validated against ``mimicanno/jsonschemas/export_manifest.schema.json`` before
 write; schema mismatch raises :class:`MimicAnnoError` with code
-``EXPORT_PROFILE_INVALID`` (the existing "schema-violation" code).
+``EXPORT_INTERNAL_MANIFEST_INVALID`` (this is a mimicanno bug, not user input —
+distinct from ``EXPORT_PROFILE_INVALID`` which surfaces malformed user
+``--profile`` YAML).
 """
 
 from __future__ import annotations
@@ -83,8 +85,10 @@ def write_export_manifest(
     try:
         jsonschema.Draft202012Validator(_load_schema()).validate(payload)
     except jsonschema.ValidationError as e:
+        # This is mimicanno producing a manifest that doesn't validate
+        # against its own schema — internal bug, NOT user input.
         raise MimicAnnoError(
-            ErrorCode.EXPORT_PROFILE_INVALID,
+            ErrorCode.EXPORT_INTERNAL_MANIFEST_INVALID,
             f"export manifest schema violation: {e.message}",
             {"json_path": list(e.absolute_path)},
         ) from e

@@ -89,4 +89,6 @@ def test_invalid_target_phase_rejected(tmp_path: Path) -> None:
     kwargs["target_phase"] = 99
     with pytest.raises(MimicAnnoError) as ei:
         write_export_manifest(out, **kwargs)
-    assert ei.value.code == ErrorCode.EXPORT_PROFILE_INVALID
+    # Internal-manifest violation (mimicanno bug) — NOT user-profile
+    # violation (which is EXPORT_PROFILE_INVALID).
+    assert ei.value.code == ErrorCode.EXPORT_INTERNAL_MANIFEST_INVALID

@@ -37,6 +37,11 @@ class ErrorCode(StrEnum):
     EXPORT_INPLACE_BACKUP_FAILED = "EXPORT_INPLACE_BACKUP_FAILED"
     EXPORT_SINK_VALIDATION_FAILED = "EXPORT_SINK_VALIDATION_FAILED"
     EXPORT_EE_POSE_UNAVAILABLE = "EXPORT_EE_POSE_UNAVAILABLE"
+    # Internal: raised when mimicanno itself produces a malformed manifest
+    # (e.g. a schema-version drift between the writer and the schema file).
+    # Distinct from EXPORT_PROFILE_INVALID — that's user-input (--profile YAML);
+    # this is a mimicanno bug and the user can't self-recover.
+    EXPORT_INTERNAL_MANIFEST_INVALID = "EXPORT_INTERNAL_MANIFEST_INVALID"
 
 
 @dataclass

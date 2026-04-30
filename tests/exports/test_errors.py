@@ -780,6 +780,37 @@ def test_export_ee_pose_unavailable(tmp_path: Path) -> None:
     assert ei.value.context.get("adapter") == "generic"
 
 
+def test_export_internal_manifest_invalid(tmp_path: Path) -> None:
+    """write_export_manifest produces a manifest that fails its own schema
+    when an out-of-spec target_phase is forced through. This indicates a
+    mimicanno bug (writer schema drift), not user input — distinct from
+    EXPORT_PROFILE_INVALID."""
+    from mimicanno.exports.profile import ExportProfile
+    from mimicanno.exports.provenance import write_export_manifest
+
+    out = tmp_path / "OUT"
+    out.mkdir()
+    with pytest.raises(MimicAnnoError) as ei:
+        write_export_manifest(
+            out,
+            profile=ExportProfile.resolve("so101_sarm"),
+            runs_used={},
+            run_hashes={},
+            source_dataset=tmp_path / "ds",
+            runs_root=tmp_path / "runs",
+            target_phase=99,  # out of [1, 4] — schema enforces enum
+            config_hash_filter=None,
+            output_mode="symlink",
+            mimicanno_version="0.1.0",
+            generated_at="2026-04-30T00:00:00Z",
+            cli_args=[],
+            host={"platform": "linux", "python": "3.12"},
+            episode_count=0,
+            subtask_count=0,
+        )
+    assert ei.value.code == ErrorCode.EXPORT_INTERNAL_MANIFEST_INVALID
+
+
 # ---------------------------------------------------------------------------
 # Sanity: every code is covered by a test in this module
 # ---------------------------------------------------------------------------
