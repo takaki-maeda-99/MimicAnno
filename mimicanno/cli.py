@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -35,12 +36,15 @@ from mimicanno.config import (  # noqa: E402
     load_smoother_config_yaml,
 )
 from mimicanno.errors import (  # noqa: E402
+    ErrorCode,
     MimicAnnoError,
     MissingDependencyError,
     VLMConfigInvalid,
     VLMModelRequired,
     write_error_json,
 )
+from mimicanno.exports.bulk import bulk_export  # noqa: E402
+from mimicanno.exports.profile import ExportProfile  # noqa: E402
 from mimicanno.pipeline import (  # noqa: E402
     AnnotateRequest,
     annotate_episode,
@@ -260,6 +264,195 @@ def annotate(
             )
         )
         raise typer.Exit(code=3) from e
+
+
+@app.command("export")
+def export_cmd(
+    dataset: Path = typer.Option(..., "--dataset", help="Source LeRobot v3 dataset root."),
+    runs_root: Path | None = typer.Option(
+        None, "--runs-root",
+        help="mimicanno runs/ root. Defaults to $CWD/runs.",
+    ),
+    target_phase: int = typer.Option(
+        ..., "--target-phase",
+        help="Which mimicanno pipeline phase to export (1, 2, 3, or 4).",
+    ),
+    profile: str = typer.Option(
+        ..., "--profile",
+        help=(
+            "Profile name (e.g. 'so101_sarm') or path to a profile YAML "
+            "(./my_profile.yaml or absolute path)."
+        ),
+    ),
+    out: Path | None = typer.Option(
+        None, "--out",
+        help="Output dataset root. Required unless --in-place is set.",
+    ),
+    config_hash: str | None = typer.Option(
+        None, "--config-hash",
+        help="Filter to a specific config_hash when an episode has multiple runs.",
+    ),
+    run: list[str] = typer.Option(
+        [], "--run",
+        help="Explicit canonical run name(s); overrides target_phase auto-discovery. Repeatable.",
+    ),
+    episode: list[int] = typer.Option(
+        [], "--episode",
+        help="Restrict export to specific episode_index(es). Repeatable.",
+    ),
+    symlink_data: bool = typer.Option(
+        False, "--symlink-data",
+        help="Symlink videos/, rebuild data/, fresh meta/ (default).",
+    ),
+    copy_data: bool = typer.Option(
+        False, "--copy-data",
+        help="Full copy of videos/ instead of symlink.",
+    ),
+    in_place: bool = typer.Option(
+        False, "--in-place",
+        help="Mutate <dataset> in-place. Requires --yes-i-mean-it.",
+    ),
+    yes_i_mean_it: bool = typer.Option(
+        False, "--yes-i-mean-it",
+        help="Confirm --in-place mutation.",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Replace existing OUT (overrides idempotency short-circuit).",
+    ),
+    require_reviewed: bool = typer.Option(
+        False, "--require-reviewed",
+        help="Refuse runs with reviewed=False segments.",
+    ),
+    allow_degraded: bool = typer.Option(
+        False, "--allow-degraded",
+        help="Accept manifests with degraded_from_phase != None.",
+    ),
+    allow_unlabeled: bool = typer.Option(
+        False, "--allow-unlabeled",
+        help="Accept segments with phase='unlabeled'.",
+    ),
+    skip_missing: bool = typer.Option(
+        False, "--skip-missing",
+        help="Warn instead of fail-fast on missing run for an episode.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Plan only; print machine-readable JSON of intended writes; exit 0.",
+    ),
+) -> None:
+    """Export annotated episodes to a SARM-trainable LeRobot v3 dataset."""
+    # Validate output-mode mutex (spec §6).
+    mode_flags = sum([symlink_data, copy_data, in_place])
+    if mode_flags > 1:
+        write_error_json(
+            MimicAnnoError(
+                code=ErrorCode.EXPORT_PROFILE_INVALID,
+                message=(
+                    "--symlink-data, --copy-data, --in-place are mutually exclusive"
+                ),
+                context={
+                    "symlink_data": symlink_data,
+                    "copy_data": copy_data,
+                    "in_place": in_place,
+                },
+            )
+        )
+        raise typer.Exit(code=2)
+
+    # Default mode is symlink.
+    if in_place:
+        output_mode = "in_place"
+    elif copy_data:
+        output_mode = "copy"
+    else:
+        output_mode = "symlink"
+
+    # --in-place requires --yes-i-mean-it.
+    if in_place and not yes_i_mean_it:
+        write_error_json(
+            MimicAnnoError(
+                code=ErrorCode.EXPORT_INPLACE_NO_CONFIRM,
+                message=(
+                    "--in-place requires --yes-i-mean-it; this mutates the source "
+                    "dataset and creates a backup directory inside it"
+                ),
+                context={"dataset": str(dataset)},
+            )
+        )
+        raise typer.Exit(code=2)
+
+    # OUT is required unless --in-place.
+    if not in_place and out is None:
+        write_error_json(
+            MimicAnnoError(
+                code=ErrorCode.EXPORT_OUT_PARENT_MISSING,
+                message="--out is required unless --in-place is set",
+                context={},
+            )
+        )
+        raise typer.Exit(code=2)
+
+    runs_root_resolved = runs_root if runs_root is not None else Path.cwd() / "runs"
+    # In --in-place, bulk_export ignores `out` for path purposes but we still
+    # pass dataset for consistency.
+    out_resolved: Path = out if out is not None else dataset
+
+    # Resolve profile (catches not-found / invalid).
+    try:
+        profile_obj = ExportProfile.resolve(profile)
+    except MimicAnnoError as e:
+        write_error_json(e)
+        raise typer.Exit(code=2) from None
+
+    # Capture cli_args for provenance.
+    cli_args = sys.argv[1:]
+
+    try:
+        result = bulk_export(
+            dataset_root=dataset,
+            runs_root=runs_root_resolved,
+            target_phase=target_phase,
+            profile=profile_obj,
+            out=out_resolved,
+            output_mode=output_mode,  # type: ignore[arg-type]
+            config_hash=config_hash,
+            explicit_runs=list(run) if run else None,
+            episode_filter=list(episode) if episode else None,
+            force=force,
+            require_reviewed=require_reviewed,
+            allow_degraded=allow_degraded,
+            allow_unlabeled=allow_unlabeled,
+            skip_missing=skip_missing,
+            dry_run=dry_run,
+            cli_args=cli_args,
+        )
+    except MimicAnnoError as e:
+        write_error_json(e)
+        raise typer.Exit(code=2) from None
+    except Exception as e:  # pragma: no cover — last-resort safety net
+        write_error_json(
+            MimicAnnoError(
+                code="internal.unhandled",
+                message=str(e),
+                context={"type": type(e).__name__},
+            )
+        )
+        raise typer.Exit(code=1) from e
+
+    # bulk_export already emits the dry-run JSON to stdout; nothing to add.
+    if dry_run:
+        raise typer.Exit(code=0)
+
+    summary = {
+        "out": str(result.out_path),
+        "episode_count": result.episode_count,
+        "manifest_path": str(result.manifest_path),
+        "reused": result.reused,
+    }
+    sys.stdout.write(json.dumps(summary))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def main() -> None:

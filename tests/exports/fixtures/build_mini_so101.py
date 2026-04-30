@@ -63,6 +63,12 @@ def _episode_table(episode_index: int, global_offset: int) -> pa.Table:
             "episode_index": pa.array(episode_index_col, type=pa.int64()),
             "index": pa.array(global_index, type=pa.int64()),
             "task_index": pa.array(task_index_col, type=pa.int64()),
+            # ``observation.state`` is the bare 6-DoF column required by
+            # ``mimicanno.io_parquet.load_episode_parquet``. Mirrors joint_pos
+            # for SO101 since the canonical state vector is the joint vector.
+            "observation.state": pa.array(
+                joint_pos, type=pa.list_(pa.float32(), 6)
+            ),
             "observation.state.joint_pos": pa.array(
                 joint_pos, type=pa.list_(pa.float32(), 6)
             ),
@@ -108,6 +114,11 @@ def _info_json() -> dict[str, object]:
             "episode_index": {"dtype": "int64", "shape": [1], "names": None},
             "index": {"dtype": "int64", "shape": [1], "names": None},
             "task_index": {"dtype": "int64", "shape": [1], "names": None},
+            "observation.state": {
+                "dtype": "float32",
+                "shape": [6],
+                "names": None,
+            },
             "observation.state.joint_pos": {
                 "dtype": "float32",
                 "shape": [6],

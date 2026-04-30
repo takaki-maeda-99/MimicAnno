@@ -52,6 +52,13 @@
         1
       ]
     },
+    "observation.state": {
+      "dtype": "float32",
+      "names": null,
+      "shape": [
+        6
+      ]
+    },
     "observation.state.ee_pos": {
       "dtype": "float32",
       "names": null,
