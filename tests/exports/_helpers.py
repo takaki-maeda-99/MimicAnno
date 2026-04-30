@@ -2,7 +2,9 @@
 
 Avoids depending on the mini_so101 fixture (Task 24) by constructing a minimal
 LeRobot v3 dataset + CanonicalEpisode + ExportProfile entirely in-memory /
-under a pytest tmp_path.
+under a pytest tmp_path. Task 22 (bulk orchestrator) extends this with
+``write_runs_root`` to synthesise a matching ``runs/`` directory containing
+``manifest.json`` + ``annotation.json`` + ``index.json`` per episode.
 """
 
 from __future__ import annotations
@@ -316,3 +318,179 @@ def make_profile(
         return ExportProfile.from_yaml(p)
     finally:
         p.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# runs/ directory builder (Phase 5 Task 22 — bulk orchestrator tests)
+# ---------------------------------------------------------------------------
+
+
+def _segment_to_dict(seg: SubtaskSegment) -> dict[str, Any]:
+    """Serialize a SubtaskSegment to its annotation.json shape."""
+    return {
+        "segment_id": seg.segment_id,
+        "episode_id": seg.episode_id,
+        "start_frame": seg.start_frame,
+        "end_frame": seg.end_frame,
+        "start_time": seg.start_time,
+        "end_time": seg.end_time,
+        "phase": seg.phase,
+        "verb": seg.verb,
+        "object": seg.object,
+        "target": seg.target,
+        "failure_flags": list(seg.failure_flags),
+        "label_source": seg.label_source,
+        "object_state_unavailable": seg.object_state_unavailable,
+        "object_track_ids": list(seg.object_track_ids),
+        "label_version": seg.label_version,
+        "start_boundary": {
+            "candidate_id": seg.start_boundary.candidate_id,
+            "time": seg.start_boundary.time,
+            "sources": list(seg.start_boundary.sources),
+            "score": seg.start_boundary.score,
+        },
+        "end_boundary": {
+            "candidate_id": seg.end_boundary.candidate_id,
+            "time": seg.end_boundary.time,
+            "sources": list(seg.end_boundary.sources),
+            "score": seg.end_boundary.score,
+        },
+        "boundary_confidence": seg.boundary_confidence,
+        "vlm_confidence": seg.vlm_confidence,
+        "overall_confidence": seg.overall_confidence,
+        "evidence": seg.evidence,
+        "reviewed": seg.reviewed,
+        "reviewer_id": seg.reviewer_id,
+        "smoothing_ops": list(seg.smoothing_ops),
+    }
+
+
+def write_run_dir(
+    runs_root: Path,
+    *,
+    canonical_name: str,
+    episode_id: str,
+    pipeline_phase: int = 4,
+    config_hash: str = "sha256:" + "1" * 64,
+    run_hash: str = "sha256:" + "0" * 64,
+    input_hash: str = "sha256:" + "f" * 64,
+    generated_at: str = "2026-04-30T12:00:00Z",
+    fps: float = 30.0,
+    num_frames: int = 3,
+    segments: list[SubtaskSegment] | None = None,
+    degraded_from_phase: int | None = None,
+    require_review: bool = False,
+) -> None:
+    """Write a complete run dir under ``runs_root/<canonical_name>/``.
+
+    Generates a Phase-N annotation.json + manifest.json + minimal stubs for
+    boundaries.json / signals.json (referenced by URL but not loaded by the
+    bulk orchestrator).
+    """
+    run_dir = runs_root / canonical_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    if segments is None:
+        seg = make_segment(
+            episode_id=episode_id,
+            start_frame=0,
+            end_frame=num_frames - 1,
+            phase="approach",
+        )
+        if require_review:
+            seg = SubtaskSegment(**{**seg.__dict__, "reviewed": True})
+        segments = [seg]
+
+    manifest = {
+        "schema_version": "1.0",
+        "episode_id": episode_id,
+        "task": {"text": "pick the cube", "version": None},
+        "generated_at": generated_at,
+        "generator": {
+            "name": "mimicanno",
+            "cli_version": "0.1.0",
+            "pipeline_phase": pipeline_phase,
+        },
+        "config_hash": config_hash,
+        "input_hash": input_hash,
+        "run_hash": run_hash,
+        "model_versions": {},
+        "pipeline_params": {},
+        "inputs": {},
+        "time_base": "frame",
+        "fps": fps,
+        "duration_sec": num_frames / fps,
+        "pipeline_status": {
+            "object_state_available": False,
+            "degraded_from_phase": degraded_from_phase,
+            "degrade_reason": None,
+        },
+        "compat": {},
+        "artifacts": [],
+    }
+    annotation = {
+        "schema_version": "1.0",
+        "episode_id": episode_id,
+        "task": {"text": "pick the cube", "version": None},
+        "generated_at": generated_at,
+        "generator": {
+            "name": "mimicanno",
+            "cli_version": "0.1.0",
+            "pipeline_phase": pipeline_phase,
+        },
+        "config_hash": config_hash,
+        "input_hash": input_hash,
+        "run_hash": run_hash,
+        "model_versions": {},
+        "pipeline_phase": pipeline_phase,
+        "pipeline_status": {
+            "object_state_available": False,
+            "degraded_from_phase": degraded_from_phase,
+            "degrade_reason": None,
+        },
+        "segments": [_segment_to_dict(s) for s in segments],
+        "boundaries_url": "boundaries.json",
+        "signals_url": "signals.json",
+        "notes": None,
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (run_dir / "annotation.json").write_text(json.dumps(annotation, indent=2))
+    # Sidecar stubs (referenced by URL, not loaded by exporter).
+    (run_dir / "boundaries.json").write_text("{}")
+    (run_dir / "signals.json").write_text("{}")
+
+
+def write_runs_index(
+    runs_root: Path,
+    entries: list[dict[str, Any]],
+) -> None:
+    """Write ``runs_root/index.json`` covering ``entries``.
+
+    Each entry is a dict with keys ``canonical_name``, ``episode_id``,
+    ``pipeline_phase`` (optional, default 4), ``config_hash`` (optional),
+    ``generated_at`` (optional), ``run_hash`` (optional).
+    """
+    rows: list[dict[str, Any]] = []
+    for e in entries:
+        canonical = e["canonical_name"]
+        episode_id = e["episode_id"]
+        pipeline_phase = int(e.get("pipeline_phase", 4))
+        config_hash = e.get("config_hash", "sha256:" + "1" * 64)
+        generated_at = e.get("generated_at", "2026-04-30T12:00:00Z")
+        run_hash = e.get("run_hash", "sha256:" + "0" * 64)
+        short_len = len(canonical) - len(episode_id) - len("__")
+        rows.append(
+            {
+                "episode_id": episode_id,
+                "run_hash": run_hash,
+                "run_hash_short": run_hash.removeprefix("sha256:")[:short_len],
+                "config_hash_short": config_hash.removeprefix("sha256:")[:8],
+                "input_hash_short": "ffffffff",
+                "manifest_url": f"{canonical}/manifest.json",
+                "task_text": "pick the cube",
+                "pipeline_phase": pipeline_phase,
+                "generated_at": generated_at,
+            }
+        )
+    payload = {"schema_version": "1.0", "runs": rows}
+    (runs_root / "index.json").write_text(json.dumps(payload, indent=2))
