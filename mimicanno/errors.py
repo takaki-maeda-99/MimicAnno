@@ -5,12 +5,43 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Literal, TextIO
+
+
+class ErrorCode(StrEnum):
+    """Stable error-code identifiers used by ``MimicAnnoError``.
+
+    StrEnum members are equal to their value strings, so existing call sites
+    that pass a bare ``str`` for ``MimicAnnoError.code`` continue to work
+    unchanged. New code (Phase 5 export) prefers the enum form so that tests
+    can assert ``err.code.name == "EXPORT_..."``.
+    """
+
+    # Phase 5 export (spec §11)
+    EXPORT_PROFILE_INVALID = "EXPORT_PROFILE_INVALID"
+    EXPORT_PROFILE_NOT_FOUND = "EXPORT_PROFILE_NOT_FOUND"
+    EXPORT_DATASET_NOT_FOUND = "EXPORT_DATASET_NOT_FOUND"
+    EXPORT_RUNS_ROOT_NOT_FOUND = "EXPORT_RUNS_ROOT_NOT_FOUND"
+    EXPORT_RUN_NOT_FOUND = "EXPORT_RUN_NOT_FOUND"
+    EXPORT_RUN_AMBIGUOUS = "EXPORT_RUN_AMBIGUOUS"
+    EXPORT_EPISODE_MISMATCH = "EXPORT_EPISODE_MISMATCH"
+    EXPORT_PHASE_DOWNGRADE = "EXPORT_PHASE_DOWNGRADE"
+    EXPORT_UNLABELED_PRESENT = "EXPORT_UNLABELED_PRESENT"
+    EXPORT_NOT_REVIEWED = "EXPORT_NOT_REVIEWED"
+    EXPORT_OUT_EXISTS = "EXPORT_OUT_EXISTS"
+    EXPORT_OUT_PARENT_MISSING = "EXPORT_OUT_PARENT_MISSING"
+    EXPORT_RAW_ACTION_MISSING = "EXPORT_RAW_ACTION_MISSING"
+    EXPORT_FRAME_COUNT_MISMATCH = "EXPORT_FRAME_COUNT_MISMATCH"
+    EXPORT_INPLACE_NO_CONFIRM = "EXPORT_INPLACE_NO_CONFIRM"
+    EXPORT_INPLACE_BACKUP_FAILED = "EXPORT_INPLACE_BACKUP_FAILED"
+    EXPORT_SINK_VALIDATION_FAILED = "EXPORT_SINK_VALIDATION_FAILED"
+    EXPORT_EE_POSE_UNAVAILABLE = "EXPORT_EE_POSE_UNAVAILABLE"
 
 
 @dataclass
 class MimicAnnoError(Exception):
-    code: str
+    code: str | ErrorCode
     message: str
     context: dict[str, Any] = field(default_factory=dict)
 
