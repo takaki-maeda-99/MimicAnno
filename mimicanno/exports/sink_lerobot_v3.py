@@ -12,12 +12,24 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from mimicanno.errors import ErrorCode, MimicAnnoError
+from mimicanno.exports.dataset_layout import resolve_episode_path
 
 if TYPE_CHECKING:
     from mimicanno.exports.canonical import CanonicalEpisode
     from mimicanno.exports.profile import ExportProfile
+
+
+_DTYPE_MAP: dict[str, pa.DataType] = {
+    "float32": pa.float32(),
+    "float64": pa.float64(),
+    "int32": pa.int32(),
+    "int64": pa.int64(),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +47,45 @@ def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
     os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# Extra-column helper (Task 13, spec §4.1)
+# ---------------------------------------------------------------------------
+
+
+def _build_extra_column(
+    values: np.ndarray | None,
+    arrow_dtype: pa.DataType,
+    n_frames: int,
+) -> pa.Array:
+    """Build a pa.Array from a CanonicalEpisode field (1-D or 2-D ndarray)."""
+    if values is None:
+        raise MimicAnnoError(
+            ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+            "profile demands extra_per_frame_columns entry but source field is None",
+            {},
+        )
+    arr = np.asarray(values)
+    if arr.shape[0] != n_frames:
+        raise MimicAnnoError(
+            ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+            (
+                f"extra_per_frame_columns: source has {arr.shape[0]} rows "
+                f"but episode has {n_frames} frames"
+            ),
+            {"shape": list(arr.shape), "n_frames": n_frames},
+        )
+    if arr.ndim == 1:
+        return pa.array(arr.tolist(), type=arrow_dtype)
+    if arr.ndim == 2:
+        list_type = pa.list_(arrow_dtype, list_size=arr.shape[1])
+        return pa.array(arr.tolist(), type=list_type)
+    raise MimicAnnoError(
+        ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+        f"extra_per_frame_columns: unsupported ndim={arr.ndim}",
+        {"shape": list(arr.shape)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +167,85 @@ class LeRobotV3SinkWriter:
         raise NotImplementedError(
             "LeRobotV3SinkWriter.write_all is not yet implemented (Phase 5 Task 16)"
         )
+
+    # -----------------------------------------------------------------
+    # Task 13: per-frame data parquet writer
+    # -----------------------------------------------------------------
+
+    def _write_data_parquet(
+        self,
+        *,
+        out_dir: Path,
+        source_dataset: Path,
+        episode: CanonicalEpisode,
+        registry: dict[str, int],
+        profile: ExportProfile,
+    ) -> None:
+        """Write ``data/<chunk>/episode_NNNNNN.parquet`` for one episode (spec §4.1).
+
+        Source columns are preserved byte-for-byte. ``subtask_index`` is added
+        per frame using closed-closed inclusive segment ranges; gap frames
+        fall through to the ``unlabeled`` index. Each entry in
+        ``profile.sink.params.extra_per_frame_columns`` is pulled from the
+        ``CanonicalEpisode`` and cast to the profile-specified dtype.
+        """
+        src_path, _filter = resolve_episode_path(
+            source_dataset, episode_index=episode.episode_index
+        )
+        src_table = pq.read_table(src_path)  # type: ignore[no-untyped-call]
+        n_frames = src_table.num_rows
+        if n_frames != episode.num_frames:
+            raise MimicAnnoError(
+                ErrorCode.EXPORT_FRAME_COUNT_MISMATCH,
+                (
+                    f"source parquet has {n_frames} rows but CanonicalEpisode "
+                    f"has num_frames={episode.num_frames}"
+                ),
+                {"episode_index": episode.episode_index},
+            )
+
+        # Build subtask_index column. First-match-wins; gaps -> unlabeled.
+        unlabeled_idx = registry.get("unlabeled")
+        subtask_index = [-1] * n_frames
+        for seg in episode.segments:
+            phase_idx = registry[seg.phase]
+            for f in range(seg.start_frame, seg.end_frame + 1):
+                if 0 <= f < n_frames and subtask_index[f] == -1:
+                    subtask_index[f] = phase_idx
+        for f in range(n_frames):
+            if subtask_index[f] == -1:
+                if unlabeled_idx is None:
+                    raise MimicAnnoError(
+                        ErrorCode.EXPORT_SINK_VALIDATION_FAILED,
+                        (
+                            f"frame {f} of episode {episode.episode_index} has "
+                            "no segment coverage and 'unlabeled' is not in the "
+                            "subtasks registry"
+                        ),
+                        {"episode_index": episode.episode_index, "frame": f},
+                    )
+                subtask_index[f] = unlabeled_idx
+
+        # Append columns to the source table, preserving original column order.
+        out_table = src_table.append_column(
+            "subtask_index",
+            pa.array(subtask_index, type=pa.int64()),
+        )
+
+        for entry in profile.sink.params.get("extra_per_frame_columns", []):
+            col_name = entry["name"]
+            source_field = entry["source"]
+            dtype_str = entry["dtype"]
+            arrow_dtype = _DTYPE_MAP[dtype_str]
+            values = getattr(episode, source_field)
+            arr = _build_extra_column(values, arrow_dtype, n_frames)
+            out_table = out_table.append_column(col_name, arr)
+
+        # Output path mirrors the source layout (template-resolved via
+        # resolve_episode_path; reuse the same chunk filename).
+        rel = src_path.relative_to(source_dataset)
+        out_path = out_dir / rel
+        _atomic_write_parquet(out_path, out_table)
 
     # -----------------------------------------------------------------
     # Task 12: subtasks registry writer
