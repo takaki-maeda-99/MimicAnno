@@ -535,10 +535,17 @@ class LocalGemmaVLMLabeler:
         attempt: int,
         last_reject_reason: RejectReason | None = None,
     ) -> VLMResponse:
-        from mimicanno.vlm_prompt import build_prompt
+        from mimicanno.vlm_prompt import build_messages
 
-        prompt = build_prompt(request, attempt=attempt,
-                              last_reject_reason=last_reject_reason)
+        # transformers 5.x chat-template path: messages with explicit image
+        # content blocks → apply_chat_template inserts the right number of
+        # image placeholder tokens that align with `images=keyframes` below.
+        messages = build_messages(
+            request, attempt=attempt, last_reject_reason=last_reject_reason
+        )
+        prompt = self._processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         try:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"

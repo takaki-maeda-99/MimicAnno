@@ -163,18 +163,19 @@ def annotate(
             if vlm_model is None:
                 raise VLMModelRequired(target_phase=target_phase)
             preflight = resolve_vlm_model(vlm_model, offline=offline)
-            vlm_config_kwargs: dict[str, object] = dict(
+            vlm_config = VLMConfig(
                 model_id=preflight.model_id,
                 resolved_checkpoint=preflight.resolved_checkpoint,
                 fixture_path=preflight.fixture_path,
                 keyframes_per_segment=vlm_keyframes,
                 max_retries=vlm_max_retries,
             )
+            # Apply optional CLI overrides via dataclasses.replace for typed
+            # kwargs (mypy --strict won't accept **dict[str, object] expansion).
             if vlm_device is not None:
-                vlm_config_kwargs["device"] = vlm_device
+                vlm_config = replace(vlm_config, device=vlm_device)
             if vlm_timeout_sec is not None:
-                vlm_config_kwargs["timeout_sec"] = vlm_timeout_sec
-            vlm_config = VLMConfig(**vlm_config_kwargs)
+                vlm_config = replace(vlm_config, timeout_sec=vlm_timeout_sec)
             if vlm_config.keyframes_per_segment < 1:
                 raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
         except MimicAnnoError as e:
