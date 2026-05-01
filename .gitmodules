@@ -1,0 +1,4 @@
+[submodule "sam3"]
+	path = sam3
+	url = git@github.com:gayagayataiga/sam3.git
+	branch = personal
