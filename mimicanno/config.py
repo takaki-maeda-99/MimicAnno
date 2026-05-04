@@ -189,6 +189,13 @@ class TrackingConfig:
 
     sam3_model_id: str = "facebook/sam3"
     sam3_checkpoint: str | None = None       # path; CLI preflight validates
+    # 2026-05-04 SAM3 backend swap: forwarded to the sam3-native session as
+    # `offload_video_to_cpu`. With N-prompt-N-session round-robin, each video
+    # tensor is loaded N times — defaulting to True keeps long episodes from
+    # exhausting GPU RAM. Hash-relevant: same weights + different offload =>
+    # same numerical output but different latency, so we treat it like the
+    # other config knobs and include it in to_dict().
+    sam3_offload: bool = True
     track_stride_frames: int | None = None
     min_track_score: float = 0.30
     max_gap_frames: int | None = None
@@ -204,6 +211,7 @@ class TrackingConfig:
         # sam3_checkpoint is excluded — see class docstring + spec §9.1
         return {
             "sam3_model_id": self.sam3_model_id,
+            "sam3_offload": self.sam3_offload,
             "track_stride_frames": self.track_stride_frames,
             "min_track_score": self.min_track_score,
             "max_gap_frames": self.max_gap_frames,

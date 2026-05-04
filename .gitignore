@@ -7,6 +7,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+data/
 
 # Phase 1 run output (kept out of git)
 runs/*

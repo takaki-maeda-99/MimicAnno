@@ -124,7 +124,15 @@ def annotate(
     ),
     sam3_checkpoint: Path | None = typer.Option(
         None, "--sam3-checkpoint", dir_okay=False,
-        help="Path to SAM3 weights file. Required when --target-phase >= 3.",
+        help="Path to SAM3 weights file (e.g., sam3/checkpoints/sam3.pt). "
+             "Required when --target-phase >= 3.",
+    ),
+    sam3_offload: bool = typer.Option(
+        True, "--sam3-offload/--no-sam3-offload",
+        help="Offload sam3 video tensors to CPU between forward passes "
+             "(default: on). Each tracked prompt opens its own session, so "
+             "without offload long episodes can OOM the GPU. Disable only "
+             "for short videos where latency matters more than memory.",
     ),
     track_stride_frames: int | None = typer.Option(
         None, "--track-stride-frames",
@@ -206,6 +214,7 @@ def annotate(
             # (sam3_checkpoint_resolved) goes into ModelConfig for the hash.
             tracking_config = TrackingConfig(
                 sam3_checkpoint=str(sam3_checkpoint),
+                sam3_offload=sam3_offload,
                 track_stride_frames=track_stride_frames,
             )
         except MimicAnnoError as e:

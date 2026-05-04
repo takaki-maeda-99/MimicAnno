@@ -481,6 +481,51 @@ def _hf_load_model_and_processor(
     return model, processor
 
 
+def _maybe_dump_vlm_input(
+    request: VLMRequest,
+    prompt: str,
+    attempt: int,
+    last_reject_reason: RejectReason | None,
+) -> None:
+    """Optional dump of Gemma inputs (prompt + keyframes + metadata).
+
+    Activated by env var ``MIMICANNO_VLM_DUMP_DIR``. Writes to
+    ``<dump_dir>/<segment_id>/attempt_<N>/{prompt.txt,request.json,keyframe_<i>.png}``.
+    Set a per-episode dump dir to keep runs separated.
+    """
+    import os
+    dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
+    if not dump_root:
+        return
+    from PIL import Image
+    out = Path(dump_root) / request["segment_id"] / f"attempt_{attempt}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "prompt.txt").write_text(prompt, encoding="utf-8")
+    meta = {
+        "task_text": request["task_text"],
+        "allowed_labels": request["allowed_labels"],
+        "label_version": request["label_version"],
+        "robot_type": request["robot_type"],
+        "fps": request["fps"],
+        "episode_duration_sec": request["episode_duration_sec"],
+        "segment_index": request["segment_index"],
+        "segment_total": request["segment_total"],
+        "segment_id": request["segment_id"],
+        "keyframe_offsets_sec": request["keyframe_offsets_sec"],
+        "robot_state_summary": request["robot_state_summary"],
+        "object_state_summary": request.get("object_state_summary"),
+        "attempt": attempt,
+        "last_reject_reason": last_reject_reason,
+    }
+    (out / "request.json").write_text(
+        json.dumps(meta, indent=2, default=str), encoding="utf-8"
+    )
+    for i, frame in enumerate(request["keyframes"]):
+        Image.fromarray(np.asarray(frame, dtype=np.uint8)).save(
+            out / f"keyframe_{i:02d}.png"
+        )
+
+
 @dataclass(frozen=True)
 class GemmaHandle:
     """Thin reference to a loaded Gemma model + processor.
@@ -560,6 +605,7 @@ class LocalGemmaVLMLabeler:
         prompt = self._processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+        _maybe_dump_vlm_input(request, prompt, attempt, last_reject_reason)
         try:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"
