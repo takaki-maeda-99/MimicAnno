@@ -122,21 +122,16 @@ def test_tracker_propagate_yields_canned_results() -> None:
     }
     tracker = FixtureSAM3Tracker(propagation_results=propagation_results)
 
-    import numpy as np
-
-    frames: list[tuple[int, np.ndarray]] = [
-        (0, np.zeros((1, 1, 3), dtype=np.uint8)),
-        (1, np.zeros((1, 1, 3), dtype=np.uint8)),
-    ]
+    from pathlib import Path
 
     results = list(
         tracker.propagate(
-            frames=frames,
+            video_path=Path("/dev/null"),  # ignored by fixture
             prompts_with_initial_bbox=[
                 ("red block", BBox(0.1, 0.1, 0.2, 0.2)),
                 ("bin A", BBox(0.0, 0.0, 0.1, 0.1)),
             ],
-            stride=1,
+            expected_frames={0, 1},
         )
     )
 
@@ -182,18 +177,12 @@ def test_tracker_propagate_raises_at_specific_frame() -> None:
         raise_with=exc,
     )
 
-    import numpy as np
-
-    frames: list[tuple[int, np.ndarray]] = [
-        (0, np.zeros((1, 1, 3), dtype=np.uint8)),
-        (1, np.zeros((1, 1, 3), dtype=np.uint8)),
-        (42, np.zeros((1, 1, 3), dtype=np.uint8)),
-    ]
+    from pathlib import Path
 
     gen = tracker.propagate(
-        frames=frames,
+        video_path=Path("/dev/null"),
         prompts_with_initial_bbox=[("red block", BBox(0.1, 0.1, 0.2, 0.2))],
-        stride=1,
+        expected_frames={0, 1, 42},
     )
 
     # Frames 0 and 1 yield normally.

@@ -11,7 +11,7 @@ re-exported here for backwards compatibility.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from pathlib import Path
 
 import numpy as np
 
@@ -153,29 +153,38 @@ class FixtureSAM3Tracker:
     def propagate(
         self,
         *,
-        frames: Any,  # Iterator[tuple[int, np.ndarray]]; Any for test flexibility
+        video_path: Path,
         prompts_with_initial_bbox: list[tuple[str, BBox]],
-        stride: int,
+        expected_frames: set[int],
     ) -> Iterator[FramePropagationResult]:
-        """Yield canned propagation results for each frame.
+        """Yield canned propagation results for each frame in expected_frames.
 
-        Iterates over frames and yields canned FramePropagationResult
-        for each. Raises raise_with when yielding raise_on_propagate_at_frame.
+        New shape (2026-05-04): the real ``SAM3Runtime.propagate`` no longer
+        consumes a frames iterator — sam3's session-based predictor reads the
+        video itself from ``video_path``. The fixture mirrors this contract:
+        ``video_path`` is ignored (no real I/O), and ``expected_frames`` drives
+        which frames are yielded.
 
         Args:
-            frames: Iterable of (frame_idx, frame_array) tuples. Ignored.
-            prompts_with_initial_bbox: ignored
-            stride: ignored
+            video_path: ignored (test double does not read images).
+            prompts_with_initial_bbox: ignored (canned per-frame results are
+                supplied via ``propagation_results`` at construction time).
+            expected_frames: integer frame indices to yield, in ascending
+                order. Frames not present in ``propagation_results`` yield an
+                empty detection dict.
 
         Yields:
-            FramePropagationResult for each frame in frames, in order.
+            FramePropagationResult for each frame in ``sorted(expected_frames)``.
 
         Raises:
-            raise_with if raise_on_propagate_at_frame is set and matches
-            the frame being yielded.
+            ``raise_with`` if ``raise_on_propagate_at_frame`` matches a frame
+            *that would otherwise have been yielded*. Frames outside
+            ``expected_frames`` cannot trigger the raise — keeping the failure
+            point predictable for tests.
         """
         self._propagate_call_count += 1
-        for frame_idx, _ in frames:
+        del video_path, prompts_with_initial_bbox  # documentation; not used
+        for frame_idx in sorted(expected_frames):
             if (
                 self.raise_on_propagate_at_frame is not None
                 and frame_idx == self.raise_on_propagate_at_frame
