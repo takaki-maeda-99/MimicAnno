@@ -29,13 +29,22 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
-git clone git@github.com:takaki-maeda-99/MimicAnno.git
+git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
+# If you forgot --recurse-submodules above:
+git submodule update --init sam3
+
 uv sync                     # core
 uv sync --extra dev         # + pytest / mypy / ruff (recommended for development)
-uv sync --extra vlm         # + transformers   (Phase 2 — Gemma)
-uv sync --extra sam3        # + transformers + torch + torchvision (Phase 3 — SAM3)
+uv sync --extra vlm         # + transformers   (Phase 2 — Gemma 4)
+uv sync --extra sam3        # + sam3 submodule (editable) + torch + opencv + ... (Phase 3)
 ```
+
+Phase 3 uses the vendored [`sam3/`](sam3/) git submodule (Meta's SAM 3 native API,
+not the transformers integration). Drop the SAM 3 weights into
+`sam3/checkpoints/sam3.pt`; the CLI's `--sam3-checkpoint` points at this file.
+The HF transformers SAM3 path was retired on 2026-05-04 — see
+[`docs/superpowers/specs/2026-05-04-sam3-submodule-backend-design.md`](docs/superpowers/specs/2026-05-04-sam3-submodule-backend-design.md).
 
 GPU users with CUDA driver < 13.0 (e.g. Ubuntu 24.04 with driver 12.8) need a matching torch wheel:
 
