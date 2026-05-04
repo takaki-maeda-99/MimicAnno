@@ -298,3 +298,157 @@ Status: Ready to execute（autonomy window 中、ユーザレビュー gate ス�
 - [ ] PR draft 作成済み
 
 これらが満たされた時点で **Phase 5 autonomy window の SAM3 部分は完了**。出口報告書（CLAUDE.md autonomy window 出口条件 #3）を user に提出。
+
+---
+
+## 実行戦略（v2 — 2026-05-04 確定）
+
+Task 4 smoke が完了し設計前提が固まった。残 Task 1〜3, 5〜17 を **並列実行可能性 + 依存関係 + リスク** で並べ替え、波（wave）単位で進める。
+
+### 依存グラフ
+
+```
+Task 1 (pyproject editable + missing deps)
+   ├── blocks: 7 (load uses sam3 import)
+   └── blocks: 14 (smoke needs install)
+Task 2 (preflight single-file sha + cache)        [独立]
+Task 3 (CLI default ckpt + --sam3-offload)
+   └── depends on: 1 (config.py の TrackingConfig 変更を Task 1 と同時に触ると衝突しやすい)
+Task 5 (純関数ヘルパ _outputs_to_*)               [独立]
+Task 6 (FixtureSAM3Tracker.propagate 改修)        [独立]
+Task 7 (SAM3Runtime.load/close + class skeleton)
+   └── depends on: 1
+Task 8 (SAM3Runtime.ground_on_frame)
+   └── depends on: 5, 7
+Task 9 (SAM3Runtime.propagate)
+   └── depends on: 5, 7
+Task 10 (Propagator → expected_frames signature)
+   └── depends on: 9, 6
+Task 11 (旧 spec phase3 §2.3/§2.5/§8 更新)        [独立、doc のみ]
+Task 12 (VLM transformers compat smoke)           [独立]
+Task 13 (全テスト green sweep)
+   └── depends on: 1〜10
+Task 14 (real-data smoke on SO101)
+   └── depends on: 13
+Task 15 (README/CLAUDE.md 更新)
+   └── depends on: 14
+Task 16 (PR draft)
+   └── depends on: 15
+Task 17 (memory note 化)                          [最後]
+```
+
+### 波（wave）と並列実行プラン
+
+#### Wave 1（並列、最大 6 本）— 周辺整備
+
+inline で進めるもの（Opus 自身がやる、subagent 不要な小タスク）:
+- **Task 1**: pyproject.toml 編集、`uv sync`、import smoke。
+- **Task 11**: 旧 spec phase3 への 2026-05-04 update note 追記（doc のみ、機械作業）。
+
+subagent に投げる（並列 4 本）:
+- **Task 2**: `general-purpose` subagent で preflight rewrite + テスト追加（独立）
+- **Task 5**: `general-purpose` subagent で純関数ヘルパ + テスト（既存 ファイルに追記、本体クラスは触らない）
+- **Task 6**: `general-purpose` subagent で FixtureSAM3Tracker.propagate 改修 + 呼び出し側更新
+- **Task 12**: `general-purpose` subagent で Phase 2 VLM unit テストを現環境（transformers 5.6.2）で実行し最低互換バージョンを記録
+
+**Wave 1 完了基準**: 4 つの subagent が green で帰還、Task 1/11 が手元で commit 済み。`uv sync` 成功、`uv run pytest tests/preflight tests/object_tracker/test_sam3_runtime.py::<helper test> tests/vlm` が green。
+
+**Wave 1 後の go/no-go チェック**: 
+- 1 つでも subagent が未解決 issue を残したら、**Wave 2 に進まず原因切り分け**。
+- 特に Task 2 で sha cache の lock 設計を間違えると並行起動でレース → CIで flaky。再レビュー要。
+
+#### Wave 2 — CLI/Config 層
+
+inline:
+- **Task 3**: CLI default ckpt 変更 + `--sam3-offload` オプション追加 + `TrackingConfig` フィールド追加。 
+
+直列で 1 タスクのみ。Task 1 で uv sync が安定したことを前提にする。
+
+**Wave 2 完了基準**: `mimicanno run --help` で新オプション表示、`pytest tests/cli` green。
+
+#### Wave 3 — SAM3Runtime 本体差し替え
+
+inline で順次実行（Opus 自走）:
+- **Task 7**: SAM3Runtime クラス skeleton（load + close、ground_on_frame と propagate は `NotImplementedError`）。bpe_path 明示渡しを忘れない（spec §9 #7）。
+
+完了後、**並列 subagent 2 本**:
+- **Task 8**: ground_on_frame 実装（spec §4.1 通り、NamedTemporaryFile）
+- **Task 9**: propagate 実装（spec §4.2 通り、N session round-robin merger）
+
+**Wave 3 完了基準**: 
+- `tests/object_tracker/test_sam3_runtime.py` の Runtime クラステスト（mock based）green
+- `git grep "from transformers import Sam3" mimicanno/` 結果が空
+
+**Go/no-go**: Wave 3 は本作業のクリティカルパス。失敗時は spec の §4.1 / §4.2 を見直し → user 報告。
+
+#### Wave 4 — 結合
+
+inline:
+- **Task 10**: Propagator.run() の `runtime.propagate()` 呼び出しを新シグネチャに変更（`expected_frames=set(_build_frame_iterator(...))`）
+
+直列 1 タスク。
+
+#### Wave 5 — 検証
+
+inline:
+- **Task 13**: フルテスト green。`uv run pytest -q` で全 green を確認。残った fixture/モック未対応箇所を潰す。
+
+#### Wave 6 — 実機検証（最重要 go/no-go）
+
+inline:
+- **Task 14**: SO101 1 episode で `mimicanno run --target-phase 3` を実行 → viewer 目視。
+
+**autonomy window 出口条件**:
+- pipeline 完走 → ✓
+- track が「人間が見て妥当」 → ✓ なら次へ進む
+- 「妥当」でない → spec 戻し / Wave 3 のロジック再点検
+
+#### Wave 7 — 出荷準備
+
+inline:
+- **Task 15**: README / CLAUDE.md 更新
+- **Task 16**: `gh pr create --draft` で PR ドラフト作成、本 spec/plan をリンク
+- **Task 17**: 後追い改善メモを memory に記録
+
+**user 介入が必要な最終ステップ**: PR の **merge** は user 承認待ち（autonomy window でも shared infra 影響扱い、CLAUDE.md 例外条項）。
+
+### コミット境界（git）
+
+各 Task = 1 commit を原則とし、以下の prefix で分類:
+
+- `chore(deps): ...` — Task 1
+- `feat(preflight): ...` — Task 2
+- `feat(cli): ...` — Task 3
+- `refactor(sam3_runtime): ...` — Task 5, 7, 8, 9
+- `refactor(propagator): ...` — Task 10
+- `refactor(test-fixtures): ...` — Task 6
+- `docs(spec): ...` — Task 11
+- `test(vlm): verify transformers >=4.45 compat` — Task 12
+- `test: green full suite` — Task 13（テスト fix が混じる場合）
+- `docs(notes): SO101 smoke result` — Task 14（log を notes に貼る）
+- `docs(readme): SAM3 setup` — Task 15
+
+`git revert <sha>` で機能単位の戻しが効くように粒度を保つ。
+
+### 中断条件（halt-and-report）
+
+以下のいずれかが起きたら **Opus は止まり user 報告**:
+
+1. Task 1 の `uv sync` が解決不能（依存衝突 or sam3 自体のバグ）。
+2. Task 9 round-robin merger が実機で frame_idx 不整合（spec §9 #6 の前提崩れ）。
+3. Task 12 で VLM が transformers 5.6.2 でも動かない／互換 break が大規模。
+4. Task 14 SO101 smoke で「明らかに妥当でない」結果（bbox が暴走、phase 3 すら通らない、等）。
+
+それ以外の小規模失敗（テスト 1 件落ち、import エラー、型不一致 etc.）は autonomy window 中なので Opus が自走で fix。
+
+### 期待所要時間（目安）
+
+- Wave 1: 並列 30〜45 分（subagent 律速）
+- Wave 2: 15 分
+- Wave 3: 60〜90 分（本体実装）
+- Wave 4: 15 分
+- Wave 5: 30 分（テスト fix 含む）
+- Wave 6: 30〜60 分（GPU 推論時間 + 目視）
+- Wave 7: 20 分
+
+合計: **3〜5 時間**（GPU 推論時間込み、API トークン消費は autonomy window で許容）。
