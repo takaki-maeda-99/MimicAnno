@@ -27,8 +27,13 @@ Status: Ready to execute（autonomy window 中、ユーザレビュー gate ス�
 - `pyproject.toml` の `[project] dependencies` に `"sam3"` 追加。
 - `[tool.uv.sources]` に `sam3 = { path = "sam3", editable = true }` 追加。
 - 既存の `transformers>=5.5,<...` ピンを `transformers>=4.45,<6` に緩和（VLM 用）。
+- **sam3 の declared deps が不足しているため、明示追加が必要**（Task 4 の smoke で発覚）:
+  - `einops`, `opencv-python`, `av`, `pycocotools`, `hydra-core`, `omegaconf`, `psutil`
+  - これらは sam3 がランタイムで import するが sam3 の pyproject に書かれていない。MimicAnno 側で declared dep として追加。
+- `numpy` の上限制約：sam3 は `numpy>=1.26,<2` を要求。`uv sync` で 1.26 系にピン。
 - `uv sync` 実行。エラーなければ smoke import コマンドで確認。
 - `uv.lock` も commit に含める。
+- **scripts/smoke_sam3_bbox_only.py を成果物として commit**（Task 4 で作成済み、回帰テスト用に残す）。
 
 **Out**: 上記 import が通る。`uv pip list | grep sam3` で sam3 が editable で入っている。
 
@@ -66,7 +71,9 @@ Status: Ready to execute（autonomy window 中、ユーザレビュー gate ス�
 
 ---
 
-## Task 4: 【早期 smoke】 sam3 bbox-only セッションが動くか
+## Task 4: 【早期 smoke】 sam3 bbox-only セッションが動くか — ✅ **2026-05-04 完了**
+
+**Status**: smoke 実行済み、spec §9 の課題 1〜9 を確定して spec に書き戻した。残課題は §9 課題 12（実機 SO101 で frame 0 不一致が起きないか観察）のみで Task 14 に移譲。以下は再実行用のレシピ:
 
 **Goal**: spec §9 課題 5 を解消。sam3 native API で **text なしの bbox-only セッション**が `RuntimeError` を起こさないことを実機確認。
 

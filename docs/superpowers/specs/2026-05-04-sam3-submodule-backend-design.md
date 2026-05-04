@@ -95,7 +95,7 @@ def propagate(
 
 | 公開 API | 内部実装 |
 |---|---|
-| `load(checkpoint=Path("sam3/checkpoints/sam3.pt"))` | `predictor = build_sam3_video_predictor(checkpoint_path=str(checkpoint))`。device 引数は build 側で `.cuda()` するので明示 to は不要だが、`torch.cuda.set_device(device)` で固定。 |
+| `load(checkpoint=Path("sam3/checkpoints/sam3.pt"))` | `predictor = build_sam3_video_predictor(checkpoint_path=str(checkpoint), bpe_path=str(<sam3 root>/sam3/assets/bpe_simple_vocab_16e6.txt.gz))`。`bpe_path` の明示渡しは editable install での `pkg_resources` 不具合回避（§9 課題 7 参照）。device 引数は build 側で `.cuda()` するので明示 to は不要だが、`torch.cuda.set_device(device)` で固定。 |
 | `ground_on_frame(frame, prompt)` | image model を別途用意するか、video predictor に **1フレームの session** を貼って `add_prompt(text=prompt, frame_idx=0)` の戻りを使う。後者を採用（モデルロード回数が減る）。詳細 §4.1。 |
 | `propagate(video_path, prompts_with_initial_bbox, expected_frames)` | **N prompts = N session**。各 prompt ごとに `start_session(resource_path=video_path)` → `add_prompt(bounding_boxes=[xywh], obj_id=0, frame_idx=0, rel_coordinates=True)` → `propagate_in_video(propagation_direction="forward")` を別々に走らせ、frame_idx 単位でマージして yield。詳細 §4.2。 |
 | `close()` | 保持中の session 全てに `close_session(session_id, run_gc_collect=False)`、最後に **1 回だけ** `gc.collect()` + `torch.cuda.empty_cache()` を呼ぶ。session ごとに empty_cache を呼ぶと VLM 等の他モデル allocator state を破壊するリスクあり。 |
@@ -218,7 +218,7 @@ def propagate(self, *, video_path, prompts_with_initial_bbox, expected_frames):
 - N prompt は N セッション。**GPU メモリ消費が N 倍**になるリスクは §6 リスク欄に記載。`offload_video_to_cpu=True` で動画 tensor を CPU に逃す設定を CLI option `--sam3-offload`（default True）で公開。
 - 各 session は同じ `video_path` を読むので、frame index 空間は揃っている前提。stream は frame 0 から始まる（§9 課題 5 で確認）。
 - `propagation_direction="forward"`：grounding は frame 0 で行う前提なので backward は不要。
-- `_outputs_to_bbox_score(outputs)` は obj_id=0 のエントリだけを取り出して `(BBox, score) | None` にする：sam3 が track lost 時に obj_ids から該当 id を落とすため、その場合は None。
+- `_outputs_to_bbox_score(outputs)` は obj_id=0 のエントリだけを取り出して `(BBox, score) | None` にする：sam3 が track lost 時に obj_ids から該当 id を落とすため、その場合は None。**visual prompt が複数 obj を返した場合（§9 課題 11）も obj_id=0 のみ採用**（その他は黙って捨てる）。
 - session のリーク防止のため `_open_sessions: list[str]` を Runtime が保持し、`close()` で全部 close。
 
 #### round-robin の正当性
@@ -345,13 +345,27 @@ def propagate(self, *, video_path, prompts_with_initial_bbox, expected_frames):
 
 ## 9. オープン課題（implement 段で解決）
 
-1. **入力 bbox 規約**: `add_prompt(bounding_boxes=...)` が左上 xywh か cxcywh か（推察: 左上 xywh）。`box_xywh_to_cxcywh` の grep で確定。
-2. **出力 bbox 規約**: `out_boxes_xywh` が左上 xywh か cxcywh か。実機ログで 1 件確認。
-3. `obj_id` が ndarray で返る場合の型（`int64` 想定）と、track lost 時の挙動：obj_id 配列から該当 id が落ちるのか、空 box で残るのか。
-4. `propagate_in_video` の `start_frame_idx=None`（default）で **frame 0 自体が最初に yield されるか**。yield されない場合は `add_prompt` の戻り `outputs` を Runtime 側で frame 0 として手動 yield する必要あり（spec review #5）。
-5. **bbox-only セッションが sam3 で許容されるか**（text なし add_prompt が `RuntimeError` を起こさないか）。implement 段の最初に短尺動画で smoke する（spec review #9）。
-6. round-robin の前提：N session が同じ video から同じ frame_idx 列を yield するか、frame index の食い違いがないか。実機で N=2 ケースを smoke。
-7. `sam3.pt` を含む submodule の editable install で `sam3` パッケージが site-packages から import 可能になるか（`uv sync` 後 `python -c "from sam3.model_builder import build_sam3_video_predictor"` を確認）。
+`scripts/smoke_sam3_bbox_only.py`（Task 4）で確認済みのものを ✓、残課題を ☐ で示す。
+
+### ✓ 検証済み（2026-05-04 smoke）
+
+1. **入力 bbox 規約**: ✓ **左上 xywh normalized**。`bounding_boxes=[[x, y, w, h]]` + `rel_coordinates=True`。
+2. **出力 bbox 規約**: ✓ **左上 xywh normalized**。BBox との変換不要。
+3. **track lost 挙動**: ✓ `out_obj_ids` 配列から該当 id が落ちる（残った id だけが配列に並ぶ）。lost 検出は `prompt → None` 変換で扱う。
+4. **frame 0 yield**: ✓ propagate_in_video は frame 0 を最初に yield する。
+5. **bbox-only セッション**: ✓ text 引数なしの `add_prompt` で動作。RuntimeError なし。
+6. **N=2 セッション frame_idx 同期**: ✓ 同じ video に対して N 個のセッションは frame_idx を一致させて yield。
+7. **editable install**: ✓ `uv pip install -e ./sam3` で `from sam3.model_builder import build_sam3_video_predictor` 成功。**ただし** sam3 の editable install では `pkg_resources.resource_filename("sam3", "assets/...")` が None を返す問題があり、`build_sam3_video_predictor(checkpoint_path=..., bpe_path=str(<sam3 root>/sam3/assets/bpe_simple_vocab_16e6.txt.gz))` のように **`bpe_path` を明示渡し**する必要がある。SAM3Runtime.load() でこれをやる。
+8. **dtypes**: ✓ `out_obj_ids: int64`, `out_boxes_xywh: float32`, `out_probs: float32`, `out_binary_masks: bool`。
+9. **close_session 冪等性**: ✓ 二重呼びは `WARNING` ログを出すが例外を投げない。Runtime.close() の二重呼び対策は不要（既存の `_closed` flag で十分）。
+10. **追加発見: add_prompt vs propagate frame 0 出力の不一致**: `add_prompt` の戻り `outputs` と、続く `propagate_in_video` の frame 0 yield の `outputs` は **異なる**ことがある（モデルの異なる経路を通るため）。grounding 用途では add_prompt 戻りを使うのが正解（spec §4.1 通り）。propagate 用途では「propagate stream の frame 0」を採用するが、不安定挙動が観測されたら **add_prompt 戻りで frame 0 を上書き** する保険を Runtime に入れる（実装段で必要性判断）。
+11. **追加発見: visual bbox prompt の multi-detection 性質**: 1 個の bbox を visual prompt として渡しても、sam3 は exemplar 解釈で **複数 instance を返す**ことがある。`prompts_with_initial_bbox` での「特定の 1 物体を追跡」という意図と乖離。出力側で `obj_id=0` のみ採用すればロジック的には問題ないが、内部的に複数 obj が track されることでメモリ・計算が無駄になる可能性。**Runtime はとりあえず obj_id=0 のみ採用する（他 obj_id は捨てる）** 方針で進める。
+
+### ☐ 残課題（実装段で対応）
+
+12. **add_prompt 戻りで frame 0 上書きの要否**: 実機（SO101）で grounding 由来の bbox を渡したとき、propagate frame 0 が空にならないかを Task 14 smoke で観察。空になるようなら Runtime に上書きロジックを追加。
+13. **VLM (transformers) との互換**: 現環境は transformers 5.6.2 で動作。pin を `>=4.45,<6` でいいか Phase 2 の最低テストで確認。
+14. **`pkg_resources` deprecation**: sam3 が `pkg_resources` 依存。setuptools<81 にピンするか、bpe_path 明示渡しで回避（後者を採用）。spec §4.4 の依存関係に `setuptools` 制約は不要。
 
 ---
 
