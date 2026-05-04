@@ -396,30 +396,26 @@ class Propagator:
         iou_threshold = config.reacquisition_iou_threshold
         min_score = config.min_track_score
 
-        # Step 1: Build frame iterator
+        # Step 1: Build frame iterator. _build_frame_iterator includes both
+        # the strided sequence AND the final n_frames-1 frame; we hand the
+        # whole set to the runtime so SAM3Runtime can filter from sam3's
+        # contiguous propagation stream.
         frame_indices = _build_frame_iterator(n_frames, stride)
+        expected_frames: set[int] = set(frame_indices)
 
-        # Step 2: Call runtime.propagate exactly once.
-        # frames is Iterator[tuple[int, np.ndarray]]. The ndarray is the actual
-        # decoded video frame; the caller (Task 19's orchestrator) must supply
-        # real frame data read from video_path. Here we pass a 1x1 placeholder
-        # ndarray because this Propagator does not read frames itself —
-        # FixtureSAM3Tracker ignores the array, and the real SAM3Runtime
-        # receives frames from the orchestrator.
-        # TODO(Task 19): replace this placeholder with real frame loading from
-        # video_path, injected by the orchestrator before calling Propagator.run.
-        dummy = np.zeros((1, 1, 3), dtype=np.uint8)
-        frames_iter = ((idx, dummy) for idx in frame_indices)
-
+        # Step 2: Call runtime.propagate exactly once. The runtime owns video
+        # I/O — sam3's session-based predictor reads frames from video_path
+        # itself (2026-05-04 backend swap). FixtureSAM3Tracker mirrors the
+        # same signature but ignores video_path.
         prompts_with_bbox = [
             (prompt, bbox)
             for (role, prompt), bbox in plan.initial_detections.items()
         ]
 
         propagation_stream = runtime.propagate(
-            frames=frames_iter,
+            video_path=video_path,
             prompts_with_initial_bbox=prompts_with_bbox,
-            stride=stride,
+            expected_frames=expected_frames,
         )
 
         # Initialize per-prompt state machines
