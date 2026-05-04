@@ -356,8 +356,15 @@ class SAM3Runtime:
 
             # Bind this process to the requested CUDA device before model
             # construction — Sam3VideoPredictorMultiGPU caches the device
-            # at __init__ time.
-            if device.startswith("cuda") and torch.cuda.is_available():
+            # at __init__ time. ``torch.cuda.set_device`` requires an
+            # explicit index (``"cuda:0"`` or ``0``); the bare string
+            # ``"cuda"`` is rejected, so skip the call for the no-index
+            # variant (current_device stays at the default).
+            if (
+                device.startswith("cuda")
+                and ":" in device
+                and torch.cuda.is_available()
+            ):
                 torch.cuda.set_device(device)
             predictor = build_sam3_video_predictor(
                 checkpoint_path=checkpoint_str,
@@ -484,11 +491,19 @@ class SAM3Runtime:
                 sid = resp["session_id"]
                 self._open_sessions.append(sid)
 
+                # Pass BOTH text (from the entity prompt) AND the bbox seed.
+                # sam3's bbox-only visual prompt mode tracks poorly across
+                # frames on real SO101 data (verified in
+                # docs/superpowers/notes/2026-05-04-sam3-smoke-results.md);
+                # adding the text label to the same prompt lets sam3 ground
+                # the tracker on a semantic concept while still getting the
+                # spatial seed from grounding.
                 self._predictor.handle_request({
                     "type": "add_prompt",
                     "session_id": sid,
                     "frame_index": 0,
                     "obj_id": 0,
+                    "text": prompt,
                     "bounding_boxes": [
                         [bbox.x, bbox.y, bbox.w, bbox.h],
                     ],
