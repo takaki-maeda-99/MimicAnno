@@ -121,6 +121,127 @@ def _extract_bboxes_scores(output: Any) -> list[tuple[BBox, float]]:
 
 
 # ---------------------------------------------------------------------------
+# 2026-05-04 SAM3 backend swap — sam3 native output dict helpers
+# (consumed by SAM3Runtime methods that talk to build_sam3_video_predictor)
+# ---------------------------------------------------------------------------
+
+
+def _coerce_outputs_arrays(
+    outputs: dict,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate + coerce sam3 native ``outputs`` dict into (obj_ids, boxes_xywh, probs).
+
+    sam3's `add_prompt` / `propagate_in_video` emit:
+
+      {
+        "out_obj_ids":    ndarray[N]   int64,
+        "out_boxes_xywh": ndarray[N,4] float32,  # top-left xywh, normalized [0,1]
+        "out_probs":      ndarray[N]   float32,
+        "out_binary_masks": ndarray[N,H,W] bool,
+        "frame_stats":    dict,
+      }
+
+    Verified by `scripts/smoke_sam3_bbox_only.py` (2026-05-04). Empty cases
+    surface as shape (0,) / (0,4) — never None.
+
+    Defensive: accepts list-of-list inputs (numpy coerces) so callers and
+    tests can pass plain Python literals. A missing required key raises
+    ``KeyError`` with a clear message — silent defaults would hide sam3 API
+    drift.
+
+    Raises:
+        KeyError:   required output key missing.
+        ValueError: shapes inconsistent (e.g., len(boxes) != len(obj_ids)).
+    """
+    for key in ("out_obj_ids", "out_boxes_xywh", "out_probs"):
+        if key not in outputs:
+            raise KeyError(
+                f"sam3 outputs missing required key {key!r}; got "
+                f"{sorted(outputs.keys())}"
+            )
+    obj_ids = np.asarray(outputs["out_obj_ids"]).astype(np.int64, copy=False)
+    boxes = np.asarray(outputs["out_boxes_xywh"], dtype=np.float32)
+    probs = np.asarray(outputs["out_probs"], dtype=np.float32)
+    if boxes.ndim != 2 or boxes.shape[-1] != 4:
+        raise ValueError(
+            f"out_boxes_xywh must have shape (N, 4); got shape={boxes.shape}"
+        )
+    n = int(obj_ids.shape[0])
+    if boxes.shape[0] != n or probs.shape[0] != n:
+        raise ValueError(
+            f"sam3 outputs length mismatch: obj_ids={n} "
+            f"boxes={boxes.shape[0]} probs={probs.shape[0]}"
+        )
+    return obj_ids, boxes, probs
+
+
+def _outputs_to_bbox_score_list(outputs: dict) -> list[tuple[BBox, float]]:
+    """Convert one sam3 frame's outputs dict to ``[(BBox, score), ...]``.
+
+    Used for grounding (one-frame text prompt). Out-of-range or degenerate
+    BBoxes (x+w > 1.0, w < BBox's lower bound) are silently skipped — sam3
+    weights occasionally emit boxes a hair outside [0,1] which BBox's range
+    invariant rejects. The skip is preferable to clamping because clamping
+    a meaningless detection just hides the issue.
+
+    Returned list is sorted by descending score.
+
+    The input boxes are *top-left xywh, normalized [0,1]* (verified
+    2026-05-04 against bedroom.mp4). No cxcywh→xywh conversion is needed,
+    unlike the legacy transformers `_extract_bboxes_scores`.
+    """
+    obj_ids, boxes, probs = _coerce_outputs_arrays(outputs)
+    results: list[tuple[BBox, float]] = []
+    for i in range(int(obj_ids.shape[0])):
+        x = float(boxes[i, 0])
+        y = float(boxes[i, 1])
+        w = float(boxes[i, 2])
+        h = float(boxes[i, 3])
+        score = float(probs[i])
+        try:
+            results.append((BBox(x=x, y=y, w=w, h=h), score))
+        except ValueError:
+            # Out-of-range or degenerate bbox; skip silently. Logging would
+            # spam at every grounding call against multi-instance scenes.
+            continue
+    results.sort(key=lambda t: t[1], reverse=True)
+    return results
+
+
+def _outputs_to_bbox_score(
+    outputs: dict, *, target_obj_id: int = 0,
+) -> tuple[BBox, float] | None:
+    """Pick the entry for ``target_obj_id`` from one frame's outputs.
+
+    Used for propagation (one tracked object per session). When sam3 loses
+    the track, the obj_id silently disappears from `out_obj_ids` (verified
+    2026-05-04) — we map that to ``None`` so callers can treat lost frames
+    as gaps without inspecting array shapes.
+
+    A bbox that fails BBox's range check (rare, but happens on edge cases
+    near the frame boundary) is also returned as ``None``: a bogus bbox
+    is no better than a lost track for the propagator's gap-detection.
+    """
+    obj_ids, boxes, probs = _coerce_outputs_arrays(outputs)
+    n = int(obj_ids.shape[0])
+    if n == 0:
+        return None
+    target = int(target_obj_id)
+    matches = np.flatnonzero(obj_ids == target)
+    if matches.size == 0:
+        return None
+    i = int(matches[0])
+    x = float(boxes[i, 0])
+    y = float(boxes[i, 1])
+    w = float(boxes[i, 2])
+    h = float(boxes[i, 3])
+    try:
+        return BBox(x=x, y=y, w=w, h=h), float(probs[i])
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # SAM3Runtime
 # ---------------------------------------------------------------------------
 
