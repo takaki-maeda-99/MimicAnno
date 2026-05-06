@@ -57,3 +57,39 @@ def test_null_eef_data_rendered_as_null() -> None:
     got = build_prompt(req, attempt=1, last_reject_reason=None)
     assert "mean_eef_speed_mps: null" in got
     assert "dwell_fraction: null" in got
+
+
+# ---------------------------------------------------------------------------
+# Task 7 (vlm-mask-overlay): color legend insertion
+# ---------------------------------------------------------------------------
+
+
+_LEGEND_EXAMPLE = (
+    "Colored translucent overlays (~40% opacity) mark tracked objects: "
+    "red=gripper, blue=red_block. An overlay may be absent in some frames "
+    "if the object is temporarily occluded or out of view."
+)
+
+
+def test_prompt_with_legend_inserts_single_line_near_top() -> None:
+    """legend != None → string appears once, in the SYSTEM block."""
+    got = build_prompt(_request(), attempt=1, last_reject_reason=None,
+                       legend=_LEGEND_EXAMPLE)
+    assert got.count(_LEGEND_EXAMPLE) == 1
+    # Inserted before the "Allowed phase labels" section.
+    legend_idx = got.index(_LEGEND_EXAMPLE)
+    allowed_idx = got.index("Allowed phase labels")
+    assert legend_idx < allowed_idx
+    # And after the "This is segment ..." intro.
+    intro_idx = got.index("This is segment")
+    assert intro_idx < legend_idx
+
+
+def test_prompt_with_legend_none_is_byte_identical_to_default() -> None:
+    """legend=None reproduces the snapshot exactly (spec §6.1 backward-compat)."""
+    got_default = build_prompt(_request(), attempt=1, last_reject_reason=None)
+    got_explicit_none = build_prompt(_request(), attempt=1,
+                                     last_reject_reason=None, legend=None)
+    assert got_default == got_explicit_none
+    expected = (SNAPS / "prompt_initial.txt").read_text(encoding="utf-8")
+    assert got_explicit_none == expected
