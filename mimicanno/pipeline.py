@@ -847,7 +847,12 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
                 has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
                 degrade_reason="sam3_no_initial_detection",
             )
-        tracks = Propagator().run(
+        # Task 5: Propagator.run now returns (tracks, mask_cache). The
+        # mask_cache is None until Task 8 wires VLMConfig.mask_overlay
+        # through here; the second tuple element is intentionally
+        # discarded for now so the rest of the pipeline keeps its
+        # pre-overlay shape.
+        tracks, _mask_cache = Propagator().run(
             runtime=sam3_runtime,
             plan=plan,
             video_path=req.video,

@@ -84,7 +84,7 @@ def _run(
 ) -> list[Track]:
     if config is None:
         config = _make_config(stride=stride)
-    return Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -93,6 +93,7 @@ def _run(
         stride=stride,
         config=config,
     )
+    return tracks
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +332,7 @@ def test_primary_marking_happy_path() -> None:
         failed_prompts=[],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -373,7 +374,7 @@ def test_primary_marking_first_prompt_failed() -> None:
         failed_prompts=[("object", "red block")],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -424,7 +425,7 @@ def test_deterministic_ordering() -> None:
         failed_prompts=[],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -535,7 +536,7 @@ def test_stable_ordering_multiple_roles() -> None:
         failed_prompts=[],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -603,7 +604,7 @@ def test_primary_marking_each_role_independent() -> None:
         failed_prompts=[],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -634,7 +635,7 @@ def test_track_sample_time_sec() -> None:
     fixture = FixtureSAM3Tracker(propagation_results=prop_results)
     plan = _plan_single_object("red block", bbox)
     config = _make_config(max_gap_frames=30, stride=10)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -696,7 +697,7 @@ def test_no_initial_detections_returns_empty() -> None:
         failed_prompts=[("object", "red block")],
     )
     config = _make_config(max_gap_frames=30, stride=1)
-    tracks = Propagator().run(
+    tracks, _ = Propagator().run(
         runtime=fixture,
         plan=plan,
         video_path=_VIDEO,
@@ -793,3 +794,112 @@ def test_build_frame_iterator_n_frames_zero() -> None:
 
     result = _build_frame_iterator(n_frames=0, stride=10)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (vlm-mask-overlay): Propagator mask collection / MaskCache return
+# ---------------------------------------------------------------------------
+
+
+def test_run_returns_none_mask_cache_when_image_size_not_given() -> None:
+    """Default behaviour (no mask_image_size_px) yields mask_cache == None."""
+    bbox = BBox(0.1, 0.1, 0.2, 0.2)
+    fixture = FixtureSAM3Tracker(
+        propagation_results={0: {"red block": (bbox, 0.9)}},
+    )
+    plan = _plan_single_object("red block", bbox)
+    tracks, mask_cache = Propagator().run(
+        runtime=fixture,
+        plan=plan,
+        video_path=_VIDEO,
+        fps=30.0,
+        n_frames=1,
+        stride=1,
+        config=_make_config(stride=1),
+    )
+    assert len(tracks) == 1
+    assert mask_cache is None
+
+
+def test_run_returns_empty_mask_cache_when_no_initial_detections() -> None:
+    """Empty plan + mask_image_size_px set → empty cache, not None."""
+    plan = TrackingPlan(
+        entities=EntityPlan(object_prompts=[], target_prompts=[], tool_prompts=[]),
+        initial_detections={},
+        failed_prompts=[],
+    )
+    fixture = FixtureSAM3Tracker(propagation_results={})
+    tracks, mask_cache = Propagator().run(
+        runtime=fixture,
+        plan=plan,
+        video_path=_VIDEO,
+        fps=30.0,
+        n_frames=1,
+        stride=1,
+        config=_make_config(stride=1),
+        mask_image_size_px=64,
+    )
+    assert tracks == []
+    assert mask_cache is not None
+    assert mask_cache.shape == (64, 64)
+    assert mask_cache.palette == {}
+    assert mask_cache.by_frame == {}
+
+
+def test_run_collects_masks_from_runtime_into_cache() -> None:
+    """End-to-end: runtime yields masks → propagator RLE-encodes into MaskCache.
+
+    Uses a hand-rolled runtime stub (the fixture doesn't carry masks) to
+    verify Propagator.run actually wires runtime masks through to the
+    cache and that ``MaskCache.get`` round-trips back to the same array.
+    """
+    import numpy as np
+
+    from mimicanno.object_tracker.sam3_runtime import FramePropagationResult
+
+    bbox = BBox(0.1, 0.1, 0.2, 0.2)
+    mask_a = np.zeros((8, 8), dtype=bool)
+    mask_a[0:4, 0:4] = True
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.received_mask_size: tuple[int, int] | None | object = object()
+
+        def propagate(
+            self, *, video_path, prompts_with_initial_bbox,
+            expected_frames, mask_size_hw=None,
+        ):
+            self.calls += 1
+            self.received_mask_size = mask_size_hw
+            for f in sorted(expected_frames):
+                m = mask_a if f == 0 else None
+                yield FramePropagationResult(
+                    frame=f,
+                    detections={"red block": (bbox, 0.9)},
+                    masks={"red block": m},
+                )
+
+    runtime = _FakeRuntime()
+    plan = _plan_single_object("red block", bbox)
+    tracks, mask_cache = Propagator().run(
+        runtime=runtime,
+        plan=plan,
+        video_path=_VIDEO,
+        fps=30.0,
+        n_frames=2,
+        stride=1,
+        config=_make_config(stride=1),
+        mask_image_size_px=8,
+    )
+    assert runtime.calls == 1
+    assert runtime.received_mask_size == (8, 8)
+    assert len(tracks) == 1
+    assert mask_cache is not None
+    assert mask_cache.shape == (8, 8)
+    assert mask_cache.palette["red block"]  # palette assigned
+    # Frame 0 has a mask, frame 1 doesn't.
+    decoded = mask_cache.get(0, "red block")
+    assert decoded is not None
+    np.testing.assert_array_equal(decoded, mask_a)
+    assert mask_cache.get(1, "red block") is None

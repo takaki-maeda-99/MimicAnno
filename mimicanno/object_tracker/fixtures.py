@@ -150,12 +150,13 @@ class FixtureSAM3Tracker:
         """
         return self.initial_detections.get(prompt, [])
 
-    def propagate(
+    def propagate(  # type: ignore[override]
         self,
         *,
         video_path: Path,
         prompts_with_initial_bbox: list[tuple[str, BBox]],
         expected_frames: set[int],
+        mask_size_hw: tuple[int, int] | None = None,
     ) -> Iterator[FramePropagationResult]:
         """Yield canned propagation results for each frame in expected_frames.
 
@@ -183,7 +184,11 @@ class FixtureSAM3Tracker:
             point predictable for tests.
         """
         self._propagate_call_count += 1
-        del video_path, prompts_with_initial_bbox  # documentation; not used
+        # documentation; not used. mask_size_hw is accepted to keep the
+        # fixture signature in lock-step with SAM3Runtime — tests that
+        # exercise mask collection should construct masks directly via
+        # ``propagation_masks`` (none for now).
+        del video_path, prompts_with_initial_bbox, mask_size_hw
         for frame_idx in sorted(expected_frames):
             if (
                 self.raise_on_propagate_at_frame is not None

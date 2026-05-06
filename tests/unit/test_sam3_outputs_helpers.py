@@ -20,6 +20,7 @@ from mimicanno.object_tracker.sam3_runtime import (
     _coerce_outputs_arrays,
     _outputs_to_bbox_score,
     _outputs_to_bbox_score_list,
+    _outputs_to_mask,
 )
 
 
@@ -204,3 +205,93 @@ def test_coerce_length_mismatch_raises_valueerror():
     }
     with pytest.raises(ValueError, match="length mismatch"):
         _coerce_outputs_arrays(out)
+
+
+# ---------------------------------------------------------------------------
+# _outputs_to_mask — Task 5 (vlm-mask-overlay)
+# ---------------------------------------------------------------------------
+
+
+def _make_outputs_with_mask(
+    obj_ids: list[int],
+    masks: np.ndarray,
+) -> dict:
+    n = len(obj_ids)
+    return {
+        "out_obj_ids": np.asarray(obj_ids, dtype=np.int64),
+        "out_boxes_xywh": np.zeros((n, 4), dtype=np.float32),
+        "out_probs": np.zeros((n,), dtype=np.float32),
+        "out_binary_masks": masks,
+    }
+
+
+def test_outputs_to_mask_returns_bool_mask_for_target():
+    masks = np.array([
+        [[True, False], [False, False]],
+        [[False, True], [True, True]],
+    ], dtype=bool)
+    out = _make_outputs_with_mask([0, 1], masks)
+    result = _outputs_to_mask(out, target_obj_id=0)
+    assert result is not None
+    assert result.dtype == np.bool_
+    assert result.shape == (2, 2)
+    np.testing.assert_array_equal(result, masks[0])
+
+
+def test_outputs_to_mask_returns_none_when_target_missing():
+    masks = np.zeros((1, 4, 4), dtype=bool)
+    out = _make_outputs_with_mask([7], masks)
+    assert _outputs_to_mask(out, target_obj_id=0) is None
+
+
+def test_outputs_to_mask_returns_none_when_obj_ids_empty():
+    out = _make_outputs_with_mask([], np.zeros((0, 4, 4), dtype=bool))
+    assert _outputs_to_mask(out, target_obj_id=0) is None
+
+
+def test_outputs_to_mask_returns_none_when_key_absent():
+    out = {
+        "out_obj_ids": np.array([0]),
+        "out_boxes_xywh": np.zeros((1, 4), dtype=np.float32),
+        "out_probs": np.zeros((1,), dtype=np.float32),
+        # no out_binary_masks
+    }
+    assert _outputs_to_mask(out, target_obj_id=0) is None
+
+
+def test_outputs_to_mask_downsamples_with_nearest_neighbor():
+    # 4x4 mask, downsample to 2x2. cv2.INTER_NEAREST samples the input at
+    # the position of each output cell's center, so the test only asserts
+    # the dtype/shape and that True pixels concentrated in one quadrant
+    # produce a True in that quadrant and False elsewhere.
+    raw = np.zeros((4, 4), dtype=bool)
+    raw[:2, :2] = True
+    out = _make_outputs_with_mask([0], raw[None, ...])
+    result = _outputs_to_mask(out, target_obj_id=0, target_size_hw=(2, 2))
+    assert result is not None
+    assert result.dtype == np.bool_
+    assert result.shape == (2, 2)
+    assert bool(result[0, 0]) is True   # TL quadrant maps to TL output
+    assert bool(result[1, 1]) is False  # BR quadrant maps to BR output
+    assert bool(result[0, 1]) is False
+    assert bool(result[1, 0]) is False
+
+
+def test_outputs_to_mask_skips_resize_when_shape_matches():
+    raw = np.zeros((3, 3), dtype=bool)
+    raw[1, 1] = True
+    out = _make_outputs_with_mask([0], raw[None, ...])
+    result = _outputs_to_mask(out, target_obj_id=0, target_size_hw=(3, 3))
+    assert result is not None
+    np.testing.assert_array_equal(result, raw)
+
+
+def test_outputs_to_mask_raises_on_shape_mismatch():
+    out = {
+        "out_obj_ids": np.array([0, 1]),
+        "out_boxes_xywh": np.zeros((2, 4), dtype=np.float32),
+        "out_probs": np.zeros((2,), dtype=np.float32),
+        "out_binary_masks": np.zeros((1, 4, 4), dtype=bool),  # length mismatch
+    }
+    with pytest.raises(ValueError, match="length"):
+        _outputs_to_mask(out, target_obj_id=0)

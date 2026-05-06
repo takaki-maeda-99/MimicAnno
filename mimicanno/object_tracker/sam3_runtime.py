@@ -251,6 +251,54 @@ def _outputs_to_bbox_score_list(outputs: dict) -> list[tuple[BBox, float]]:
     return results
 
 
+def _outputs_to_mask(
+    outputs: dict,
+    *,
+    target_obj_id: int = 0,
+    target_size_hw: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    """Pick the binary mask for ``target_obj_id`` from one frame's outputs.
+
+    Spec 2026-05-04 §4.4: masks are downsampled to ``target_size_hw`` at
+    storage time so the overlay compositor can blit without resampling. If
+    ``target_size_hw`` is ``None`` the raw sam3 mask is returned (used in
+    unit tests to assert pre-downsample shape).
+
+    Returns ``None`` if the obj_id is missing (track lost, mirroring
+    ``_outputs_to_bbox_score``) or if ``out_binary_masks`` is absent
+    (sam3 versions without mask emission). Mismatched shapes between
+    obj_ids and out_binary_masks raise — that's an API drift bug, not a
+    runtime gap.
+    """
+    obj_ids, _, _ = _coerce_outputs_arrays(outputs)
+    n = int(obj_ids.shape[0])
+    if n == 0:
+        return None
+    matches = np.flatnonzero(obj_ids == int(target_obj_id))
+    if matches.size == 0:
+        return None
+    if "out_binary_masks" not in outputs:
+        return None
+    masks_arr = np.asarray(outputs["out_binary_masks"])
+    if masks_arr.ndim != 3:
+        raise ValueError(
+            f"out_binary_masks must have shape (N,H,W); got {masks_arr.shape}"
+        )
+    if masks_arr.shape[0] != n:
+        raise ValueError(
+            f"out_binary_masks length {masks_arr.shape[0]} != obj_ids {n}"
+        )
+    mask = masks_arr[int(matches[0])].astype(bool, copy=False)
+    if target_size_hw is None or mask.shape == target_size_hw:
+        return mask
+    import cv2  # local import — cv2 is heavy and only needed when downsampling.
+    th, tw = target_size_hw
+    resized = cv2.resize(
+        mask.astype(np.uint8), (tw, th), interpolation=cv2.INTER_NEAREST,
+    )
+    return resized.astype(bool)
+
+
 def _outputs_to_bbox_score(
     outputs: dict, *, target_obj_id: int = 0,
 ) -> tuple[BBox, float] | None:
@@ -461,6 +509,7 @@ class SAM3Runtime:
         video_path: Path,
         prompts_with_initial_bbox: list[tuple[str, BBox]],
         expected_frames: set[int],
+        mask_size_hw: tuple[int, int] | None = None,
     ) -> Iterator[FramePropagationResult]:
         """Propagate tracked objects across a video.
 
@@ -531,7 +580,9 @@ class SAM3Runtime:
                 }))
                 prompt_streams.append((prompt, sid, stream))
 
-            yield from self._merge_streams(prompt_streams, expected_frames)
+            yield from self._merge_streams(
+                prompt_streams, expected_frames, mask_size_hw,
+            )
         finally:
             # Close any still-open sessions for these prompts. close() at the
             # Runtime level will mop up stragglers if the generator was
@@ -543,6 +594,7 @@ class SAM3Runtime:
         self,
         prompt_streams: list[tuple[str, str, Iterator[dict]]],
         expected_frames: set[int],
+        mask_size_hw: tuple[int, int] | None = None,
     ) -> Iterator[FramePropagationResult]:
         """Round-robin merge: every active stream yields the same frame_idx
         in the same order (verified Q6 in 2026-05-04 smoke). We pull one
@@ -563,20 +615,30 @@ class SAM3Runtime:
             )
 
             detections: dict[str, tuple[BBox, float] | None] = {}
+            masks: dict[str, np.ndarray | None] = {}
             for i, (prompt, _sid, stream) in enumerate(prompt_streams):
                 item = buffer[i]
                 if item is None or item["frame_index"] != current_frame:
                     detections[prompt] = None
+                    masks[prompt] = None
                     continue
                 detections[prompt] = _outputs_to_bbox_score(
                     item["outputs"], target_obj_id=0,
                 )
+                # Mask extraction is opt-in: when mask_size_hw is None we
+                # leave masks as None placeholders to keep the no-overlay
+                # path bit-identical to pre-Task 5 behaviour.
+                if mask_size_hw is not None:
+                    masks[prompt] = _outputs_to_mask(
+                        item["outputs"],
+                        target_obj_id=0,
+                        target_size_hw=mask_size_hw,
+                    )
+                else:
+                    masks[prompt] = None
                 buffer[i] = next(stream, None)
 
             if current_frame in expected_frames:
-                # Task 4: masks field is required but not yet populated.
-                # Task 5 will fill these from sam3's out_binary_masks.
-                masks: dict[str, np.ndarray | None] = {p: None for p in detections}
                 yield FramePropagationResult(
                     frame=current_frame, detections=detections, masks=masks,
                 )
