@@ -8,6 +8,7 @@ import json
 import signal
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from types import FrameType
 from typing import Literal, Protocol, get_args
 
@@ -172,9 +173,24 @@ def _call_gemma(handle: GemmaHandle, prompt: str, frame: np.ndarray) -> str:
 
     pil_image = Image.fromarray(frame)
     try:
+        # Use apply_chat_template so the processor inserts the correct
+        # number of <image> placeholder tokens for transformers 5.x Gemma 4
+        # (which otherwise raises "Image features and image tokens do not
+        # match"). Mirrors LocalGemmaVLMLabeler.label_segment's path.
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image", "image": pil_image},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        templated = handle.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         inputs = handle.processor(
-            text=prompt, images=[pil_image], return_tensors="pt"
+            text=templated, images=[pil_image], return_tensors="pt"
         ).to(handle.config.device)
+        input_len = inputs["input_ids"].shape[1]
         with _timeout_guard(handle.config.timeout_sec):
             tokens = handle.model.generate(
                 **inputs,
@@ -182,15 +198,37 @@ def _call_gemma(handle: GemmaHandle, prompt: str, frame: np.ndarray) -> str:
                 temperature=handle.config.temperature,
                 max_new_tokens=handle.config.max_output_tokens,
             )
+        # Slice off the input prompt before decoding — Gemma 4's chat-template
+        # output prepends the templated prompt verbatim, which breaks the
+        # `json.loads(text)` step in `_parse_planner_response`. Mirrors
+        # `LocalGemmaVLMLabeler.label_segment`.
+        generated_only = tokens[:, input_len:]
         decoded: str = handle.processor.batch_decode(
-            tokens, skip_special_tokens=True
+            generated_only, skip_special_tokens=True
         )[0]
     except TimeoutError:
         raise _PlannerLabelerError("timeout") from None
 
     if decoded.startswith(prompt):
         decoded = decoded[len(prompt):]
+    _maybe_dump_planner_io(prompt, decoded, frame)
     return decoded.strip()
+
+
+def _maybe_dump_planner_io(prompt: str, decoded: str, frame: np.ndarray) -> None:
+    import os
+    dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
+    if not dump_root:
+        return
+    from PIL import Image
+    out = Path(dump_root) / "_planner"
+    out.mkdir(parents=True, exist_ok=True)
+    n = len(list(out.glob("call_*")))
+    call_dir = out / f"call_{n:03d}"
+    call_dir.mkdir(parents=True, exist_ok=True)
+    (call_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+    (call_dir / "response.txt").write_text(decoded, encoding="utf-8")
+    Image.fromarray(np.asarray(frame, dtype=np.uint8)).save(call_dir / "frame.png")
 
 
 def _parse_planner_response(raw: str) -> EntityPlan:
