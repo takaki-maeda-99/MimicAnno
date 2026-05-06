@@ -526,6 +526,20 @@ def _maybe_dump_vlm_input(
         )
 
 
+def _maybe_dump_vlm_output(
+    request: VLMRequest,
+    attempt: int,
+    raw_text: str,
+) -> None:
+    import os
+    dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
+    if not dump_root:
+        return
+    out = Path(dump_root) / request["segment_id"] / f"attempt_{attempt}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "response.txt").write_text(raw_text, encoding="utf-8")
+
+
 @dataclass(frozen=True)
 class GemmaHandle:
     """Thin reference to a loaded Gemma model + processor.
@@ -631,6 +645,7 @@ class LocalGemmaVLMLabeler:
             self._raise_classified(e)
             raise  # unreachable; helps static analysis
 
+        _maybe_dump_vlm_output(request, attempt, decoded)
         return parse_and_validate(decoded.strip(),
                                   set(request["allowed_labels"]))
 

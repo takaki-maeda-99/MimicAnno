@@ -16,8 +16,12 @@ from mimicanno.config import (
     compute_config_hash,
 )
 
+# NB: Phase 2 hash bumped 2026-05-06 with the introduction of
+# `VLMConfig.mask_overlay` (spec 2026-05-04-vlm-mask-overlay-design §7.2 —
+# overlay settings are intentionally part of config_hash so ablations land
+# in distinct run dirs). Phase 1 unaffected because vlm is None.
 PHASE1_HASH_PRE_MERGE = "sha256:f6de5eb8209e1d4d902370c4fe63ebfb7cb32284d2f8528ec44f20c8e387b115"
-PHASE2_HASH_PRE_MERGE = "sha256:4aa28379fc33595e29875d4bd74041043738b3b4c3893d13690f9a77b3fd0b37"
+PHASE2_HASH_PRE_MERGE = "sha256:bf9f46391f4bbdd2d1288f3ccd9176d2f00dc99bc7683b006661c778f4e6792a"
 
 
 def _phase1_config() -> AnnotationConfig:

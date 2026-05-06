@@ -32,11 +32,13 @@ from mimicanno.config import (
 PINNED_PHASE1_HASH = (
     "sha256:f6de5eb8209e1d4d902370c4fe63ebfb7cb32284d2f8528ec44f20c8e387b115"
 )
+# Phase 2/3 hashes bumped 2026-05-06 with the introduction of
+# `VLMConfig.mask_overlay` (spec 2026-05-04-vlm-mask-overlay-design §7.2).
 PINNED_PHASE2_HASH = (
-    "sha256:157910ebdfbaf98d9ed147a4f64433e3b95d54ab0c7767cc090138a49c32082e"
+    "sha256:6acaaa0420e80822752dbea05b5993f668e3c60de9ec53f1861343b6dc9be182"
 )
 PINNED_PHASE3_HASH = (
-    "sha256:d7e96dd1eb35a98caeb46d50085e47743c551ecb130e378fe2deb0d5e98575c2"
+    "sha256:e83f9b9530b95bbfe67fa209dd2c7e30b7f4bf132ce61a3b8301289ef5b30dc9"
 )
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml  # type: ignore[import-untyped]
 
@@ -130,6 +130,26 @@ class ClipFeatureConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class MaskOverlayConfig:
+    """SAM3 mask overlay onto Gemma keyframes (spec 2026-05-04 §7.1).
+
+    `palette` currently has only one option ("builtin_10", a fixed 10-color
+    snapshot derived from matplotlib tab10). The Literal type prevents
+    accidental drift to free-form names.
+    """
+    enabled: bool = True
+    alpha: float = 0.4
+    palette: Literal["builtin_10"] = "builtin_10"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alpha": self.alpha,
+            "enabled": self.enabled,
+            "palette": self.palette,
+        }
+
+
+@dataclass(slots=True, frozen=True)
 class VLMConfig:
     """Phase 2 VLM-pipeline configuration (spec §2.4).
 
@@ -156,6 +176,7 @@ class VLMConfig:
     device: str = "cuda"
     dtype: str = "bfloat16"
     clip_features: ClipFeatureConfig = ClipFeatureConfig()
+    mask_overlay: MaskOverlayConfig = MaskOverlayConfig()
     resolved_checkpoint: str | None = None
     fixture_path: Path | None = None  # runtime-only; NOT in to_dict / config_hash
 
@@ -168,6 +189,7 @@ class VLMConfig:
             "image_size_px": self.image_size_px,
             "keyframe_strategy": self.keyframe_strategy,
             "keyframes_per_segment": self.keyframes_per_segment,
+            "mask_overlay": self.mask_overlay.to_dict(),
             "max_output_tokens": self.max_output_tokens,
             "max_retries": self.max_retries,
             "model_id": self.model_id,
