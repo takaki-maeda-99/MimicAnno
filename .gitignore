@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 data/
+logs/
 
 # Phase 1 run output (kept out of git)
 runs/*
