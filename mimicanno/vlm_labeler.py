@@ -526,6 +526,11 @@ def _maybe_dump_vlm_input(
     Activated by env var ``MIMICANNO_VLM_DUMP_DIR``. Writes to
     ``<dump_dir>/<segment_id>/attempt_<N>/{prompt.txt,request.json,keyframe_<i>.png}``.
     Set a per-episode dump dir to keep runs separated.
+
+    Task 11 note: when ``VLMConfig.mask_overlay.enabled`` is True, the
+    keyframes here are already overlay-baked — ``ClipFeatureExtractor``
+    composes SAM3 masks onto the frame in ``_build_request`` before they
+    land in the request dict. The dump path needs no special-casing.
     """
     import os
     dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
@@ -548,6 +553,7 @@ def _maybe_dump_vlm_input(
         "keyframe_offsets_sec": request["keyframe_offsets_sec"],
         "robot_state_summary": request["robot_state_summary"],
         "object_state_summary": request.get("object_state_summary"),
+        "mask_overlay_legend": request.get("mask_overlay_legend"),
         "attempt": attempt,
         "last_reject_reason": last_reject_reason,
     }
