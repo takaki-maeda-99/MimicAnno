@@ -26,6 +26,7 @@ class StubClipFeatureExtractor:
 
     def extract(
         self, *, segment, gripper, eef_velocity, keyframes_per_segment,
+        mask_cache=None, mask_alpha=0.4,
     ):
         from mimicanno.clip_features import (
             ClipFeatures,
@@ -37,6 +38,12 @@ class StubClipFeatureExtractor:
         )
         offsets_sec = [(o - segment.start_frame) / self._fps for o in offsets]
         frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in offsets]
+        if mask_cache is not None:
+            from mimicanno.vlm_overlay import compose_overlay
+            frames = [
+                compose_overlay(f, mask_cache, fi, mask_alpha)
+                for f, fi in zip(frames, offsets, strict=True)
+            ]
         summary = compute_robot_state_summary(
             start_frame=segment.start_frame, end_frame=segment.end_frame,
             fps=self._fps, gripper=gripper, eef_velocity=eef_velocity, cfg=self._cfg,

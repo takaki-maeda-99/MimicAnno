@@ -94,6 +94,11 @@ class VLMRequest(TypedDict):
     keyframe_offsets_sec: list[float]
     robot_state_summary: dict[str, Any]   # see clip_features.RobotStateSummary
     object_state_summary: NotRequired[ObjectStateSummary | None]  # Phase 3; spec §5.4
+    # Task 7 (vlm-mask-overlay): one-line color legend for SAM3 mask overlays
+    # painted onto `keyframes`. Built per-segment by the labeler orchestrator
+    # via vlm_overlay.build_color_legend; None when overlay is disabled or no
+    # prompt has any non-None mask in this segment.
+    mask_overlay_legend: NotRequired[str | None]
 
 
 @dataclass(slots=True)
@@ -289,17 +294,43 @@ def _build_request(
     eef_velocity: np.ndarray | None,
     keyframes_per_segment: int,
     episode_meta: dict[str, Any],
+    mask_cache: Any = None,
+    mask_alpha: float = 0.4,
 ) -> VLMRequest:
     """Compose a VLMRequest from a SubtaskSegment and the run-level metadata.
 
     Keyframe + scalar extraction is delegated to ClipFeatureExtractor (Task 4);
     this function only reshapes the ClipFeatures into the VLMRequest TypedDict
-    and attaches episode-level fields from `episode_meta`."""
-    feat = extractor.extract(
-        segment=segment, gripper=gripper, eef_velocity=eef_velocity,
-        keyframes_per_segment=keyframes_per_segment,
-    )
-    return VLMRequest(
+    and attaches episode-level fields from `episode_meta`.
+
+    ``mask_cache`` (Task 8): when provided, keyframe extraction overlays
+    SAM3 masks (via ClipFeatureExtractor) and the per-segment color legend
+    is built and attached to the request. ``None`` preserves pre-overlay
+    behaviour bit-identically.
+    """
+    # Only thread mask kwargs through when overlay is actually engaged so
+    # test-stub extractors that haven't been migrated to the Task 6
+    # signature keep working untouched.
+    if mask_cache is not None:
+        feat = extractor.extract(
+            segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=keyframes_per_segment,
+            mask_cache=mask_cache, mask_alpha=mask_alpha,
+        )
+    else:
+        feat = extractor.extract(
+            segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=keyframes_per_segment,
+        )
+    legend: str | None = None
+    if mask_cache is not None:
+        from mimicanno.clip_features import compute_keyframe_offsets
+        from mimicanno.vlm_overlay import build_color_legend
+        offsets = compute_keyframe_offsets(
+            segment.start_frame, segment.end_frame, keyframes_per_segment,
+        )
+        legend = build_color_legend(mask_cache, offsets)
+    request = VLMRequest(
         task_text=episode_meta["task_text"],
         allowed_labels=list(episode_meta["allowed_labels"]),
         label_version=episode_meta.get("label_version", "manipulation.v1"),
@@ -312,6 +343,9 @@ def _build_request(
         keyframe_offsets_sec=feat.keyframe_offsets_sec,
         robot_state_summary=feat.robot_state_summary,
     )
+    if legend is not None:
+        request["mask_overlay_legend"] = legend
+    return request
 
 
 def _merge_response(
@@ -726,6 +760,8 @@ def apply_phase3_labeling(
     config: VLMConfig,
     tracking_config: Any,
     labeler_factory: LabelerFactory,
+    mask_cache: Any = None,
+    mask_alpha: float = 0.4,
 ) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome, float]:
     """Phase 3 labeling orchestrator (spec §5.5, §6).
 
@@ -776,6 +812,7 @@ def apply_phase3_labeling(
             extractor=extractor, gripper=gripper, eef_velocity=eef_velocity,
             keyframes_per_segment=config.keyframes_per_segment,
             episode_meta=episode_meta,
+            mask_cache=mask_cache, mask_alpha=mask_alpha,
         )
         if not is_fallback:
             request["object_state_summary"] = object_state_summary

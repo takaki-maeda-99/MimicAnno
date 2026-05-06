@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json as _json
+import logging
 import sys as _sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,8 @@ from mimicanno.writers import (
     write_manifest_json,
     write_signals_json,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Phase 2 helpers
@@ -847,12 +850,17 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
                 has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
                 degrade_reason="sam3_no_initial_detection",
             )
-        # Task 5: Propagator.run now returns (tracks, mask_cache). The
-        # mask_cache is None until Task 8 wires VLMConfig.mask_overlay
-        # through here; the second tuple element is intentionally
-        # discarded for now so the rest of the pipeline keeps its
-        # pre-overlay shape.
-        tracks, _mask_cache = Propagator().run(
+        # Task 8 (vlm-mask-overlay): collect SAM3 masks at the keyframe
+        # resolution when overlay is enabled so Stage 3 can paint them onto
+        # Gemma's input keyframes. mask_cache stays None when overlay is
+        # disabled — that path is bit-identical to pre-overlay behaviour.
+        mask_overlay_enabled = (
+            vlm_cfg is not None and vlm_cfg.mask_overlay.enabled
+        )
+        mask_image_size_px = (
+            vlm_cfg.image_size_px if mask_overlay_enabled else None
+        )
+        tracks, mask_cache = Propagator().run(
             runtime=sam3_runtime,
             plan=plan,
             video_path=req.video,
@@ -860,6 +868,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             n_frames=n_frames,
             stride=stride,
             config=tracking_cfg,
+            mask_image_size_px=mask_image_size_px,
         )
     finally:
         sam3_runtime.close()  # free GPU before Stage 3
@@ -921,6 +930,28 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     def labeler_factory(c: VLMConfig) -> LocalGemmaVLMLabeler:  # reuse already-loaded model
         return vlm
 
+    # Task 8 (vlm-mask-overlay): forward mask_cache + alpha so Stage 3
+    # paints SAM3 masks on Gemma's keyframes and attaches the color legend
+    # to the prompt. Both default to None / 0.4 when overlay is disabled.
+    if mask_cache is not None:
+        n_frames_cached = len(mask_cache.by_frame)
+        nonempty = sum(
+            1 for fmasks in mask_cache.by_frame.values()
+            for blob in fmasks.values()
+            if blob is not None
+        )
+        rle_bytes = sum(
+            len(blob)
+            for fmasks in mask_cache.by_frame.values()
+            for blob in fmasks.values()
+            if blob is not None
+        )
+        logger.info(
+            "vlm_mask_overlay: frames_cached=%d nonempty_entries=%d "
+            "palette=%s rle_bytes=%d shape=%s alpha=%.2f",
+            n_frames_cached, nonempty, dict(mask_cache.palette),
+            rle_bytes, mask_cache.shape, vlm_cfg.mask_overlay.alpha,
+        )
     segments, _attempts, phase3_outcome, object_state_coverage = apply_phase3_labeling(
         segments=segments,
         tracks=tracks,
@@ -932,6 +963,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         config=vlm_cfg,
         tracking_config=tracking_cfg,
         labeler_factory=labeler_factory,
+        mask_cache=mask_cache,
+        mask_alpha=vlm_cfg.mask_overlay.alpha,
     )
 
     # Phase 4: temporal smoothing (spec §3, §7.1).

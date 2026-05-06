@@ -544,3 +544,73 @@ def test_visible_track_ids_roundtrip() -> None:
 
     restored = ObjectStateSummary.from_dict(d)
     assert restored.visible_track_ids == ["obj:red_block:0"]
+
+
+# ---------------------------------------------------------------------------
+# Task 8 (vlm-mask-overlay): MaskCache propagation through apply_phase3_labeling
+# ---------------------------------------------------------------------------
+
+
+def test_mask_cache_threaded_through_to_request() -> None:
+    """Task 8: mask_cache + alpha → labeler.label_segment(...) sees a request
+    whose mask_overlay_legend is set per spec §6.1.
+
+    Uses a probe labeler that captures the request and short-circuits.
+    Doesn't run a real Gemma — only verifies wiring.
+    """
+    import numpy as np
+
+    from mimicanno.object_tracker.mask_cache import MaskCache, encode_mask
+    from mimicanno.vlm_labeler import apply_phase3_labeling
+
+    n_segments = 2
+    frames_per_seg = 10
+    n_frames = n_segments * frames_per_seg
+
+    segs, gripper, eef, extractor, meta = make_synthetic_phase1_run(
+        n_segments=n_segments, fps=30.0, frames_per_seg=frames_per_seg,
+    )
+    tracks = [
+        _make_fully_visible_track(
+            "obj:red_block:0", "object", "red block", primary=True,
+            start_frame=0, end_frame=n_frames - 1,
+        ),
+    ]
+    signals = _make_signals(tracks, n_frames)
+
+    # Fill every keyframe-eligible frame with a non-empty mask so the
+    # legend is non-None for both segments.
+    full_mask = np.ones((4, 4), dtype=bool)
+    by_frame = {f: {"red block": encode_mask(full_mask)} for f in range(n_frames)}
+    cache = MaskCache(
+        by_frame=by_frame, shape=(4, 4),
+        palette={"red block": (214, 39, 40)},  # red
+    )
+
+    captured: list[dict] = []
+
+    class _ProbeLabeler:
+        def label_segment(self, request, attempt, last_reject_reason=None):
+            captured.append(dict(request))
+            from mimicanno.vlm_labeler import VLMResponse
+            return VLMResponse(
+                phase="approach_object", verb="approach", object="red block",
+                target=None, vlm_confidence=0.9, evidence=None,
+            )
+
+    apply_phase3_labeling(
+        segments=segs, tracks=tracks, object_signals=signals,
+        extractor=extractor, gripper=gripper, eef_velocity=eef,
+        episode_meta=meta, config=_vlm_config(),
+        tracking_config=_tracking_config(),
+        labeler_factory=lambda c: _ProbeLabeler(),
+        mask_cache=cache, mask_alpha=0.4,
+    )
+
+    assert len(captured) == n_segments
+    for req in captured:
+        legend = req.get("mask_overlay_legend")
+        assert legend is not None
+        assert "red=red block" in legend
+        # Spec §6.1 wording sanity check.
+        assert "Colored translucent overlays" in legend

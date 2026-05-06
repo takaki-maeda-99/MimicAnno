@@ -174,8 +174,10 @@ def build_messages(
     Returns a single user-role message; a system role is not used because
     Gemma 4-IT's chat template merges system + user into one user turn.
     """
-    text = build_prompt(request, attempt=attempt,
-                        last_reject_reason=last_reject_reason)
+    text = build_prompt(
+        request, attempt=attempt, last_reject_reason=last_reject_reason,
+        legend=request.get("mask_overlay_legend"),
+    )
     before, _, after = text.partition(KEYFRAMES_MARKER)
     if not _:
         # Should be unreachable — build_prompt always emits the marker.

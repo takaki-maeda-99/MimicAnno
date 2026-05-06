@@ -93,3 +93,30 @@ def test_prompt_with_legend_none_is_byte_identical_to_default() -> None:
     assert got_default == got_explicit_none
     expected = (SNAPS / "prompt_initial.txt").read_text(encoding="utf-8")
     assert got_explicit_none == expected
+
+
+def test_build_messages_picks_up_legend_from_request() -> None:
+    """Task 8 wiring: VLMRequest.mask_overlay_legend → build_messages → build_prompt."""
+    from mimicanno.vlm_prompt import build_messages
+    req = _request()
+    req["mask_overlay_legend"] = _LEGEND_EXAMPLE
+    msgs = build_messages(req, attempt=1, last_reject_reason=None)
+    text_blocks = [
+        b["text"] for b in msgs[0]["content"]
+        if b.get("type") == "text"
+    ]
+    joined = "\n".join(text_blocks)
+    assert _LEGEND_EXAMPLE in joined
+
+
+def test_build_messages_without_legend_key_unchanged() -> None:
+    """Spec §6.1 backward-compat: missing key behaves like legend=None."""
+    from mimicanno.vlm_prompt import build_messages
+    req = _request()
+    msgs = build_messages(req, attempt=1, last_reject_reason=None)
+    text_blocks = [
+        b["text"] for b in msgs[0]["content"]
+        if b.get("type") == "text"
+    ]
+    joined = "\n".join(text_blocks)
+    assert _LEGEND_EXAMPLE not in joined
