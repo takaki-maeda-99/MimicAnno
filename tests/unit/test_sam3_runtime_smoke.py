@@ -43,17 +43,68 @@ def test_frame_propagation_result_dataclass_fields() -> None:
     result = FramePropagationResult(
         frame=5,
         detections={"red block": (bbox, 0.9), "bin A": None},
+        masks={"red block": None, "bin A": None},
     )
     assert result.frame == 5
     assert result.detections["red block"] == (bbox, 0.9)
     assert result.detections["bin A"] is None
+    assert result.masks["red block"] is None
+    assert result.masks["bin A"] is None
+
+
+def test_frame_propagation_result_carries_masks_field() -> None:
+    """Task 4: masks field exists with the same key set as detections."""
+    import numpy as np
+
+    from mimicanno.object_tracker.propagator import BBox
+    from mimicanno.object_tracker.sam3_runtime import FramePropagationResult
+
+    bbox = BBox(x=0.1, y=0.1, w=0.2, h=0.2)
+    mask = np.zeros((4, 4), dtype=bool)
+    result = FramePropagationResult(
+        frame=2,
+        detections={"red block": (bbox, 0.9), "bin A": None},
+        masks={"red block": mask, "bin A": None},
+    )
+    assert result.masks["red block"] is mask
+    assert result.masks["bin A"] is None
+
+
+def test_frame_propagation_result_rejects_mismatched_keys() -> None:
+    """Invariant: detections.keys() == masks.keys()."""
+    from mimicanno.object_tracker.sam3_runtime import FramePropagationResult
+
+    with pytest.raises(ValueError, match="invariant violated"):
+        FramePropagationResult(
+            frame=0,
+            detections={"a": None, "b": None},
+            masks={"a": None},
+        )
+    with pytest.raises(ValueError, match="invariant violated"):
+        FramePropagationResult(
+            frame=0,
+            detections={"a": None},
+            masks={"a": None, "extra": None},
+        )
+
+
+def test_make_test_propagation_result_helper_fills_masks() -> None:
+    """Helper in tests/conftest.py defaults masks to {p: None for p in detections}."""
+    from tests.conftest import make_test_propagation_result
+
+    result = make_test_propagation_result(
+        frame=3,
+        detections={"a": None, "b": None},
+    )
+    assert set(result.masks.keys()) == {"a", "b"}
+    assert all(v is None for v in result.masks.values())
 
 
 def test_frame_propagation_result_is_frozen() -> None:
     """FramePropagationResult is frozen (immutable)."""
     from mimicanno.object_tracker.sam3_runtime import FramePropagationResult
 
-    result = FramePropagationResult(frame=0, detections={})
+    result = FramePropagationResult(frame=0, detections={}, masks={})
     with pytest.raises((AttributeError, TypeError)):
         result.frame = 1  # type: ignore[misc]
 

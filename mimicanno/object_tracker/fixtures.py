@@ -193,7 +193,14 @@ class FixtureSAM3Tracker:
                 raise self.raise_with
 
             detections = self.propagation_results.get(frame_idx, {})
-            yield FramePropagationResult(frame=frame_idx, detections=detections)
+            # Fixture default: no masks. Task 5+ pipeline tests that need
+            # masks should construct FramePropagationResult directly via
+            # `make_test_propagation_result` instead of going through this
+            # fixture.
+            masks: dict[str, np.ndarray | None] = {p: None for p in detections}
+            yield FramePropagationResult(
+                frame=frame_idx, detections=detections, masks=masks,
+            )
 
     def close(self) -> None:
         """Close (clean up) the tracker. Idempotent.

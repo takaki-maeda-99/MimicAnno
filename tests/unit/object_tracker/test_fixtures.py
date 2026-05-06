@@ -210,6 +210,7 @@ def test_frame_propagation_result_immutable() -> None:
     result = FramePropagationResult(
         frame=0,
         detections={"red block": (bbox, 0.95)},
+        masks={"red block": None},
     )
 
     with pytest.raises(AttributeError):

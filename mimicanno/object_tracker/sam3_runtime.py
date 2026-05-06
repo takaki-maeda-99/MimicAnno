@@ -63,12 +63,26 @@ class FramePropagationResult:
     frame: the integer frame index
     detections: dict[prompt] -> (BBox, score) | None, where None means
         the prompt was not detected or tracking was lost.
+    masks: dict[prompt] -> 2-D bool ndarray | None. Same key set as
+        ``detections`` (invariant, enforced in ``__post_init__``). ``None``
+        means no mask is available for that prompt at this frame (track
+        lost or mask extraction skipped). Mask shape is whatever SAM3
+        returned (usually downsampled to keyframe size by the caller).
 
     BBox coords are normalized [0, 1] per spec §2.4.
     """
 
     frame: int
     detections: dict[str, tuple[BBox, float] | None]
+    masks: dict[str, np.ndarray | None]
+
+    def __post_init__(self) -> None:
+        if set(self.detections.keys()) != set(self.masks.keys()):
+            raise ValueError(
+                "FramePropagationResult invariant violated: "
+                f"detections keys {sorted(self.detections.keys())!r} != "
+                f"masks keys {sorted(self.masks.keys())!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +574,11 @@ class SAM3Runtime:
                 buffer[i] = next(stream, None)
 
             if current_frame in expected_frames:
+                # Task 4: masks field is required but not yet populated.
+                # Task 5 will fill these from sam3's out_binary_masks.
+                masks: dict[str, np.ndarray | None] = {p: None for p in detections}
                 yield FramePropagationResult(
-                    frame=current_frame, detections=detections,
+                    frame=current_frame, detections=detections, masks=masks,
                 )
 
     # ------------------------------------------------------------------
