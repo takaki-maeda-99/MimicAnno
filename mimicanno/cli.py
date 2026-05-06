@@ -118,6 +118,21 @@ def annotate(
         help="Per-attempt inference timeout (sec). Default: VLMConfig default "
              "(30s, sized for GPU). Bump to 300+ for CPU runs.",
     ),
+    vlm_mask_overlay: bool = typer.Option(
+        True, "--vlm-mask-overlay/--no-vlm-mask-overlay",
+        help="Paint SAM3 masks on the keyframes shown to Gemma and "
+             "include a color legend in the prompt (spec "
+             "2026-05-04-vlm-mask-overlay-design). Disabling reverts "
+             "to plain keyframes; the run is still valid but loses the "
+             "overlay-conditioned label boost.",
+    ),
+    vlm_mask_alpha: float = typer.Option(
+        0.4, "--vlm-mask-alpha",
+        help="Opacity of the mask overlay paint (0.0..1.0). Ignored when "
+             "--no-vlm-mask-overlay is set. The legend wording uses "
+             "'~40% opacity' regardless so values nearby (0.3..0.5) are "
+             "drop-in.",
+    ),
     offline: bool = typer.Option(
         False, "--offline",
         help="Forbid HF Hub network access; --vlm-model MUST include @<sha>.",
@@ -188,6 +203,17 @@ def annotate(
                 vlm_config = replace(vlm_config, device=vlm_device)
             if vlm_timeout_sec is not None:
                 vlm_config = replace(vlm_config, timeout_sec=vlm_timeout_sec)
+            if not 0.0 <= vlm_mask_alpha <= 1.0:
+                raise VLMConfigInvalid(
+                    reason=f"--vlm-mask-alpha must be in [0.0, 1.0], got {vlm_mask_alpha}",
+                )
+            from mimicanno.config import MaskOverlayConfig
+            vlm_config = replace(
+                vlm_config,
+                mask_overlay=MaskOverlayConfig(
+                    enabled=vlm_mask_overlay, alpha=vlm_mask_alpha,
+                ),
+            )
             if vlm_config.keyframes_per_segment < 1:
                 raise VLMConfigInvalid(reason="--vlm-keyframes must be >= 1")
         except MimicAnnoError as e:
