@@ -47,10 +47,16 @@ def compose_overlay(
         if mask is None:
             continue
         if mask.shape != (h, w):
-            raise ValueError(
-                f"mask shape {mask.shape} != frame shape {(h, w)} for "
-                f"prompt {prompt!r}"
-            )
+            # MaskCache downsamples to (image_size_px, image_size_px) at SAM3
+            # collection time, but extract_frames_at_indices resizes by long
+            # edge — keyframes for non-square cameras come back as (H, W) with
+            # H != W. Resize per-call with NEAREST so we don't spread soft
+            # boundaries onto pixels SAM3 didn't claim.
+            import cv2  # type: ignore
+            mask = cv2.resize(
+                mask.astype(np.uint8), (w, h),
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
         color = np.asarray(mask_cache.palette[prompt], dtype=np.float32)
         m = mask.astype(np.float32)[..., None]  # H×W×1
         out = out * (1.0 - alpha * m) + color[None, None, :] * alpha * m

@@ -125,15 +125,22 @@ def test_compose_overlay_rejects_alpha_out_of_range() -> None:
         compose_overlay(_frame(), cache, 0, alpha=1.5)
 
 
-def test_compose_overlay_rejects_shape_mismatch() -> None:
-    frame = _frame(h=8, w=8)
+def test_compose_overlay_resizes_mask_on_shape_mismatch() -> None:
+    """SAM3 stores a square (image_size_px, image_size_px) mask but the
+    actual keyframe is letterbox-resized by long edge — non-square cameras
+    produce non-square frames. compose_overlay resizes the mask per-call
+    with NEAREST so the overlay still lands."""
+    frame = _frame(h=4, w=8)
     cache = MaskCache(
-        by_frame={0: {"a": encode_mask(np.ones((4, 4), dtype=bool))}},
-        shape=(4, 4),
-        palette=assign_palette(["a"]),
+        by_frame={0: {"a": encode_mask(np.ones((8, 8), dtype=bool))}},
+        shape=(8, 8),
+        palette={"a": (255, 0, 0)},
     )
-    with pytest.raises(ValueError, match="mask shape"):
-        compose_overlay(frame, cache, 0, alpha=0.4)
+    out = compose_overlay(frame, cache, 0, alpha=1.0)
+    assert out.shape == (4, 8, 3)
+    expected = np.zeros_like(out)
+    expected[..., 0] = 255  # full red
+    np.testing.assert_array_equal(out, expected)
 
 
 # ---- legend builder ----
