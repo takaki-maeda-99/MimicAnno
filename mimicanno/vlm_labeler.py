@@ -94,6 +94,11 @@ class VLMRequest(TypedDict):
     keyframe_offsets_sec: list[float]
     robot_state_summary: dict[str, Any]   # see clip_features.RobotStateSummary
     object_state_summary: NotRequired[ObjectStateSummary | None]  # Phase 3; spec §5.4
+    # Task 7 (vlm-mask-overlay): one-line color legend for SAM3 mask overlays
+    # painted onto `keyframes`. Built per-segment by the labeler orchestrator
+    # via vlm_overlay.build_color_legend; None when overlay is disabled or no
+    # prompt has any non-None mask in this segment.
+    mask_overlay_legend: NotRequired[str | None]
 
 
 @dataclass(slots=True)
@@ -289,17 +294,43 @@ def _build_request(
     eef_velocity: np.ndarray | None,
     keyframes_per_segment: int,
     episode_meta: dict[str, Any],
+    mask_cache: Any = None,
+    mask_alpha: float = 0.4,
 ) -> VLMRequest:
     """Compose a VLMRequest from a SubtaskSegment and the run-level metadata.
 
     Keyframe + scalar extraction is delegated to ClipFeatureExtractor (Task 4);
     this function only reshapes the ClipFeatures into the VLMRequest TypedDict
-    and attaches episode-level fields from `episode_meta`."""
-    feat = extractor.extract(
-        segment=segment, gripper=gripper, eef_velocity=eef_velocity,
-        keyframes_per_segment=keyframes_per_segment,
-    )
-    return VLMRequest(
+    and attaches episode-level fields from `episode_meta`.
+
+    ``mask_cache`` (Task 8): when provided, keyframe extraction overlays
+    SAM3 masks (via ClipFeatureExtractor) and the per-segment color legend
+    is built and attached to the request. ``None`` preserves pre-overlay
+    behaviour bit-identically.
+    """
+    # Only thread mask kwargs through when overlay is actually engaged so
+    # test-stub extractors that haven't been migrated to the Task 6
+    # signature keep working untouched.
+    if mask_cache is not None:
+        feat = extractor.extract(
+            segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=keyframes_per_segment,
+            mask_cache=mask_cache, mask_alpha=mask_alpha,
+        )
+    else:
+        feat = extractor.extract(
+            segment=segment, gripper=gripper, eef_velocity=eef_velocity,
+            keyframes_per_segment=keyframes_per_segment,
+        )
+    legend: str | None = None
+    if mask_cache is not None:
+        from mimicanno.clip_features import compute_keyframe_offsets
+        from mimicanno.vlm_overlay import build_color_legend
+        offsets = compute_keyframe_offsets(
+            segment.start_frame, segment.end_frame, keyframes_per_segment,
+        )
+        legend = build_color_legend(mask_cache, offsets)
+    request = VLMRequest(
         task_text=episode_meta["task_text"],
         allowed_labels=list(episode_meta["allowed_labels"]),
         label_version=episode_meta.get("label_version", "manipulation.v1"),
@@ -312,6 +343,9 @@ def _build_request(
         keyframe_offsets_sec=feat.keyframe_offsets_sec,
         robot_state_summary=feat.robot_state_summary,
     )
+    if legend is not None:
+        request["mask_overlay_legend"] = legend
+    return request
 
 
 def _merge_response(
@@ -481,6 +515,71 @@ def _hf_load_model_and_processor(
     return model, processor
 
 
+def _maybe_dump_vlm_input(
+    request: VLMRequest,
+    prompt: str,
+    attempt: int,
+    last_reject_reason: RejectReason | None,
+) -> None:
+    """Optional dump of Gemma inputs (prompt + keyframes + metadata).
+
+    Activated by env var ``MIMICANNO_VLM_DUMP_DIR``. Writes to
+    ``<dump_dir>/<segment_id>/attempt_<N>/{prompt.txt,request.json,keyframe_<i>.png}``.
+    Set a per-episode dump dir to keep runs separated.
+
+    Task 11 note: when ``VLMConfig.mask_overlay.enabled`` is True, the
+    keyframes here are already overlay-baked — ``ClipFeatureExtractor``
+    composes SAM3 masks onto the frame in ``_build_request`` before they
+    land in the request dict. The dump path needs no special-casing.
+    """
+    import os
+    dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
+    if not dump_root:
+        return
+    from PIL import Image
+    out = Path(dump_root) / request["segment_id"] / f"attempt_{attempt}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "prompt.txt").write_text(prompt, encoding="utf-8")
+    meta = {
+        "task_text": request["task_text"],
+        "allowed_labels": request["allowed_labels"],
+        "label_version": request["label_version"],
+        "robot_type": request["robot_type"],
+        "fps": request["fps"],
+        "episode_duration_sec": request["episode_duration_sec"],
+        "segment_index": request["segment_index"],
+        "segment_total": request["segment_total"],
+        "segment_id": request["segment_id"],
+        "keyframe_offsets_sec": request["keyframe_offsets_sec"],
+        "robot_state_summary": request["robot_state_summary"],
+        "object_state_summary": request.get("object_state_summary"),
+        "mask_overlay_legend": request.get("mask_overlay_legend"),
+        "attempt": attempt,
+        "last_reject_reason": last_reject_reason,
+    }
+    (out / "request.json").write_text(
+        json.dumps(meta, indent=2, default=str), encoding="utf-8"
+    )
+    for i, frame in enumerate(request["keyframes"]):
+        Image.fromarray(np.asarray(frame, dtype=np.uint8)).save(
+            out / f"keyframe_{i:02d}.png"
+        )
+
+
+def _maybe_dump_vlm_output(
+    request: VLMRequest,
+    attempt: int,
+    raw_text: str,
+) -> None:
+    import os
+    dump_root = os.environ.get("MIMICANNO_VLM_DUMP_DIR")
+    if not dump_root:
+        return
+    out = Path(dump_root) / request["segment_id"] / f"attempt_{attempt}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "response.txt").write_text(raw_text, encoding="utf-8")
+
+
 @dataclass(frozen=True)
 class GemmaHandle:
     """Thin reference to a loaded Gemma model + processor.
@@ -560,6 +659,7 @@ class LocalGemmaVLMLabeler:
         prompt = self._processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+        _maybe_dump_vlm_input(request, prompt, attempt, last_reject_reason)
         try:
             inputs = self._processor(
                 text=prompt, images=request["keyframes"], return_tensors="pt"
@@ -585,6 +685,7 @@ class LocalGemmaVLMLabeler:
             self._raise_classified(e)
             raise  # unreachable; helps static analysis
 
+        _maybe_dump_vlm_output(request, attempt, decoded)
         return parse_and_validate(decoded.strip(),
                                   set(request["allowed_labels"]))
 
@@ -665,6 +766,8 @@ def apply_phase3_labeling(
     config: VLMConfig,
     tracking_config: Any,
     labeler_factory: LabelerFactory,
+    mask_cache: Any = None,
+    mask_alpha: float = 0.4,
 ) -> tuple[list[SubtaskSegment], list[LabelAttempt], RunOutcome, float]:
     """Phase 3 labeling orchestrator (spec §5.5, §6).
 
@@ -715,6 +818,7 @@ def apply_phase3_labeling(
             extractor=extractor, gripper=gripper, eef_velocity=eef_velocity,
             keyframes_per_segment=config.keyframes_per_segment,
             episode_meta=episode_meta,
+            mask_cache=mask_cache, mask_alpha=mask_alpha,
         )
         if not is_fallback:
             request["object_state_summary"] = object_state_summary

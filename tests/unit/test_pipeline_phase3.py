@@ -246,7 +246,8 @@ def test_happy_path_all_stages_succeed(tmp_path: Path) -> None:
         # Wire propagator mock
         mock_prop_instance = MagicMock()
         mock_prop_cls.return_value = mock_prop_instance
-        mock_prop_instance.run.return_value = fake_tracks
+        # Task 5: Propagator.run now returns (tracks, mask_cache).
+        mock_prop_instance.run.return_value = (fake_tracks, None)
 
         result = annotate_episode_phase3(req)
 
@@ -309,7 +310,7 @@ def test_gemma_handle_shared(tmp_path: Path) -> None:
         mock_sam3_cls.load.return_value = mock_sam3_instance
         mock_prop_instance = MagicMock()
         mock_prop_cls.return_value = mock_prop_instance
-        mock_prop_instance.run.return_value = []
+        mock_prop_instance.run.return_value = ([], None)
 
         annotate_episode_phase3(req)
 
@@ -378,7 +379,7 @@ def test_sam3_close_before_apply_phase3_labeling(tmp_path: Path) -> None:
 
         mock_prop_instance = MagicMock()
         mock_prop_cls.return_value = mock_prop_instance
-        mock_prop_instance.run.return_value = []
+        mock_prop_instance.run.return_value = ([], None)
 
         annotate_episode_phase3(req)
 

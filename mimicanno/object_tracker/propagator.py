@@ -19,6 +19,7 @@ from mimicanno.object_tracker.track_id import ROLE, make_track_id, slugify
 
 if TYPE_CHECKING:
     from mimicanno.config import TrackingConfig
+    from mimicanno.object_tracker.mask_cache import MaskCache
     from mimicanno.object_tracker.sam3_runtime import SAM3Runtime
 
 GapReason = Literal["sam3_lost", "sam3_low_conf"]
@@ -374,8 +375,9 @@ class Propagator:
         n_frames: int,
         stride: int,
         config: TrackingConfig,
-    ) -> list[Track]:
-        """Execute propagation per spec §2.4.1. Returns sorted list of Track.
+        mask_image_size_px: int | None = None,
+    ) -> "tuple[list[Track], MaskCache | None]":
+        """Execute propagation per spec §2.4.1.
 
         Args:
             runtime: SAM3Runtime (real or fixture). Must implement propagate().
@@ -385,41 +387,65 @@ class Propagator:
             n_frames: Total number of frames in the episode.
             stride: Sub-sampling stride for propagation.
             config: TrackingConfig (thresholds, etc.).
+            mask_image_size_px: when set, propagator collects per-frame
+                binary masks from the runtime, downsampled to
+                ``(mask_image_size_px, mask_image_size_px)``, and returns
+                a populated ``MaskCache`` (spec 2026-05-04 §4.4). When
+                ``None`` (default), no masks are collected and the cache
+                is ``None`` — preserves pre-Task-5 behaviour for callers
+                that don't need overlay.
 
         Returns:
-            List of Track, sorted by (role_order, slug, index).
+            ``(tracks, mask_cache)``. ``tracks`` is sorted by
+            ``(role_order, slug, index)``. ``mask_cache`` is ``None`` when
+            ``mask_image_size_px`` was not supplied.
         """
+        from mimicanno.object_tracker.mask_cache import (
+            MaskCache,
+            assign_palette,
+            encode_mask,
+        )
+
         if not plan.initial_detections:
-            return []
+            empty_cache: MaskCache | None = None
+            if mask_image_size_px is not None:
+                empty_cache = MaskCache(
+                    by_frame={},
+                    shape=(mask_image_size_px, mask_image_size_px),
+                    palette={},
+                )
+            return [], empty_cache
 
         max_gap_frames = config.effective_max_gap_frames(fps)
         iou_threshold = config.reacquisition_iou_threshold
         min_score = config.min_track_score
 
-        # Step 1: Build frame iterator
+        # Step 1: Build frame iterator. _build_frame_iterator includes both
+        # the strided sequence AND the final n_frames-1 frame; we hand the
+        # whole set to the runtime so SAM3Runtime can filter from sam3's
+        # contiguous propagation stream.
         frame_indices = _build_frame_iterator(n_frames, stride)
+        expected_frames: set[int] = set(frame_indices)
 
-        # Step 2: Call runtime.propagate exactly once.
-        # frames is Iterator[tuple[int, np.ndarray]]. The ndarray is the actual
-        # decoded video frame; the caller (Task 19's orchestrator) must supply
-        # real frame data read from video_path. Here we pass a 1x1 placeholder
-        # ndarray because this Propagator does not read frames itself —
-        # FixtureSAM3Tracker ignores the array, and the real SAM3Runtime
-        # receives frames from the orchestrator.
-        # TODO(Task 19): replace this placeholder with real frame loading from
-        # video_path, injected by the orchestrator before calling Propagator.run.
-        dummy = np.zeros((1, 1, 3), dtype=np.uint8)
-        frames_iter = ((idx, dummy) for idx in frame_indices)
-
+        # Step 2: Call runtime.propagate exactly once. The runtime owns video
+        # I/O — sam3's session-based predictor reads frames from video_path
+        # itself (2026-05-04 backend swap). FixtureSAM3Tracker mirrors the
+        # same signature but ignores video_path.
         prompts_with_bbox = [
             (prompt, bbox)
             for (role, prompt), bbox in plan.initial_detections.items()
         ]
 
+        mask_size_hw: tuple[int, int] | None = (
+            (mask_image_size_px, mask_image_size_px)
+            if mask_image_size_px is not None
+            else None
+        )
         propagation_stream = runtime.propagate(
-            frames=frames_iter,
+            video_path=video_path,
             prompts_with_initial_bbox=prompts_with_bbox,
-            stride=stride,
+            expected_frames=expected_frames,
+            mask_size_hw=mask_size_hw,
         )
 
         # Initialize per-prompt state machines
@@ -427,6 +453,14 @@ class Propagator:
             (role, prompt): _PerPromptState(role=role, prompt=prompt)
             for (role, prompt) in plan.initial_detections
         }
+
+        # Mask collection buffer: {frame_index: {prompt: rle_bytes | None}}.
+        # Populated only when mask_image_size_px is set; encoded to RLE on
+        # the fly so we keep memory bounded even on long episodes.
+        all_prompts = sorted({
+            prompt for (_role, prompt) in plan.initial_detections
+        })
+        collected_masks: dict[int, dict[str, bytes | None]] = {}
 
         # Step 3: Stream-consume the propagation results
         for result in propagation_stream:
@@ -449,6 +483,15 @@ class Propagator:
                 else:
                     state.handle_bad_frame(frame, "sam3_lost")
 
+            if mask_image_size_px is not None:
+                per_prompt: dict[str, bytes | None] = {}
+                for prompt in all_prompts:
+                    raw_mask = result.masks.get(prompt)
+                    per_prompt[prompt] = (
+                        encode_mask(raw_mask) if raw_mask is not None else None
+                    )
+                collected_masks[frame] = per_prompt
+
         # Finalize all tracks
         all_tracks: list[Track] = []
         for state in states.values():
@@ -457,5 +500,13 @@ class Propagator:
         # Step 7: Assign primary marks
         _assign_primary(all_tracks, plan)
 
+        mask_cache: MaskCache | None = None
+        if mask_image_size_px is not None:
+            mask_cache = MaskCache(
+                by_frame=collected_masks,
+                shape=(mask_image_size_px, mask_image_size_px),
+                palette=assign_palette(all_prompts),
+            )
+
         # Return sorted per spec §2.4.2
-        return _sort_tracks(all_tracks)
+        return _sort_tracks(all_tracks), mask_cache

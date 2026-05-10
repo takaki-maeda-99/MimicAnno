@@ -58,6 +58,7 @@ def build_prompt(
     request: VLMRequest,
     attempt: int,
     last_reject_reason: RejectReason | None,
+    legend: str | None = None,
 ) -> str:
     """Construct the prompt text for one VLM call.
 
@@ -69,9 +70,16 @@ def build_prompt(
 
     Phase 3 sub-blocks only appear when request["object_state_summary"] is
     not None; when None or missing, prompt is byte-identical to Phase 2.
+
+    ``legend`` (Task 7, vlm-mask-overlay): when provided, the string is
+    inserted as a single line near the top of the SYSTEM block to tell
+    Gemma about the SAM3 overlay color convention used in the keyframes.
+    ``legend=None`` produces a prompt byte-identical to pre-Task-7 output
+    (spec §6.1).
     """
     rs = request["robot_state_summary"]
     allowed = ", ".join(request["allowed_labels"])
+    legend_line = f"{legend}\n" if legend else ""
     body = (
         "SYSTEM:\n"
         f"You are labeling a segment of a robot manipulation episode.\n"
@@ -79,6 +87,7 @@ def build_prompt(
         f"Robot type: {request['robot_type']}, FPS: {request['fps']:.6g},"
         f" Episode duration: {request['episode_duration_sec']:.6g}s.\n"
         f"This is segment {request['segment_index']} of {request['segment_total']}.\n"
+        f"{legend_line}"
         "\n"
         f"Allowed phase labels (label_version={request['label_version']}):\n"
         f"  {allowed}\n"
@@ -165,8 +174,10 @@ def build_messages(
     Returns a single user-role message; a system role is not used because
     Gemma 4-IT's chat template merges system + user into one user turn.
     """
-    text = build_prompt(request, attempt=attempt,
-                        last_reject_reason=last_reject_reason)
+    text = build_prompt(
+        request, attempt=attempt, last_reject_reason=last_reject_reason,
+        legend=request.get("mask_overlay_legend"),
+    )
     before, _, after = text.partition(KEYFRAMES_MARKER)
     if not _:
         # Should be unreachable — build_prompt always emits the marker.

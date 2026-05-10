@@ -125,3 +125,94 @@ def test_clip_feature_extractor_composes(tmp_path) -> None:
     assert len(feat.keyframes) == 4
     assert feat.keyframe_offsets_sec[0] == pytest.approx(0.0)
     assert feat.robot_state_summary["mean_eef_speed_mps"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 6 (vlm-mask-overlay): mask_cache plumbing on ClipFeatureExtractor
+# ---------------------------------------------------------------------------
+
+
+def _make_segment_for_overlay() -> "SubtaskSegment":  # type: ignore[name-defined]
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+    return SubtaskSegment(
+        segment_id="s_000", episode_id="ep", start_frame=0, end_frame=29,
+        start_time=0.0, end_time=1.0, phase="unlabeled",
+        verb=None, object=None, target=None, failure_flags=[],
+        label_source="signals_only", object_state_unavailable=True,
+        object_track_ids=[], label_version="manipulation.v1",
+        start_boundary=BoundaryRef(None, 0.0, ["episode_start"], 1.0),
+        end_boundary=BoundaryRef(None, 1.0, ["episode_end"], 1.0),
+        boundary_confidence=1.0, vlm_confidence=None,
+        overall_confidence=1.0, evidence=None, reviewed=False, reviewer_id=None,
+    )
+
+
+def test_extract_with_mask_cache_none_is_bit_exact_to_default(tmp_path) -> None:
+    """Spec §7.4: mask_cache=None must be pixel-exact to pre-Task-6 path."""
+    from mimicanno.clip_features import ClipFeatureExtractor
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+
+    video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
+    seg = _make_segment_for_overlay()
+    extractor = ClipFeatureExtractor(
+        video_path=video, fps=30.0,
+        clip_features_config=ClipFeatureConfig(),
+        image_size_px=64,
+    )
+    base = extractor.extract(
+        segment=seg, gripper=np.zeros(30), eef_velocity=None,
+        keyframes_per_segment=4,
+    )
+    with_none = extractor.extract(
+        segment=seg, gripper=np.zeros(30), eef_velocity=None,
+        keyframes_per_segment=4,
+        mask_cache=None, mask_alpha=0.4,
+    )
+    assert len(base.keyframes) == len(with_none.keyframes)
+    for a, b in zip(base.keyframes, with_none.keyframes, strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_extract_with_full_mask_paints_keyframes(tmp_path) -> None:
+    """A mask covering the whole frame at alpha=1 → keyframe == palette color."""
+    from mimicanno.clip_features import ClipFeatureExtractor
+    from mimicanno.object_tracker.mask_cache import MaskCache, encode_mask
+    from tests.fixtures.synthesize import synthesize_minimal_mp4
+
+    video = synthesize_minimal_mp4(tmp_path, n_frames=30, width=64, height=48)
+    seg = _make_segment_for_overlay()
+    extractor = ClipFeatureExtractor(
+        video_path=video, fps=30.0,
+        clip_features_config=ClipFeatureConfig(),
+        image_size_px=64,
+    )
+    # Frame size after long_edge_px=64 resize: H≤64, W≤64 (extract_frames_at_indices
+    # returns up to long_edge_px on its longer side). Build the mask at the
+    # actual frame shape we observe.
+    base = extractor.extract(
+        segment=seg, gripper=np.zeros(30), eef_velocity=None,
+        keyframes_per_segment=4,
+    )
+    h, w = base.keyframes[0].shape[:2]
+    from mimicanno.clip_features import compute_keyframe_offsets
+    full_mask = np.ones((h, w), dtype=bool)
+    offsets = compute_keyframe_offsets(
+        seg.start_frame, seg.end_frame, 4,
+    )
+    by_frame = {fi: {"red block": encode_mask(full_mask)} for fi in offsets}
+    cache = MaskCache(
+        by_frame=by_frame, shape=(h, w),
+        palette={"red block": (255, 0, 0)},
+    )
+
+    feat = extractor.extract(
+        segment=seg, gripper=np.zeros(30), eef_velocity=None,
+        keyframes_per_segment=4,
+        mask_cache=cache, mask_alpha=1.0,
+    )
+    expected = np.zeros((h, w, 3), dtype=np.uint8)
+    expected[..., 0] = 255  # red channel only
+    for kf in feat.keyframes:
+        assert kf.shape == (h, w, 3)
+        # alpha=1.0 + full mask → every pixel becomes (255, 0, 0).
+        np.testing.assert_array_equal(kf, expected)

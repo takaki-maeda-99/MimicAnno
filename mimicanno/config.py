@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml  # type: ignore[import-untyped]
 
@@ -130,6 +130,26 @@ class ClipFeatureConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class MaskOverlayConfig:
+    """SAM3 mask overlay onto Gemma keyframes (spec 2026-05-04 §7.1).
+
+    `palette` currently has only one option ("builtin_10", a fixed 10-color
+    snapshot derived from matplotlib tab10). The Literal type prevents
+    accidental drift to free-form names.
+    """
+    enabled: bool = True
+    alpha: float = 0.4
+    palette: Literal["builtin_10"] = "builtin_10"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alpha": self.alpha,
+            "enabled": self.enabled,
+            "palette": self.palette,
+        }
+
+
+@dataclass(slots=True, frozen=True)
 class VLMConfig:
     """Phase 2 VLM-pipeline configuration (spec §2.4).
 
@@ -156,6 +176,7 @@ class VLMConfig:
     device: str = "cuda"
     dtype: str = "bfloat16"
     clip_features: ClipFeatureConfig = ClipFeatureConfig()
+    mask_overlay: MaskOverlayConfig = MaskOverlayConfig()
     resolved_checkpoint: str | None = None
     fixture_path: Path | None = None  # runtime-only; NOT in to_dict / config_hash
 
@@ -168,6 +189,7 @@ class VLMConfig:
             "image_size_px": self.image_size_px,
             "keyframe_strategy": self.keyframe_strategy,
             "keyframes_per_segment": self.keyframes_per_segment,
+            "mask_overlay": self.mask_overlay.to_dict(),
             "max_output_tokens": self.max_output_tokens,
             "max_retries": self.max_retries,
             "model_id": self.model_id,
@@ -189,6 +211,13 @@ class TrackingConfig:
 
     sam3_model_id: str = "facebook/sam3"
     sam3_checkpoint: str | None = None       # path; CLI preflight validates
+    # 2026-05-04 SAM3 backend swap: forwarded to the sam3-native session as
+    # `offload_video_to_cpu`. With N-prompt-N-session round-robin, each video
+    # tensor is loaded N times — defaulting to True keeps long episodes from
+    # exhausting GPU RAM. Hash-relevant: same weights + different offload =>
+    # same numerical output but different latency, so we treat it like the
+    # other config knobs and include it in to_dict().
+    sam3_offload: bool = True
     track_stride_frames: int | None = None
     min_track_score: float = 0.30
     max_gap_frames: int | None = None
@@ -204,6 +233,7 @@ class TrackingConfig:
         # sam3_checkpoint is excluded — see class docstring + spec §9.1
         return {
             "sam3_model_id": self.sam3_model_id,
+            "sam3_offload": self.sam3_offload,
             "track_stride_frames": self.track_stride_frames,
             "min_track_score": self.min_track_score,
             "max_gap_frames": self.max_gap_frames,

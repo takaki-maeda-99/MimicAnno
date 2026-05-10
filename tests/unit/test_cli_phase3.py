@@ -181,6 +181,91 @@ def test_track_stride_frames_flag_resolved_into_tracking_config(
 
 
 # ---------------------------------------------------------------------------
+# Scenario 5b: --sam3-offload / --no-sam3-offload propagates to TrackingConfig
+# (2026-05-04 SAM3 backend swap, plan Task 3)
+# ---------------------------------------------------------------------------
+
+def test_sam3_offload_default_is_true(
+    episode, vlm_model_arg: str, sam3_ckpt: Path, tmp_path: Path
+) -> None:
+    """Default (no flag) → TrackingConfig.sam3_offload is True."""
+    args = [
+        *_base_args(episode, tmp_path / "runs"),
+        "--target-phase", "3",
+        "--vlm-model", vlm_model_arg,
+        "--offline",
+        "--sam3-checkpoint", str(sam3_ckpt),
+    ]
+    with (
+        mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
+        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+    ):
+        result = runner.invoke(app, args, catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output + result.stderr
+    req = mock_p3.call_args[0][0]
+    assert req.config.tracking is not None
+    assert req.config.tracking.sam3_offload is True
+
+
+def test_sam3_offload_disable_flag_propagates(
+    episode, vlm_model_arg: str, sam3_ckpt: Path, tmp_path: Path
+) -> None:
+    """--no-sam3-offload → TrackingConfig.sam3_offload becomes False."""
+    args = [
+        *_base_args(episode, tmp_path / "runs"),
+        "--target-phase", "3",
+        "--vlm-model", vlm_model_arg,
+        "--offline",
+        "--sam3-checkpoint", str(sam3_ckpt),
+        "--no-sam3-offload",
+    ]
+    with (
+        mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
+        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+    ):
+        result = runner.invoke(app, args, catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output + result.stderr
+    req = mock_p3.call_args[0][0]
+    assert req.config.tracking is not None
+    assert req.config.tracking.sam3_offload is False
+
+
+def test_sam3_offload_included_in_config_hash(
+    episode, vlm_model_arg: str, sam3_ckpt: Path, tmp_path: Path
+) -> None:
+    """sam3_offload is part of TrackingConfig.to_dict() so hash differs.
+
+    Same inputs but flipped offload → different config_hash. Reproducibility
+    contract (spec phase3 §9.1) treats this knob as a real config dimension.
+    """
+    from mimicanno.config import compute_config_hash
+
+    captured: list[str] = []
+    for offload_flag in ("--sam3-offload", "--no-sam3-offload"):
+        args = [
+            *_base_args(episode, tmp_path / "runs"),
+            "--target-phase", "3",
+            "--vlm-model", vlm_model_arg,
+            "--offline",
+            "--sam3-checkpoint", str(sam3_ckpt),
+            offload_flag,
+        ]
+        with (
+            mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
+            mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+        ):
+            result = runner.invoke(app, args, catch_exceptions=False)
+        assert result.exit_code == 0
+        req = mock_p3.call_args[0][0]
+        captured.append(compute_config_hash(req.config))
+    assert captured[0] != captured[1], (
+        "flipping --sam3-offload should change config_hash, but it didn't"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Scenario 6: sam3 extras not importable → sam3_extras_missing
 # ---------------------------------------------------------------------------
 

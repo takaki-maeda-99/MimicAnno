@@ -19,6 +19,7 @@ from mimicanno.object_tracker.propagator import BBox, GapEvent, Track
 
 if TYPE_CHECKING:
     from mimicanno.config import TrackingConfig
+    from mimicanno.object_tracker.mask_cache import MaskCache
     from mimicanno.object_tracker.signals import ObjectSignals
     from mimicanno.schema import ObjectStateSummary, SubtaskSegment
 
@@ -306,7 +307,17 @@ class ClipFeatureExtractor:
         self, segment: SubtaskSegment,
         gripper: np.ndarray, eef_velocity: np.ndarray | None,
         keyframes_per_segment: int,
+        mask_cache: "MaskCache | None" = None,
+        mask_alpha: float = 0.4,
     ) -> ClipFeatures:
+        """Extract keyframes + scalar summary for one segment.
+
+        ``mask_cache``: when provided (Task 6, vlm-mask-overlay), each
+        keyframe is alpha-blended with the SAM3 masks indexed at the
+        keyframe's frame number before being stored in
+        ``ClipFeatures.keyframes``. ``mask_cache=None`` is bit-identical
+        to the pre-Task-6 behaviour (spec §7.4).
+        """
         from mimicanno.io_video import (
             extract_frames_at_indices,  # lazy: avoids circular import at module init
         )
@@ -317,6 +328,12 @@ class ClipFeatureExtractor:
         frames = extract_frames_at_indices(
             self._video_path, offsets_frames, long_edge_px=self._image_size_px,
         )
+        if mask_cache is not None:
+            from mimicanno.vlm_overlay import compose_overlay
+            frames = [
+                compose_overlay(frame, mask_cache, frame_idx, mask_alpha)
+                for frame, frame_idx in zip(frames, offsets_frames, strict=True)
+            ]
         offsets_sec = [(f - segment.start_frame) / self._fps for f in offsets_frames]
         summary = compute_robot_state_summary(
             start_frame=segment.start_frame, end_frame=segment.end_frame,

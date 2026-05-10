@@ -7,6 +7,7 @@ from mimicanno.config import (
     AnnotationConfig,
     BoundaryConfig,
     ClipFeatureConfig,
+    MaskOverlayConfig,
     ModelConfig,
     VLMConfig,
     compute_config_hash,
@@ -36,10 +37,55 @@ def test_vlm_config_to_dict_canonical_field_set() -> None:
     d = cfg.to_dict()
     assert set(d) == {
         "clip_features", "device", "dtype", "image_size_px",
-        "keyframe_strategy", "keyframes_per_segment", "max_output_tokens",
-        "max_retries", "model_id", "resolved_checkpoint",
+        "keyframe_strategy", "keyframes_per_segment", "mask_overlay",
+        "max_output_tokens", "max_retries", "model_id", "resolved_checkpoint",
         "runtime_failure_threshold", "temperature", "timeout_sec",
     }
+
+
+def test_mask_overlay_config_defaults() -> None:
+    cfg = MaskOverlayConfig()
+    assert cfg.enabled is True
+    assert cfg.alpha == pytest.approx(0.4)
+    assert cfg.palette == "builtin_10"
+    assert cfg.to_dict() == {"alpha": 0.4, "enabled": True, "palette": "builtin_10"}
+
+
+def test_vlm_config_includes_mask_overlay_in_to_dict() -> None:
+    cfg = VLMConfig(model_id="m", resolved_checkpoint="c")
+    d = cfg.to_dict()
+    assert d["mask_overlay"] == {"alpha": 0.4, "enabled": True, "palette": "builtin_10"}
+
+
+def test_mask_overlay_changes_config_hash() -> None:
+    """enabled / alpha must each affect config_hash (ablation isolation)."""
+    boundary = BoundaryConfig.with_defaults()
+    model = ModelConfig(
+        vlm_model="m", vlm_checkpoint="abc",
+        sam3_model=None, sam3_checkpoint=None,
+    )
+    base = VLMConfig(model_id="m", resolved_checkpoint="abc")
+    no_overlay = VLMConfig(
+        model_id="m", resolved_checkpoint="abc",
+        mask_overlay=MaskOverlayConfig(enabled=False),
+    )
+    diff_alpha = VLMConfig(
+        model_id="m", resolved_checkpoint="abc",
+        mask_overlay=MaskOverlayConfig(alpha=0.6),
+    )
+
+    h_base = compute_config_hash(AnnotationConfig(
+        boundary=boundary, target_phase=2, model_config=model, vlm=base,
+    ))
+    h_off = compute_config_hash(AnnotationConfig(
+        boundary=boundary, target_phase=2, model_config=model, vlm=no_overlay,
+    ))
+    h_alpha = compute_config_hash(AnnotationConfig(
+        boundary=boundary, target_phase=2, model_config=model, vlm=diff_alpha,
+    ))
+    assert h_base != h_off
+    assert h_base != h_alpha
+    assert h_off != h_alpha
 
 
 def test_annotation_config_with_vlm_changes_hash() -> None:

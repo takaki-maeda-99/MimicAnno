@@ -1,5 +1,7 @@
 # MimicAnno Phase 3 — SAM3 + integrated boundary score + relabel with `vlm_with_object_state` design
 
+> **[2026-05-04 update]** §2.3 / §2.5 / §8 の SAM3 backend 選択は本 spec ドラフト時点で「vendored vs transformers どちらにするかは writing-plans に持ち越し」として保留されていた。2026-05-04 に **vendored sam3 submodule (`gayagayataiga/sam3` personal fork) の native API を採用** することで決定し、別 spec に詳細を移した。本 spec の SAM3 backend 関連記述（§2.3 `Sam3Model`/`Sam3Processor` の言及、§2.5 の transformers 互換ノート、§8 の sam3 import 経路）は **`docs/superpowers/specs/2026-05-04-sam3-submodule-backend-design.md` で上書き**されている。新 spec を真と見なすこと。
+
 Status: **draft**, awaiting review (Codex).
 Author: brainstorming session 2026-04-28.
 Supersedes: nothing — new sub-plan.

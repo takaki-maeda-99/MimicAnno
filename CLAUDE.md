@@ -24,6 +24,15 @@ Translation / scope:
 
 After exit: revert to default behavior (ask before non-trivial actions; respect skill gates).
 
+### Sub-project log
+
+- **2026-05-04 SAM3 backend swap** — vendored `sam3/` submodule (Meta SAM 3
+  native API) replaces the `transformers.Sam3*` path. SO101 ep0 smoke
+  yields 93.5% tape-track on a hardcoded "tape" prompt; mechanics + API
+  contracts pass. See `docs/superpowers/notes/2026-05-04-sam3-smoke-results.md`.
+  Outstanding: full Phase 2+3 pipeline smoke is gated on Gemma 4 weights
+  download.
+
 ## Workflow conventions
 
 - Use uv for Python (`uv run`, `uv add`, `uv sync`). Repo's pyproject is the source of truth.

@@ -11,7 +11,7 @@ re-exported here for backwards compatibility.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from pathlib import Path
 
 import numpy as np
 
@@ -150,32 +150,46 @@ class FixtureSAM3Tracker:
         """
         return self.initial_detections.get(prompt, [])
 
-    def propagate(
+    def propagate(  # type: ignore[override]
         self,
         *,
-        frames: Any,  # Iterator[tuple[int, np.ndarray]]; Any for test flexibility
+        video_path: Path,
         prompts_with_initial_bbox: list[tuple[str, BBox]],
-        stride: int,
+        expected_frames: set[int],
+        mask_size_hw: tuple[int, int] | None = None,
     ) -> Iterator[FramePropagationResult]:
-        """Yield canned propagation results for each frame.
+        """Yield canned propagation results for each frame in expected_frames.
 
-        Iterates over frames and yields canned FramePropagationResult
-        for each. Raises raise_with when yielding raise_on_propagate_at_frame.
+        New shape (2026-05-04): the real ``SAM3Runtime.propagate`` no longer
+        consumes a frames iterator — sam3's session-based predictor reads the
+        video itself from ``video_path``. The fixture mirrors this contract:
+        ``video_path`` is ignored (no real I/O), and ``expected_frames`` drives
+        which frames are yielded.
 
         Args:
-            frames: Iterable of (frame_idx, frame_array) tuples. Ignored.
-            prompts_with_initial_bbox: ignored
-            stride: ignored
+            video_path: ignored (test double does not read images).
+            prompts_with_initial_bbox: ignored (canned per-frame results are
+                supplied via ``propagation_results`` at construction time).
+            expected_frames: integer frame indices to yield, in ascending
+                order. Frames not present in ``propagation_results`` yield an
+                empty detection dict.
 
         Yields:
-            FramePropagationResult for each frame in frames, in order.
+            FramePropagationResult for each frame in ``sorted(expected_frames)``.
 
         Raises:
-            raise_with if raise_on_propagate_at_frame is set and matches
-            the frame being yielded.
+            ``raise_with`` if ``raise_on_propagate_at_frame`` matches a frame
+            *that would otherwise have been yielded*. Frames outside
+            ``expected_frames`` cannot trigger the raise — keeping the failure
+            point predictable for tests.
         """
         self._propagate_call_count += 1
-        for frame_idx, _ in frames:
+        # documentation; not used. mask_size_hw is accepted to keep the
+        # fixture signature in lock-step with SAM3Runtime — tests that
+        # exercise mask collection should construct masks directly via
+        # ``propagation_masks`` (none for now).
+        del video_path, prompts_with_initial_bbox, mask_size_hw
+        for frame_idx in sorted(expected_frames):
             if (
                 self.raise_on_propagate_at_frame is not None
                 and frame_idx == self.raise_on_propagate_at_frame
@@ -184,7 +198,14 @@ class FixtureSAM3Tracker:
                 raise self.raise_with
 
             detections = self.propagation_results.get(frame_idx, {})
-            yield FramePropagationResult(frame=frame_idx, detections=detections)
+            # Fixture default: no masks. Task 5+ pipeline tests that need
+            # masks should construct FramePropagationResult directly via
+            # `make_test_propagation_result` instead of going through this
+            # fixture.
+            masks: dict[str, np.ndarray | None] = {p: None for p in detections}
+            yield FramePropagationResult(
+                frame=frame_idx, detections=detections, masks=masks,
+            )
 
     def close(self) -> None:
         """Close (clean up) the tracker. Idempotent.
