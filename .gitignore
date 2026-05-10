@@ -18,7 +18,23 @@ runs/*
 .DS_Store
 .vscode/
 .idea/
+.nfs*
 
 # Plan 2 viewer
 frontend/node_modules/
 frontend/dist/
+
+# Large binaries (videos, model weights, datasets) — block by extension as
+# a safety net. Test fixtures under tests/ are explicitly re-allowed below.
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.bin
+!tests/**/*.mp4
+!tests/**/*.parquet
