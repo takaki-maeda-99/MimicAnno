@@ -309,6 +309,8 @@ zero_crossing:
 
 不一致があれば実装か設定値を見直す。
 
+> **2026-05-12 追記 (post-T8)**: T8 実行の結果、ZC detector は予測通りの candidate を出した (3.57 cands/ep) が、最終 segment 数は mean 2.78 と本節の期待 (≥3) を下回った。原因は ZC 側ではなく Phase 4 smoother の `_merge_same_label` が、VLM が同じ phase ラベルを返す隣接 segment を collapse することにあると判明。詳細と次手は `docs/superpowers/notes/2026-05-11-so101-phase4-v4-results.md` 参照。本 spec のスコープ (boundaries.py への ZC 追加) としては実装は仕様通り完了しており、smoother / VLM 粒度の問題は別 spec として切り出す。
+
 ---
 
 ## 7. Exit criteria

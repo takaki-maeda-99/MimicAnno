@@ -98,3 +98,5 @@ zero_crossing:
 ## 補足: scale_max 変更後の signals.json の取り扱い
 
 `runs/so101_phase4_v3/` は旧スケールで生成済み。実装後に新スケールで再走する際、output は `runs/so101_phase4_v4/` (input_hash が変わるので canonical_name が変わる)。本ノートの sim は旧 v3 signals を数学的に新スケールへ変換して評価したもので、新スケールで pipeline を再走したものではない。**実装後の T8 (SO101 23 ep バッチ実行) で実 pipeline 経由の値と一致することを確認する必要がある**。
+
+> **2026-05-12 追記**: T8 で確認したところ、ZC detector の candidate 数は本 sim の予測 (mean ~4) とほぼ一致 (実測 3.57) したが、最終 segment 数は Phase 4 smoother の `_merge_same_label` で大きく縮約された (mean 2.78)。本 sim は **detector 単体の評価で smoother を含めていない** ため、segment 数の予測としては不適切だった。詳細: `2026-05-11-so101-phase4-v4-results.md`。
