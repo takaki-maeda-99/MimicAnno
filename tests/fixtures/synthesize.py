@@ -45,6 +45,7 @@ def synthesize_aloha_episode(
     n_frames: int = 120,
     fps: float = 30.0,
     episode_id: str = "ep_synth_000",
+    gripper: np.ndarray | None = None,
 ) -> SyntheticEpisode:
     out_dir.mkdir(parents=True, exist_ok=True)
     video = _write_mp4(out_dir / f"{episode_id}.mp4", n_frames=n_frames, fps=fps)
@@ -56,10 +57,17 @@ def synthesize_aloha_episode(
         rng.normal(0, 0.005, size=(n_frames, 3)),
         axis=0,
     )
-    # Inject a clear gripper close at frame 50 and open at frame 90 so the test
-    # can assert at least one boundary candidate is emitted.
-    gripper = np.ones(n_frames)
-    gripper[50:90] = 0.0
+    if gripper is None:
+        # Inject a clear gripper close at frame 50 and open at frame 90 so the test
+        # can assert at least one boundary candidate is emitted.
+        gripper = np.ones(n_frames)
+        gripper[50:90] = 0.0
+    else:
+        gripper = np.asarray(gripper, dtype=np.float64)
+        if gripper.shape != (n_frames,):
+            raise ValueError(
+                f"gripper override shape mismatch: got {gripper.shape}, expected ({n_frames},)"
+            )
     state[:, 13] = gripper
     action = rng.uniform(-0.1, 0.1, size=(n_frames, 14)).astype(np.float64)
     timestamps = (np.arange(n_frames) / fps).astype(np.float64)

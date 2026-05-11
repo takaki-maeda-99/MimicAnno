@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from mimicanno.config import BoundaryWeights, TrackingConfig
+from mimicanno.config import BoundaryWeights, TrackingConfig, ZeroCrossingConfig
 from mimicanno.object_tracker.propagator import Track
 from mimicanno.object_tracker.signals import ObjectSignals
 from mimicanno.schema import BoundaryCandidate
@@ -55,6 +55,90 @@ def detect_gripper_transition(
         )
         for i in peaks
     ]
+
+
+def _resolve_zc_ref(gripper: np.ndarray, mode: str) -> float:
+    if mode == "midpoint":
+        return float((gripper.max() + gripper.min()) * 0.5)
+    if mode == "median":
+        return float(np.median(gripper))
+    if mode.startswith("fixed:"):
+        return float(mode[len("fixed:") :])
+    raise ValueError(f"unknown zero-crossing ref mode: {mode!r}")
+
+
+def _merge_close_zc_events(
+    events: list[RawEvent], merge_window_sec: float
+) -> list[RawEvent]:
+    """Drop the later event when two consecutive events are within ``merge_window_sec``."""
+    if merge_window_sec <= 0.0 or len(events) <= 1:
+        return events
+    out: list[RawEvent] = [events[0]]
+    for ev in events[1:]:
+        if ev.time - out[-1].time < merge_window_sec:
+            continue
+        out.append(ev)
+    return out
+
+
+def detect_gripper_zero_crossing(
+    gripper: np.ndarray,
+    *,
+    fps: float,
+    cfg: ZeroCrossingConfig,
+) -> list[RawEvent]:
+    """Phase 4 finer-segmentation: gripper signal zero-crossing detector.
+
+    spec §4.3. Returns events at every ref crossing where the prior excursion
+    on the same side reached at least ``cfg.hysteresis``. Disabled-by-default
+    (``cfg.enabled = False`` returns an empty list — existing behaviour).
+    """
+    if not cfg.enabled or gripper.size < 2:
+        return []
+    span = float(gripper.max() - gripper.min())
+    if span < cfg.span_eps:
+        return []
+
+    ref = _resolve_zc_ref(gripper, cfg.ref)
+    half_span = span * 0.5
+    events: list[RawEvent] = []
+
+    d0 = float(gripper[0]) - ref
+    last_extreme = d0
+    last_side = 1.0 if d0 >= 0.0 else -1.0  # break ties toward +
+
+    for i in range(1, gripper.size):
+        d = float(gripper[i]) - ref
+        if d == 0.0:
+            # Treat exact zero as continuation; the next sample resolves the side.
+            continue
+        s = 1.0 if d > 0.0 else -1.0
+        if s != last_side:
+            if abs(last_extreme) >= cfg.hysteresis:
+                a = float(gripper[i - 1]) - ref
+                b = d
+                denom = a - b
+                frac = a / denom if denom != 0.0 else 0.5
+                t_cross = (i - 1 + frac) / fps
+                score = float(np.clip(abs(last_extreme) / half_span, 0.0, 1.0)) if half_span > 0 else 0.0
+                events.append(
+                    RawEvent(
+                        frame=int(i),
+                        time=float(t_cross),
+                        source="gripper_zero_crossing",
+                        source_score=score,
+                    )
+                )
+                last_extreme = d
+                last_side = s
+            # else: shallow noise crossing — keep walking on the old side.
+        else:
+            if abs(d) > abs(last_extreme):
+                last_extreme = d
+
+    if cfg.merge_window_sec > 0.0:
+        events = _merge_close_zc_events(events, cfg.merge_window_sec)
+    return events
 
 
 def detect_eef_velocity_valley(
@@ -395,6 +479,7 @@ class Phase3BoundaryDetector:
         merge_window_sec: float,
         disabled_sources: list[str],
         tracking_config: TrackingConfig,
+        zero_crossing: ZeroCrossingConfig | None = None,
     ) -> None:
         self._fps = fps
         self._weights = weights
@@ -402,6 +487,7 @@ class Phase3BoundaryDetector:
         self._merge_window_sec = merge_window_sec
         self._disabled_sources = list(disabled_sources)
         self._tracking_config = tracking_config
+        self._zero_crossing = zero_crossing or ZeroCrossingConfig()
 
     def detect(
         self,
@@ -464,6 +550,20 @@ class Phase3BoundaryDetector:
 
         if "gripper_transition" not in final_disabled:
             events.extend(detect_gripper_transition(gripper, fps=fps))
+
+        # Phase 4 finer-segmentation: opt-in ZC detector (spec §4 / §4.4).
+        # Source "gripper_zero_crossing" is not part of the auto-disabled set;
+        # callers can suppress it via disabled_sources.
+        if (
+            self._zero_crossing.enabled
+            and "gripper_zero_crossing" not in final_disabled
+        ):
+            events.extend(
+                detect_gripper_zero_crossing(
+                    gripper, fps=fps, cfg=self._zero_crossing
+                )
+            )
+            weights_dict["gripper_zero_crossing"] = self._zero_crossing.weight
 
         if "eef_velocity_valley" not in final_disabled:
             events.extend(detect_eef_velocity_valley(eef_vel, fps=fps))

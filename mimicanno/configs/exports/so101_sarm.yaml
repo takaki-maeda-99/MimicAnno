@@ -13,11 +13,13 @@ source:
     schema_version: "0.2.0"
     name: so101
     gripper_column: observation.state.gripper_pos
-    # SO101 gripper is reported in raw 0..100 units (observed ep0 range: 4.26..38.84).
-    # 0..100 is conservative; values >1 after normalization are clipped. Tune if your
-    # dataset uses a different gripper scale.
+    # SO101 gripper raw range across 36 ep (5286 frames): 3.95..53.79 (p99=47.04).
+    # gripper_scale_max retuned 2026-05-11: 100 -> 60 (observed max +12% headroom).
+    # Rationale and full measurement:
+    #   docs/superpowers/notes/2026-05-11-so101-gripper-scale-max.md
+    # Tune both fields if your dataset uses a different gripper scale.
     gripper_scale_min: 0.0
-    gripper_scale_max: 100.0
+    gripper_scale_max: 60.0
     eef_xyz_column: observation.state.ee_pos
     eef_rotvec_column: observation.state.ee_rotvec
     eef_quat_column: null
