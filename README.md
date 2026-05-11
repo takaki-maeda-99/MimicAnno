@@ -165,7 +165,7 @@ schema_version: "0.2.0"
 name: so101
 gripper_column:        observation.state.gripper_pos
 gripper_scale_min:     0.0
-gripper_scale_max:     100.0
+gripper_scale_max:     60.0   # SO101 raw range across 36 ep: 3.95..53.79; 60 = +12% headroom
 eef_xyz_column:        observation.state.ee_pos
 eef_rotvec_column:     observation.state.ee_rotvec
 eef_quat_column:       null

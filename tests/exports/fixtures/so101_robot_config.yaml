@@ -16,7 +16,10 @@ schema_version: "0.2.0"
 name: so101
 gripper_column: observation.state.gripper_pos
 gripper_scale_min: 0.0
-gripper_scale_max: 100.0  # observed range on episode 0: 4.258..38.837; 100 is conservative
+gripper_scale_max: 60.0  # retuned 2026-05-11 (was 100). Measured across 36 ep (5286 frames):
+                         #   global range 3.95..53.79, p99=47.04, p95=41.02.
+                         # 60 = observed max +12% headroom, rounded. Rationale and full
+                         # measurement: docs/superpowers/notes/2026-05-11-so101-gripper-scale-max.md
 eef_xyz_column: observation.state.ee_pos
 eef_rotvec_column: observation.state.ee_rotvec
 eef_quat_column: null

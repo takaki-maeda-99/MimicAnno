@@ -25,6 +25,7 @@ from mimicanno.boundaries import (
     detect_eef_acceleration_peak,
     detect_eef_velocity_valley,
     detect_gripper_transition,
+    detect_gripper_zero_crossing,
     integrated_candidates,
 )
 from mimicanno.bracketing import bracket_phase1_segments
@@ -370,6 +371,7 @@ def _degrade_to_phase3_objectless(
         merge_window_sec=bcfg.merge_window_sec,
         disabled_sources=disabled_sources,
         tracking_config=tracking_cfg,
+        zero_crossing=bcfg.zero_crossing,
     )
     eef_vel_for_detector = vel_s if vel_s is not None else np.zeros(n_frames, dtype=np.float64)
     accel_for_detector = accel_s if accel_s is not None else np.zeros(n_frames, dtype=np.float64)
@@ -459,6 +461,8 @@ def _degrade_to_phase3_objectless(
         "vlm": vlm_cfg.to_dict(),
         "tracking": tracking_cfg.to_dict(),
     }
+    if bcfg.zero_crossing.enabled:
+        pipeline_params["boundary"]["zero_crossing"] = bcfg.zero_crossing.to_dict()
 
     signal_channels: list[SignalChannel] = [
         downsample_for_viewer(
@@ -889,6 +893,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         merge_window_sec=bcfg.merge_window_sec,
         disabled_sources=list(disabled_phase1),
         tracking_config=tracking_cfg,
+        zero_crossing=bcfg.zero_crossing,
     )
     # Build smoothed signal arrays needed by the detector
     eef_vel_for_detector = vel_s if vel_s is not None else np.zeros(n_frames, dtype=np.float64)
@@ -1011,6 +1016,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         "vlm": vlm_cfg.to_dict(),
         "tracking": tracking_cfg.to_dict(),
     }
+    if bcfg.zero_crossing.enabled:
+        pipeline_params["boundary"]["zero_crossing"] = bcfg.zero_crossing.to_dict()
     if req.config.target_phase >= 4 and req.config.smoother is not None:
         pipeline_params["smoother"] = req.config.smoother.to_dict()
 
@@ -1262,6 +1269,12 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             delta_threshold=bcfg.thresholds.get("gripper_delta", 0.30),
         )
     )
+    if bcfg.zero_crossing.enabled:
+        events.extend(
+            detect_gripper_zero_crossing(
+                gripper_s, fps=fps, cfg=bcfg.zero_crossing
+            )
+        )
     if vel_s is not None:
         events.extend(
             detect_eef_velocity_valley(
@@ -1301,6 +1314,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             {"unknown_keys": unknown_keys},
         )
     detector_weights = {_WEIGHT_KEY_TO_SOURCE[k]: v for k, v in weights_dict.items()}
+    if bcfg.zero_crossing.enabled:
+        detector_weights["gripper_zero_crossing"] = bcfg.zero_crossing.weight
     candidates = integrated_candidates(
         events,
         fps=fps,
@@ -1364,6 +1379,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             "disabled_sources": disabled,
         },
     }
+    if bcfg.zero_crossing.enabled:
+        pipeline_params["boundary"]["zero_crossing"] = bcfg.zero_crossing.to_dict()
     if req.config.target_phase >= 2 and req.config.vlm is not None:
         pipeline_params["vlm"] = req.config.vlm.to_dict()
 

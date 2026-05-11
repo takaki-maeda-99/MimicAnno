@@ -14,7 +14,7 @@ canonical_name = f"{episode_id}__{run_hash[:12]}"  (extended to [:16] on collisi
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -80,11 +80,49 @@ DEFAULT_SCORE_THRESHOLD: float = 0.30
 _VALID_WEIGHT_KEYS: frozenset[str] = frozenset(DEFAULT_BOUNDARY_WEIGHTS)
 _VALID_THRESHOLD_KEYS: frozenset[str] = frozenset(DEFAULT_BOUNDARY_THRESHOLDS)
 _VALID_TOP_KEYS: frozenset[str] = frozenset(
-    {"weights", "thresholds", "merge_window_sec", "score_threshold", "disabled_sources"}
+    {
+        "weights",
+        "thresholds",
+        "merge_window_sec",
+        "score_threshold",
+        "disabled_sources",
+        "zero_crossing",
+    }
 )
+_VALID_ZERO_CROSSING_KEYS: frozenset[str] = frozenset(
+    {"enabled", "signal", "ref", "hysteresis", "span_eps", "merge_window_sec", "weight"}
+)
+_VALID_ZERO_CROSSING_REF_MODES: frozenset[str] = frozenset({"midpoint", "median"})
 
 RUN_HASH_DEFAULT_PREFIX_LEN: int = 12
 RUN_HASH_FALLBACK_PREFIX_LEN: int = 16
+
+
+@dataclass(slots=True, frozen=True)
+class ZeroCrossingConfig:
+    """spec §4.2: optional gripper zero-crossing detector configuration.
+
+    Disabled by default so existing run_hash values remain stable.
+    """
+
+    enabled: bool = False
+    signal: Literal["gripper"] = "gripper"
+    ref: str = "midpoint"
+    hysteresis: float = 0.05
+    span_eps: float = 0.05
+    merge_window_sec: float = 0.0
+    weight: float = 0.5
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "signal": self.signal,
+            "ref": self.ref,
+            "hysteresis": self.hysteresis,
+            "span_eps": self.span_eps,
+            "merge_window_sec": self.merge_window_sec,
+            "weight": self.weight,
+        }
 
 
 @dataclass(slots=True)
@@ -94,15 +132,20 @@ class BoundaryConfig:
     merge_window_sec: float
     score_threshold: float
     disabled_sources: list[str]
+    zero_crossing: ZeroCrossingConfig = field(default_factory=ZeroCrossingConfig)
 
     def to_dict(self, *, target_phase: int = 1) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "weights": self.weights.to_dict(target_phase=target_phase),
             "thresholds": dict(self.thresholds),
             "merge_window_sec": self.merge_window_sec,
             "score_threshold": self.score_threshold,
             "disabled_sources": list(self.disabled_sources),
         }
+        # Option A: omit when disabled so existing config_hash stays byte-identical.
+        if self.zero_crossing.enabled:
+            out["zero_crossing"] = self.zero_crossing.to_dict()
+        return out
 
     @classmethod
     def with_defaults(cls, *, weights: BoundaryWeights | None = None) -> BoundaryConfig:
@@ -113,6 +156,7 @@ class BoundaryConfig:
             merge_window_sec=DEFAULT_MERGE_WINDOW_SEC,
             score_threshold=DEFAULT_SCORE_THRESHOLD,
             disabled_sources=[],
+            zero_crossing=ZeroCrossingConfig(),
         )
 
 
@@ -545,7 +589,109 @@ def load_boundary_config_yaml(path: Path) -> BoundaryConfig:
             )
         cfg.disabled_sources = list(ds)
 
+    if "zero_crossing" in raw:
+        cfg.zero_crossing = _parse_zero_crossing(raw["zero_crossing"], path=path)
+
     return cfg
+
+
+def _parse_zero_crossing(raw: Any, *, path: Path) -> ZeroCrossingConfig:
+    """Parse the ``zero_crossing:`` YAML block into a ``ZeroCrossingConfig``.
+
+    All fields are optional; omitted fields fall back to the dataclass defaults.
+    """
+    if not isinstance(raw, dict):
+        raise MimicAnnoError(
+            "boundary_config.invalid_value",
+            "zero_crossing must be a mapping",
+            {"path": str(path)},
+        )
+    unknown = sorted(set(raw) - _VALID_ZERO_CROSSING_KEYS)
+    if unknown:
+        raise MimicAnnoError(
+            "boundary_config.unknown_key",
+            f"zero_crossing has unknown key(s): {unknown!r}; "
+            f"expected any of {sorted(_VALID_ZERO_CROSSING_KEYS)!r}",
+            {"path": str(path), "unknown_keys": unknown},
+        )
+
+    default = ZeroCrossingConfig()
+
+    enabled_raw = raw.get("enabled", default.enabled)
+    if not isinstance(enabled_raw, bool):
+        raise MimicAnnoError(
+            "boundary_config.invalid_value",
+            f"zero_crossing.enabled must be bool, got {type(enabled_raw).__name__}",
+            {"path": str(path)},
+        )
+
+    signal = raw.get("signal", default.signal)
+    if signal != "gripper":
+        raise MimicAnnoError(
+            "boundary_config.invalid_value",
+            f"zero_crossing.signal must be 'gripper', got {signal!r}",
+            {"path": str(path)},
+        )
+
+    ref = raw.get("ref", default.ref)
+    if not isinstance(ref, str):
+        raise MimicAnnoError(
+            "boundary_config.invalid_value",
+            f"zero_crossing.ref must be string, got {type(ref).__name__}",
+            {"path": str(path)},
+        )
+    if ref not in _VALID_ZERO_CROSSING_REF_MODES:
+        if not ref.startswith("fixed:"):
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                f"zero_crossing.ref must be one of "
+                f"{sorted(_VALID_ZERO_CROSSING_REF_MODES)!r} or 'fixed:<float>'; "
+                f"got {ref!r}",
+                {"path": str(path)},
+            )
+        fixed_str = ref[len("fixed:") :]
+        try:
+            float(fixed_str)
+        except ValueError as e:
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                f"zero_crossing.ref 'fixed:<x>' requires a numeric x; got {fixed_str!r}",
+                {"path": str(path)},
+            ) from e
+
+    def _nonneg_float(key: str, default_value: float) -> float:
+        if key not in raw:
+            return default_value
+        v = raw[key]
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                f"zero_crossing.{key} must be a number, got {type(v).__name__}",
+                {"path": str(path)},
+            )
+        fv = float(v)
+        if fv < 0.0:
+            raise MimicAnnoError(
+                "boundary_config.invalid_value",
+                f"zero_crossing.{key} must be >= 0, got {fv}",
+                {"path": str(path)},
+            )
+        return fv
+
+    hysteresis = _nonneg_float("hysteresis", default.hysteresis)
+    span_eps = _nonneg_float("span_eps", default.span_eps)
+    merge_window_sec = _nonneg_float("merge_window_sec", default.merge_window_sec)
+    weight = _nonneg_float("weight", default.weight)
+
+    return ZeroCrossingConfig(
+        enabled=enabled_raw,
+        signal="gripper",
+        ref=ref,
+        hysteresis=hysteresis,
+        span_eps=span_eps,
+        merge_window_sec=merge_window_sec,
+        weight=weight,
+    )
 
 
 @dataclass(slots=True)

@@ -156,7 +156,7 @@ schema_version: "0.2.0"
 name: so101
 gripper_column:        observation.state.gripper_pos
 gripper_scale_min:     0.0
-gripper_scale_max:     100.0
+gripper_scale_max:     60.0   # SO101 全 36 ep の生 gripper 範囲: 3.95..53.79; 60 は +12% ヘッドルーム
 eef_xyz_column:        observation.state.ee_pos
 eef_rotvec_column:     observation.state.ee_rotvec
 eef_quat_column:       null

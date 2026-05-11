@@ -1,0 +1,25 @@
+# Phase 4 finer-segmentation: SO101 (50 Hz) — opt-in zero-crossing detector.
+#
+# spec: docs/superpowers/specs/2026-05-10-phase4-finer-segmentation-design.md §5.2
+# rationale: docs/superpowers/notes/2026-05-11-so101-otsu-justification.md
+#            docs/superpowers/notes/2026-05-11-so101-zc-resim-new-scale.md
+
+thresholds:
+  gripper_delta: 0.30
+  velocity_valley: 0.05
+weights:
+  gripper: 0.5
+  velocity: 0.25
+  acceleration: 0.15
+  action: 0.10
+score_threshold: 0.30
+merge_window_sec: 0.10
+
+zero_crossing:
+  enabled: true
+  signal: gripper
+  ref: midpoint
+  hysteresis: 0.12        # SO101 new-scale (max=60), Otsu-derived
+  span_eps: 0.05
+  merge_window_sec: 0.0
+  weight: 0.5
