@@ -506,6 +506,42 @@ def export_cmd(
     sys.stdout.flush()
 
 
+@app.command("serve")
+def serve_cmd(
+    runs_root: Path = typer.Option(
+        ..., "--runs-root", exists=True, file_okay=False, dir_okay=True,
+        help="Directory containing the runs/ tree (with index.json).",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (default localhost-only)."),
+    port: int = typer.Option(8000, "--port", help="Bind port."),
+    cors_origin: list[str] | None = typer.Option(
+        None, "--cors-origin",
+        help="CORS allow-origin (repeatable). Default: empty (CORS disabled).",
+    ),
+    reload: bool = typer.Option(
+        False, "--reload",
+        help="Pass uvicorn reload=True (dev only).",
+    ),
+) -> None:
+    """Start the Phase 5 A read-only HTTP server.
+
+    Run ``uv sync --extra server`` first to install fastapi + uvicorn.
+    """
+    try:
+        from mimicanno.server.app import create_app
+        import uvicorn
+    except ImportError as exc:
+        typer.echo(
+            f"server extra not installed ({exc}). "
+            "Run: uv sync --extra server",
+            err=True,
+        )
+        raise typer.Exit(2)
+    origins = cors_origin or []
+    fastapi_app = create_app(runs_root=runs_root, cors_origins=origins)
+    uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
+
+
 def main() -> None:
     app()
 
