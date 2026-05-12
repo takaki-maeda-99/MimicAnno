@@ -24,11 +24,15 @@ RUNS_ROOT="${RUNS_ROOT:-$REPO/runs/so101_phase4}"
 LOGS_DIR="${LOGS_DIR:-$REPO/logs/batch_so101}"
 VLM_DUMP_ROOT="${VLM_DUMP_ROOT:-$RUNS_ROOT/_vlm_dumps}"
 BOUNDARY_CONFIG="${BOUNDARY_CONFIG:-}"
+SMOOTHER_CONFIG="${SMOOTHER_CONFIG:-}"
 mkdir -p "$RUNS_ROOT" "$LOGS_DIR" "$VLM_DUMP_ROOT"
 
 EXTRA_ANNOTATE_ARGS=()
 if [[ -n "$BOUNDARY_CONFIG" ]]; then
     EXTRA_ANNOTATE_ARGS+=(--boundary-config "$BOUNDARY_CONFIG")
+fi
+if [[ -n "$SMOOTHER_CONFIG" ]]; then
+    EXTRA_ANNOTATE_ARGS+=(--smoother-config "$SMOOTHER_CONFIG")
 fi
 
 # Reproducibility: fake-but-stable 40-hex sha for the local Gemma path.

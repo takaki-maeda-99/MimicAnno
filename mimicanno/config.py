@@ -323,14 +323,25 @@ class SmootherConfig:
     )
     viterbi_enabled: bool = True
     lambda_forbidden: float = 0.5
+    # Spec 2026-05-12 (source-aware merge): boundaries whose ``sources``
+    # intersect this set are preserved by ``_merge_same_label`` (Op 1) even
+    # when the two adjacent segments share the same phase. Empty default
+    # keeps ``config_hash`` byte-identical for existing v3/v4 runs (the key
+    # is omitted from ``to_dict`` when empty — see below).
+    merge_same_label_preserve_sources: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "min_segment_duration_sec": self.min_segment_duration_sec,
             "forbidden_transitions": [list(p) for p in self.forbidden_transitions],
             "viterbi_enabled": self.viterbi_enabled,
             "lambda_forbidden": self.lambda_forbidden,
         }
+        if self.merge_same_label_preserve_sources:
+            out["merge_same_label_preserve_sources"] = list(
+                self.merge_same_label_preserve_sources,
+            )
+        return out
 
 
 _RESERVED_PHASES_FOR_SMOOTHER: frozenset[str] = frozenset({"unlabeled", "unknown"})
@@ -375,6 +386,7 @@ def load_smoother_config_yaml(
         "forbidden_transitions",
         "viterbi_enabled",
         "lambda_forbidden",
+        "merge_same_label_preserve_sources",
     }
     unknown_keys = sorted(set(raw) - valid_top_keys)
     if unknown_keys:
@@ -475,11 +487,36 @@ def load_smoother_config_yaml(
             validated.append((a, b))
         ft = tuple(validated)
 
+    # merge_same_label_preserve_sources (spec 2026-05-12)
+    raw_preserve = raw.get("merge_same_label_preserve_sources")
+    if raw_preserve is None:
+        preserve: tuple[str, ...] = ()
+    else:
+        if not isinstance(raw_preserve, list):
+            raise SmootherConfigInvalid(
+                reason=(
+                    "'merge_same_label_preserve_sources' must be a list of "
+                    f"strings, got {type(raw_preserve).__name__}"
+                ),
+                path=str(path),
+            )
+        for item in raw_preserve:
+            if not isinstance(item, str):
+                raise SmootherConfigInvalid(
+                    reason=(
+                        "'merge_same_label_preserve_sources' entries must be "
+                        f"strings, got {type(item).__name__} ({item!r})"
+                    ),
+                    path=str(path),
+                )
+        preserve = tuple(raw_preserve)
+
     return SmootherConfig(
         min_segment_duration_sec=min_dur,
         forbidden_transitions=ft,
         viterbi_enabled=viterbi,
         lambda_forbidden=lam,
+        merge_same_label_preserve_sources=preserve,
     )
 
 

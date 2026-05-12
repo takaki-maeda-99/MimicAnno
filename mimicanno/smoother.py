@@ -17,6 +17,7 @@ operator semantics; they are not part of the public stable surface.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -26,6 +27,7 @@ from mimicanno.schema import SmoothingSummary, SubtaskSegment
 
 SmoothingOp = Literal["merge_same_label", "merge_short", "viterbi_relabel"]
 _RESERVED_PHASES: frozenset[str] = frozenset({"unlabeled", "unknown"})
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -141,12 +143,35 @@ def _merge_pair_same_label(
     return _recompute_confidence(merged)
 
 
+def _boundary_is_preserved(
+    left: SubtaskSegment,
+    right: SubtaskSegment,
+    preserve: frozenset[str],
+) -> bool:
+    """Spec 2026-05-12 §3.2: a same-label merge between ``left`` and ``right``
+    must be skipped if the shared boundary's ``sources`` intersect ``preserve``.
+
+    Uses union of ``left.end_boundary.sources`` and ``right.start_boundary.sources``
+    because ``_assert_segment_invariants`` (smoother.py §3.6) does NOT enforce
+    sources-equality across the shared edge (only ``time`` and ``candidate_id``);
+    union is the safe direction (over-preserve rather than miss).
+    """
+    if not preserve:
+        return False
+    shared = set(left.end_boundary.sources) | set(right.start_boundary.sources)
+    return bool(shared & preserve)
+
+
 def _do_one_merge_round(
     segments: list[SubtaskSegment],
+    *,
+    preserve: frozenset[str] = frozenset(),
 ) -> tuple[list[SubtaskSegment], int]:
     """One left-to-right merge pass over adjacent same-phase pairs.
 
     Returns ``(new_list, collapse_count_in_this_round)``.
+    Boundaries whose ``sources`` intersect ``preserve`` are skipped (spec
+    2026-05-12 §3.2).
     """
     if len(segments) <= 1:
         return list(segments), 0
@@ -154,7 +179,11 @@ def _do_one_merge_round(
     collapses = 0
     i = 0
     while i < len(segments):
-        if i + 1 < len(segments) and segments[i].phase == segments[i + 1].phase:
+        if (
+            i + 1 < len(segments)
+            and segments[i].phase == segments[i + 1].phase
+            and not _boundary_is_preserved(segments[i], segments[i + 1], preserve)
+        ):
             out.append(_merge_pair_same_label(segments[i], segments[i + 1]))
             collapses += 1
             i += 2
@@ -166,17 +195,21 @@ def _do_one_merge_round(
 
 def _merge_same_label(
     segments: list[SubtaskSegment],
+    *,
+    preserve: frozenset[str] = frozenset(),
 ) -> tuple[list[SubtaskSegment], int, int]:
     """Op 1 (spec §3.2). Returns ``(segments, rounds, total_collapses)``.
 
     Iterates rounds until a round performs no collapse. ``rounds`` counts
     productive rounds only (the terminating no-op round is not counted).
+    Boundaries whose ``sources`` intersect ``preserve`` are skipped — see
+    ``_boundary_is_preserved`` (spec 2026-05-12 §3.2).
     """
     rounds = 0
     total_collapses = 0
     current = list(segments)
     while True:
-        out, collapses = _do_one_merge_round(current)
+        out, collapses = _do_one_merge_round(current, preserve=preserve)
         if collapses == 0:
             break
         rounds += 1
@@ -578,8 +611,13 @@ def apply_smoothing(
         )
     ops_log: list[tuple[SmoothingOp, list[str]]] = []
 
+    # Spec 2026-05-12 §3.4: build preserve set once and pass to every Op 1 call.
+    preserve = frozenset(config.merge_same_label_preserve_sources)
+
     # Op 1
-    after_op1, rounds_total, collapses_total = _merge_same_label(list(segments))
+    after_op1, rounds_total, collapses_total = _merge_same_label(
+        list(segments), preserve=preserve,
+    )
     if collapses_total > 0:
         ops_log.append(("merge_same_label", [s.segment_id for s in after_op1]))
 
@@ -588,7 +626,7 @@ def apply_smoothing(
     if absorbs_total > 0:
         ops_log.append(("merge_short", [s.segment_id for s in after_op2]))
         # Op 1 follow-up
-        after_op2, r2, c2 = _merge_same_label(after_op2)
+        after_op2, r2, c2 = _merge_same_label(after_op2, preserve=preserve)
         rounds_total += r2
         collapses_total += c2
         if c2 > 0:
@@ -601,11 +639,27 @@ def apply_smoothing(
     if relabels > 0:
         ops_log.append(("viterbi_relabel", [s.segment_id for s in after_op3]))
         # Op 1 follow-up after Viterbi (spec §3.4 final-step rule)
-        after_op3, r3, c3 = _merge_same_label(after_op3)
+        after_op3, r3, c3 = _merge_same_label(after_op3, preserve=preserve)
         rounds_total += r3
         collapses_total += c3
         if c3 > 0:
             ops_log.append(("merge_same_label", [s.segment_id for s in after_op3]))
+
+    # Spec 2026-05-12 §3.5: warn on preserve_sources entries that never appeared
+    # in any boundary during this episode (likely YAML typo / stale config).
+    if preserve:
+        observed: set[str] = set()
+        for seg in after_op3:
+            observed.update(seg.start_boundary.sources)
+            observed.update(seg.end_boundary.sources)
+        unused = preserve - observed
+        if unused:
+            _LOG.warning(
+                "smoother preserve_sources contains %r which were not observed "
+                "on any boundary in this episode — possible YAML typo or stale "
+                "config",
+                sorted(unused),
+            )
 
     # Spec §3.6 — post-smoothing invariants
     _assert_segment_invariants(after_op3)
