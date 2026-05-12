@@ -193,6 +193,39 @@ pnpm dev          # http://localhost:5173/?run=<canonical_name>
 
 Read-only timeline / waveform viewer for run directories. Edit affordances are deferred to Phase 5B (not started).
 
+## Server (Phase 5 A — read-only)
+
+A read-only HTTP backend that serves the same JSON shapes as the static
+`runs/` tree. Installed lazily via the `[server]` optional dependency
+group.
+
+```bash
+uv sync --extra server
+uv run --extra server mimicanno serve --runs-root runs/ \
+    --host 127.0.0.1 --port 8000 \
+    --cors-origin http://localhost:5173
+```
+
+Endpoints:
+- `GET /healthz` — liveness probe
+- `GET /api/runs/index.json` — same shape as the static `runs/index.json`
+- `GET /api/runs/<canonical_name>/<artifact>` — `manifest.json`, `annotation.json`, `boundaries.json`, `signals.json`, `tracks.json` (artifact allow-list)
+
+Behaviour:
+- Manifest responses carry `ETag: "<run_hash>"` for the future Phase 5 B
+  edit endpoints' `If-Match` optimistic concurrency.
+- Other artifacts stream via `FileResponse` so 10 MB+ tracks.json never
+  loads into memory.
+- The server absorbs the short publish dir-gap (`publish.py:141-165`) with
+  100 ms × 3 retry, so concurrent `mimicanno annotate` runs don't surface
+  500s.
+- CORS is **opt-in**: empty `--cors-origin` → no middleware, no wildcard.
+- The viewer (`frontend/`) still consumes the static `runs/` tree; the
+  HTTP swap is deferred to Phase 5 B.
+
+Internal layout, design contracts, and test stratification:
+[`mimicanno/server/README.md`](mimicanno/server/README.md).
+
 ## Development
 
 ```bash

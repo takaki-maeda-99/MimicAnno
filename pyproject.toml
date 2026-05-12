@@ -27,6 +27,14 @@ dev = [
   "pytest-timeout>=2.3",
   "ruff>=0.4",
   "mypy>=1.10",
+  # httpx is starlette TestClient's transport; pin so test deps stay consistent.
+  "httpx>=0.27,<1",
+]
+server = [
+  # Phase 5 A read-only persistence backend. Pulled lazily via
+  # `uv sync --extra server`; base sync stays slim.
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
 ]
 vlm = [
   "huggingface_hub>=0.30",
@@ -108,5 +116,11 @@ module = [
   "torchvision.*",
   "PIL",
   "PIL.*",
+  # Phase 5 A: fastapi/starlette ship partial types, uvicorn has none.
+  "fastapi",
+  "fastapi.*",
+  "starlette.*",
+  "uvicorn",
+  "uvicorn.*",
 ]
 ignore_missing_imports = true
