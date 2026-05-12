@@ -1,0 +1,16 @@
+# Phase 4 smoother: Agilex Piper finer-segmentation profile.
+#
+# Pairs with mimicanno/configs/boundary/piper_zero_crossing.yaml. Same
+# preserve_sources strategy as SO101: hold ZC-derived boundaries through
+# Op 1 same-label merge so the finer subtask structure that ZC exposes is
+# not collapsed by Gemma's same-phase neighbours.
+#
+# spec: docs/superpowers/specs/2026-05-12-phase4-smoother-source-aware-merge-design.md
+# rationale: docs/superpowers/notes/2026-05-12-piper-phase4-zc-ab-results.md
+#   (Piper でも merge_same_label が 74% で発火、SO101 と同率)
+
+min_segment_duration_sec: 0.30
+viterbi_enabled: true
+lambda_forbidden: 0.5
+merge_same_label_preserve_sources:
+  - gripper_zero_crossing

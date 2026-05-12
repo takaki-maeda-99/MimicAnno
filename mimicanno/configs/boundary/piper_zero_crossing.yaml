@@ -1,0 +1,30 @@
+# Phase 4 finer-segmentation: Agilex Piper (30 Hz) — opt-in zero-crossing detector.
+#
+# spec: docs/superpowers/specs/2026-05-10-phase4-finer-segmentation-design.md §5.2
+# Calibration (2026-05-12, all 39 ep / 28685 frames of
+# LegrandFrederic/Marker_pickup_piper, gripper = observation.state[6]):
+#   raw range 0.0000..1.3979, Otsu T=0.5277,
+#   mu_closed=0.2827, mu_open=0.7796,
+#   hyst = 0.5 * min(T-mu_closed, mu_open-T) = 0.12.
+# Coincidentally matches SO101's calibrated hyst — the gripper distributions
+# are similarly clean (gap_closed=0.245, gap_open=0.252).
+
+thresholds:
+  gripper_delta: 0.30
+  velocity_valley: 0.05
+weights:
+  gripper: 0.5
+  velocity: 0.25
+  acceleration: 0.15
+  action: 0.10
+score_threshold: 0.30
+merge_window_sec: 0.10
+
+zero_crossing:
+  enabled: true
+  signal: gripper
+  ref: midpoint
+  hysteresis: 0.12        # Piper Otsu-derived (gripper_scale_max=1.6)
+  span_eps: 0.05
+  merge_window_sec: 0.0
+  weight: 0.5
