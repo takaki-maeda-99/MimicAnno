@@ -10,6 +10,18 @@ dist/
 data/
 logs/
 
+# Virtual env
+.venv/
+
+# Coverage / test artifacts
+htmlcov/
+coverage.xml
+.coverage
+.coverage.*
+
+# Claude Code session state (per-machine, not portable)
+.claude/
+
 # Phase 1 run output (kept out of git)
 runs/*
 !runs/.gitkeep
