@@ -18,7 +18,7 @@ END="${END:?must set END=<last episode (inclusive)>}"
 DATA="$REPO/data/Piper"
 GEMMA="/home/gayagaya/gemma_project/models/gemma-4-E4B-it"
 SAM3="$REPO/sam3/checkpoints/sam3.pt"
-ROBOT_CONFIG="$REPO/mimicanno/configs/robot/piper_robot_config.yaml"
+ROBOT_CONFIG="${ROBOT_CONFIG:-$REPO/mimicanno/configs/robot/piper_robot_config.yaml}"
 TASK="Pick up the marker and place it"
 
 RUNS_ROOT="${RUNS_ROOT:-$REPO/runs/piper_phase4}"
