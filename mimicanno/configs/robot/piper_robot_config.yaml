@@ -1,0 +1,23 @@
+# Agilex Piper (7-DoF) GenericAdapter v0.2.0 robot-config.
+#
+# Designed for LegrandFrederic/Marker_pickup_piper after running
+# scripts/prep_piper_episodes.py — which synthesizes a scalar
+# observation.state.gripper_pos column from observation.state[6].
+#
+# gripper_scale_max calibration (2026-05-12, 39 ep / 28685 frames):
+#   raw range 0.0000..1.3979, Otsu T=0.5277,
+#   mu_closed=0.2827, mu_open=0.7796,
+#   recommended hysteresis = 0.12.
+# 1.6 = observed max +12% headroom, rounded (mirrors SO101 rule).
+#
+# eef columns are null: the Piper dataset only ships joint positions,
+# no Cartesian end-effector pose. MimicAnno's signals/Phase-1 path
+# tolerates this (eef_pose returns None).
+schema_version: "0.2.0"
+name: piper
+gripper_column: observation.state.gripper_pos
+gripper_scale_min: 0.0
+gripper_scale_max: 1.6
+eef_xyz_column: null
+eef_quat_column: null
+eef_rotvec_column: null
