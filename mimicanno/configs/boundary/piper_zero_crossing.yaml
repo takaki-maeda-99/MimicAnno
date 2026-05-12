@@ -27,4 +27,6 @@ zero_crossing:
   hysteresis: 0.12        # Piper Otsu-derived (gripper_scale_max=1.6)
   span_eps: 0.05
   merge_window_sec: 0.0
-  weight: 0.5
+  weight: 0.5             # carried over from SO101 default; not separately
+                          # calibrated — Piper's gripper SNR is comparable so
+                          # the SO101 weighting is a sensible starting point.
