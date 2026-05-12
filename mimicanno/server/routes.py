@@ -15,10 +15,9 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, Response
 
-from mimicanno.server.errors import MimicAnnoHTTPError
 from mimicanno.server.runs_repo import RunsRepository
 
 _LOG = logging.getLogger("mimicanno.server")
@@ -60,6 +59,13 @@ def make_router(runs_root: Path) -> APIRouter:
             run_hash = parsed.get("run_hash")
             if isinstance(run_hash, str):
                 headers["ETag"] = f'"{run_hash}"'
+            else:
+                # Surface the issue early: Phase 5 B's If-Match will silently
+                # fall through to unconditional updates if ETag is missing.
+                _LOG.warning(
+                    "manifest %s/%s lacks run_hash; ETag header omitted",
+                    name, artifact,
+                )
             return Response(
                 content=body, headers=headers, media_type="application/json",
             )

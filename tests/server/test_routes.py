@@ -252,3 +252,43 @@ def test_17_large_artifact_uses_filestream(
     assert r.status_code == 200
     assert len(r.content) > 1024 * 1024
     assert r.headers.get("cache-control") == "no-cache"
+
+
+# ----- follow-up (2026-05-13 review): explicit HEAD on non-manifest -----
+
+
+def test_18_head_non_manifest(
+    tmp_runs_root: Path, canonical_name: str,
+) -> None:
+    """HEAD on a non-manifest artifact must succeed with empty body and the
+    same content-type / cache-control headers as GET."""
+    client = _make_client(tmp_runs_root)
+    r = client.head(f"/api/runs/{canonical_name}/boundaries.json")
+    assert r.status_code == 200
+    assert r.content == b""
+    assert r.headers.get("cache-control") == "no-cache"
+
+
+# ----- follow-up: ETag fallback when run_hash is missing -----
+
+
+def test_19_manifest_without_run_hash_no_etag_with_warning(
+    tmp_runs_root: Path, canonical_name: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A manifest that lacks ``run_hash`` (or has a non-string value) must
+    still serve 200 but emit no ETag header. The omission is logged at
+    WARNING on ``mimicanno.server`` so Phase 5 B's If-Match contract issues
+    surface early (review finding 2026-05-13)."""
+    import json as _json
+    import logging
+    mani_path = tmp_runs_root / canonical_name / "manifest.json"
+    parsed = _json.loads(mani_path.read_text())
+    del parsed["run_hash"]
+    mani_path.write_text(_json.dumps(parsed))
+
+    client = _make_client(tmp_runs_root)
+    with caplog.at_level(logging.WARNING, logger="mimicanno.server"):
+        r = client.get(f"/api/runs/{canonical_name}/manifest.json")
+    assert r.status_code == 200
+    assert "etag" not in {k.lower() for k in r.headers}
+    assert any("run_hash" in rec.message for rec in caplog.records)

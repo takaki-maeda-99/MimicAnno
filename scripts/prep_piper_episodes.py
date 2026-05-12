@@ -3,12 +3,20 @@ per-episode SO101-style files under data/Piper/.
 
 For each requested episode_index this writes:
   data/Piper/data/chunk-000/episode_{NNNNNN}.parquet
-  data/Piper/videos/chunk-000/observation.images.main/episode_{NNNNNN}.mp4
+  data/Piper/videos/chunk-000/observation.images.front/episode_{NNNNNN}.mp4
 
 The parquet adds a synthesized scalar column ``observation.state.gripper_pos``
 (=`observation.state[6]`) so MimicAnno's GenericAdapter (which expects a
 scalar gripper column) can consume it without modification. Original
 aggregated `observation.state` is preserved as well.
+
+NOTE on camera path naming: the destination directory is
+``observation.images.front/`` to mirror the SO101 layout MimicAnno expects,
+but the **source bytes come from the upstream dataset's
+``observation.images.secondary_0/`` (overhead) camera**, NOT the wrist
+``main`` view. See the rationale on ``SRC_VID_OVERHEAD`` below — the
+local ``data/Piper/`` dir is gitignored, so this docstring is the
+canonical record of the rename.
 
 Usage:
   uv run python scripts/prep_piper_episodes.py 0          # just ep0
@@ -32,7 +40,7 @@ SRC_PARQ = HF_CACHE / "data/chunk-000/file-000.parquet"
 # direct SAM3 grounding tests on 2026-05-12 showed the wrist view yields 0
 # detections for "marker" / "pen" / generic prompts, while secondary_0 grounds
 # at score 0.94. SO101 uses an external static cam ("front") similarly.
-SRC_VID_MAIN = HF_CACHE / "videos/observation.images.secondary_0/chunk-000/file-000.mp4"
+SRC_VID_OVERHEAD = HF_CACHE / "videos/observation.images.secondary_0/chunk-000/file-000.mp4"
 SRC_EP_META = HF_CACHE / "meta/episodes/chunk-000/file-000.parquet"
 
 DST_ROOT = Path("/misc/dl00/gayagaya/MimicAnno/data/Piper")
@@ -98,7 +106,7 @@ def prep(ep: int, src_table: pa.Table, ranges: dict[int, tuple[int, int, float, 
 
     table = _build_episode_parquet(src_table, row_from, row_to)
     pq.write_table(table, dst_parq)
-    _slice_video(SRC_VID_MAIN, dst_vid, t_from, t_to)
+    _slice_video(SRC_VID_OVERHEAD, dst_vid, t_from, t_to)
     print(
         f"ep{ep:03d}: rows={row_to-row_from}  ts=[{t_from:.2f}..{t_to:.2f}]  "
         f"-> {dst_parq.name}, {dst_vid.name}"

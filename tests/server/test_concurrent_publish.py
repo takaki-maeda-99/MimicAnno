@@ -87,3 +87,61 @@ def test_concurrent_publish_no_500(tmp_runs_root: Path, canonical_name: str) -> 
         raise errors[0]
     # Confirm readers actually finished (didn't hang on a dirgap).
     assert not rd1.is_alive() and not rd2.is_alive()
+
+
+def test_concurrent_publish_non_manifest_no_500(
+    tmp_runs_root: Path, canonical_name: str,
+) -> None:
+    """Follow-up (2026-05-13 review): the manifest path is already exercised
+    above. Non-manifest artifacts are served via ``FileResponse`` which opens
+    the file inside Starlette's response phase — *after* ``RunsRepository``'s
+    existence check has cleared. Validate that the same "200 or 404, never
+    500" invariant still holds when a publish-rename lands between
+    ``open_artifact`` returning and ``FileResponse`` reading."""
+    from mimicanno.server.app import create_app
+
+    app = create_app(runs_root=tmp_runs_root, cors_origins=[])
+    client = TestClient(app)
+
+    final = tmp_runs_root / canonical_name
+    bak = tmp_runs_root / f"{canonical_name}.bak"
+    shutil.copytree(final, tmp_runs_root / f"{canonical_name}.tmp.999")
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def publisher() -> None:
+        try:
+            cycles = 0
+            while not stop.is_set() and cycles < 30:
+                final.rename(bak)
+                tmp_new_path = tmp_runs_root / f"{canonical_name}.tmp.{cycles}"
+                shutil.copytree(bak, tmp_new_path)
+                tmp_new_path.rename(final)
+                shutil.rmtree(bak)
+                cycles += 1
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(80):
+                r = client.get(f"/api/runs/{canonical_name}/boundaries.json")
+                # 200 (file streamed) or 404 (retry exhausted), never 500.
+                assert r.status_code in (200, 404), (
+                    f"unexpected status {r.status_code}: {r.text}"
+                )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    pub = threading.Thread(target=publisher, daemon=True)
+    rd = threading.Thread(target=reader, daemon=True)
+    pub.start()
+    rd.start()
+    rd.join(timeout=30)
+    stop.set()
+    pub.join(timeout=30)
+
+    if errors:
+        raise errors[0]
+    assert not rd.is_alive()
