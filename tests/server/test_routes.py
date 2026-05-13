@@ -15,10 +15,11 @@ from fastapi.testclient import TestClient
 def _make_client(runs_root: Path) -> TestClient:
     """Minimal app for route-level tests (no CORS, errors installed)."""
     from mimicanno.server.errors import install_handlers
+    from mimicanno.server.labelset import LabelSetCache
     from mimicanno.server.routes import make_router
     app = FastAPI()
     install_handlers(app)
-    app.include_router(make_router(runs_root))
+    app.include_router(make_router(runs_root, LabelSetCache.from_path()))
     return TestClient(app, raise_server_exceptions=False)
 
 

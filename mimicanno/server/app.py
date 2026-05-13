@@ -12,10 +12,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mimicanno.server.errors import install_handlers
+from mimicanno.server.labelset import LabelSetCache
 from mimicanno.server.routes import make_router
 
 
-def create_app(*, runs_root: Path, cors_origins: list[str]) -> FastAPI:
+def create_app(
+    *,
+    runs_root: Path,
+    cors_origins: list[str],
+    labelset: LabelSetCache | None = None,
+) -> FastAPI:
+    if labelset is None:
+        labelset = LabelSetCache.from_path()
     app = FastAPI(title="mimicanno persistence", openapi_url=None)
     if cors_origins:
         app.add_middleware(
@@ -26,5 +34,5 @@ def create_app(*, runs_root: Path, cors_origins: list[str]) -> FastAPI:
             allow_credentials=False,
         )
     install_handlers(app)
-    app.include_router(make_router(runs_root))
+    app.include_router(make_router(runs_root, labelset))
     return app

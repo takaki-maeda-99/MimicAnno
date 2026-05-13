@@ -18,13 +18,14 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, Response
 
+from mimicanno.server.labelset import LabelSetCache
 from mimicanno.server.runs_repo import RunsRepository
 
 _LOG = logging.getLogger("mimicanno.server")
 
 
-def make_router(runs_root: Path) -> APIRouter:
-    """Build a router bound to a specific runs root."""
+def make_router(runs_root: Path, labelset: LabelSetCache) -> APIRouter:
+    """Build a router bound to a specific runs root + labelset."""
     repo = RunsRepository(runs_root)
     resolved_root = repo.root
 
@@ -36,6 +37,18 @@ def make_router(runs_root: Path) -> APIRouter:
     @router.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok", "runs_root": str(resolved_root)}
+
+    @router.get("/api/labelset")
+    def get_labelset() -> Response:
+        body = labelset.to_response_dict()
+        return Response(
+            content=json.dumps(body).encode("utf-8"),
+            media_type="application/json",
+            headers={
+                "ETag": f'"{labelset.ls.sha256}"',
+                "Cache-Control": "public, max-age=300",
+            },
+        )
 
     @router.api_route("/api/runs/index.json", methods=["GET", "HEAD"])
     def get_index(r: RunsRepository = Depends(get_repo)) -> Response:
