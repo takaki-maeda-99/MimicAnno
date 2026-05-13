@@ -75,6 +75,30 @@ def test_write_artifacts_failure_cleans_up_tmp(tmp_path: Path):
     assert leftover == []
 
 
+def test_publish_writes_canonical_name_into_manifest(tmp_path: Path):
+    """Phase 5 B r1 spec §3.3: after publish, the on-disk manifest.json
+    carries canonical_name equal to the resolved run dir name."""
+    rh = "sha256:" + "9" * 64
+    req = _request(tmp_path, rh)
+    outcome = publish(req, write_artifacts=_stub_writer)
+    assert outcome == PublishOutcome.PUBLISHED
+    final = next(d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("ep0__"))
+    raw = json.loads((final / "manifest.json").read_text())
+    assert raw["canonical_name"] == final.name
+
+
+def test_publish_canonical_name_upsert_preserves_run_hash(tmp_path: Path):
+    """The canonical_name upsert MUST NOT change manifest.run_hash —
+    that invariant is what downstream reuse short-circuit relies on
+    (publish.py:99-102 _existing_run_hash compare)."""
+    rh = "sha256:" + "9" * 64
+    req = _request(tmp_path, rh)
+    publish(req, write_artifacts=_stub_writer)
+    final = next(d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("ep0__"))
+    raw = json.loads((final / "manifest.json").read_text())
+    assert raw["run_hash"] == rh  # invariant: hash field unchanged by upsert
+
+
 def test_write_artifacts_run_hash_mismatch_raises(tmp_path: Path):
     rh_request = "sha256:" + "9" * 64
     rh_actual = "sha256:" + "1" * 64
