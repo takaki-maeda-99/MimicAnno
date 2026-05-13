@@ -129,9 +129,11 @@ LabelSource = Literal[
 ]
 
 
-SmoothingOpName = Literal["merge_same_label", "merge_short", "viterbi_relabel"]
+SmoothingOpName = Literal[
+    "merge_same_label", "merge_short", "viterbi_relabel", "edited",
+]
 _ALLOWED_SMOOTHING_OPS: frozenset[str] = frozenset({
-    "merge_same_label", "merge_short", "viterbi_relabel",
+    "merge_same_label", "merge_short", "viterbi_relabel", "edited",
 })
 
 
