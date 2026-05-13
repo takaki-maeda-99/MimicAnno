@@ -48,8 +48,16 @@ class EditError(Exception):
     """Base. Routes.py translates subclasses into the §3.6 envelope."""
 
 
-# Subclasses get filled in by subsequent T6 sub-steps (T6b RunNotFound,
-# T6c EtagMismatch, T6d InvalidLabel/InvalidSegment, ...).
+class RunNotFound(EditError):
+    """404 run_not_found — the canonical_name has no dir under runs_root."""
+
+    def __init__(self, *, name: str) -> None:
+        super().__init__(f"run not found: {name}")
+        self.name = name
+
+
+# More subclasses get filled in by subsequent T6 sub-steps
+# (T6c EtagMismatch, T6d InvalidLabel/InvalidSegment, ...).
 
 
 # ----------------------------------------------------------------------------
@@ -75,6 +83,11 @@ def apply_edit(
     run_dir = runs_root / name
 
     with file_lock(runs_root / "index.json.lock", timeout_sec=_LOCK_TIMEOUT_SEC):
+        # Step 1.5 (T6b): check existence inside the lock so the publish
+        # dir-gap window (publish.py:149-165) doesn't false-positive.
+        if not run_dir.is_dir():
+            raise RunNotFound(name=name)
+
         manifest_path = run_dir / "manifest.json"
         annotation_path = run_dir / "annotation.json"
 

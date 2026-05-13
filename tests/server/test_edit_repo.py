@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.labelset import default_labels_path, load_label_set
 
@@ -51,3 +53,23 @@ def test_apply_edit_happy_path(
     # Disk updated: manifest.json carries the new run_hash
     new_manifest = read_manifest(run_dir / "manifest.json")
     assert new_manifest.run_hash == result["run_hash"]
+
+
+def test_apply_edit_run_not_found_raises(
+    tmp_runs_root_loadable: Path,
+) -> None:
+    """Missing run dir → RunNotFound (spec §3.6 → 404 run_not_found).
+    Checked inside the lock so the publish dir-gap window doesn't
+    false-positive (T6b)."""
+    from mimicanno.server.edit_repo import RunNotFound, apply_edit
+    with pytest.raises(RunNotFound) as ei:
+        apply_edit(
+            runs_root=tmp_runs_root_loadable,
+            name="episode_999999__nonexistent",
+            segment_id="any",
+            new_phase="idle",
+            if_match="sha256:" + "0" * 64,
+            reviewer=None,
+            labelset=_labelset(),
+        )
+    assert ei.value.name == "episode_999999__nonexistent"
