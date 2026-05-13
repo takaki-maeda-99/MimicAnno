@@ -88,6 +88,8 @@
           "content_type": {"type": "string"}
         }
       }
-    }
+    },
+    "canonical_name": {"type": ["string", "null"]},
+    "edited_at": {"type": ["string", "null"]}
   }
 }

@@ -126,6 +126,54 @@ def test_read_manifest_round_trip(tmp_path: Path) -> None:
     assert loaded.pipeline_status.object_state_available is False
 
 
+# Phase 5 B r1 — canonical_name / edited_at reader behavior
+
+
+def test_read_manifest_canonical_name_falls_back_to_dir_name(
+    tmp_path: Path,
+) -> None:
+    """A pre-r1 manifest (no canonical_name key) reads back with the
+    field falling back to the run dir name (spec §3.3 reader fallback).
+    Also confirms empty-string is NOT a valid value (`or` short-circuit
+    bug guarded by isinstance check, T15 typing note)."""
+    run_dir = tmp_path / "episode_000000__abc123def456"
+    run_dir.mkdir()
+    p = run_dir / "manifest.json"
+    write_manifest_json(p, _manifest())  # writer omits None canonical_name
+    raw = json.loads(p.read_text())
+    assert "canonical_name" not in raw  # confirm pre-r1 shape on disk
+
+    loaded = read_manifest(p)
+    assert loaded.canonical_name == "episode_000000__abc123def456"
+
+
+def test_read_manifest_canonical_name_round_trip(tmp_path: Path) -> None:
+    """When the writer emits canonical_name, the reader preserves it
+    verbatim (does NOT fall back to dir name)."""
+    from dataclasses import replace
+    run_dir = tmp_path / "dir_does_not_match"
+    run_dir.mkdir()
+    p = run_dir / "manifest.json"
+    m = replace(_manifest(), canonical_name="ep_0001__explicit_name")
+    write_manifest_json(p, m)
+
+    loaded = read_manifest(p)
+    assert loaded.canonical_name == "ep_0001__explicit_name"
+
+
+def test_read_manifest_edited_at_present_or_none(tmp_path: Path) -> None:
+    """edited_at: None when absent, preserved when present."""
+    from dataclasses import replace
+    p = tmp_path / "manifest.json"
+    write_manifest_json(p, _manifest())
+    assert read_manifest(p).edited_at is None
+
+    write_manifest_json(
+        p, replace(_manifest(), edited_at="2026-05-13T12:00:00Z"),
+    )
+    assert read_manifest(p).edited_at == "2026-05-13T12:00:00Z"
+
+
 def test_read_annotation_result_round_trip(tmp_path: Path) -> None:
     a = _annotation()
     p = tmp_path / "annotation.json"

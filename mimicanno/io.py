@@ -170,6 +170,18 @@ def read_manifest(path: Path) -> Manifest:
         if "smoothing_summary" in raw
         else None
     )
+    # Phase 5 B r1: canonical_name fallback. `or` would swallow empty
+    # string into the dir-name fallback; require an explicit non-empty
+    # string instead (T15 typing note).
+    canonical_name_raw = raw.get("canonical_name")
+    canonical_name = (
+        canonical_name_raw
+        if isinstance(canonical_name_raw, str) and canonical_name_raw
+        else path.parent.name
+    )
+    edited_at_raw = raw.get("edited_at")
+    edited_at = edited_at_raw if isinstance(edited_at_raw, str) else None
+
     return Manifest(
         schema_version=str(raw["schema_version"]),
         episode_id=str(raw["episode_id"]),
@@ -196,6 +208,8 @@ def read_manifest(path: Path) -> Manifest:
         compat=dict(raw["compat"]),
         artifacts=artifacts,
         smoothing_summary=smoothing_summary,
+        canonical_name=canonical_name,
+        edited_at=edited_at,
     )
 
 
