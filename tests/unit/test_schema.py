@@ -154,6 +154,27 @@ class TestManifest:
         assert d["pipeline_status"]["degraded_from_phase"] is None
         assert d["pipeline_status"]["degrade_reason"] is None
 
+    # Phase 5 B r1 — canonical_name / edited_at conditional emit
+    def test_canonical_name_default_omitted_from_to_dict(self):
+        d = _make_minimal_manifest().to_dict()
+        assert "canonical_name" not in d
+
+    def test_edited_at_default_omitted_from_to_dict(self):
+        d = _make_minimal_manifest().to_dict()
+        assert "edited_at" not in d
+
+    def test_canonical_name_emitted_when_set(self):
+        from dataclasses import replace
+        m = replace(_make_minimal_manifest(), canonical_name="ep0__abc123def456")
+        d = m.to_dict()
+        assert d["canonical_name"] == "ep0__abc123def456"
+
+    def test_edited_at_emitted_when_set(self):
+        from dataclasses import replace
+        m = replace(_make_minimal_manifest(), edited_at="2026-05-13T12:00:00Z")
+        d = m.to_dict()
+        assert d["edited_at"] == "2026-05-13T12:00:00Z"
+
 
 def _make_minimal_manifest() -> Manifest:
     return Manifest(
