@@ -10,6 +10,7 @@ Two route families + /healthz:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -127,8 +128,14 @@ def make_router(
             )
 
         # Step 4: edit_repo.apply_edit + EditError → HTTP mapping.
+        # T11: dispatch the blocking write to a threadpool worker so the
+        # event loop stays responsive (otherwise PATCH would block
+        # /healthz and other endpoints) AND so two concurrent PATCHes
+        # race for the file_lock instead of being serialised at the
+        # event-loop level.
         try:
-            new_manifest = apply_edit(
+            new_manifest = await asyncio.to_thread(
+                apply_edit,
                 runs_root=runs_root,
                 name=name,
                 segment_id=segment_id,
