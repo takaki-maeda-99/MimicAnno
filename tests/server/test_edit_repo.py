@@ -104,6 +104,73 @@ def test_apply_edit_stale_etag_raises_and_disk_untouched(
     assert read_annotation_result(ann_path).run_hash == pre_ann_run_hash
 
 
+@pytest.mark.parametrize("bad_phase", [
+    "not_a_real_phase",
+    "",
+    "approach object",   # space
+    "approach-object",   # hyphen (real label uses underscore)
+])
+def test_apply_edit_invalid_label_raises(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+    bad_phase: str,
+) -> None:
+    """T6d: ``new_phase`` not in labelset → InvalidLabel (spec §3.6 → 400).
+    Disk untouched."""
+    from mimicanno.server.edit_repo import InvalidLabel, apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    ann_path = run_dir / "annotation.json"
+    mani_path = run_dir / "manifest.json"
+    pre_ann = ann_path.read_bytes()
+    pre_mani = mani_path.read_bytes()
+    seg_id = read_annotation_result(ann_path).segments[0].segment_id
+    real_run_hash = read_manifest(mani_path).run_hash
+
+    with pytest.raises(InvalidLabel) as ei:
+        apply_edit(
+            runs_root=tmp_runs_root_loadable,
+            name=loadable_canonical_name,
+            segment_id=seg_id,
+            new_phase=bad_phase,
+            if_match=real_run_hash,
+            reviewer=None,
+            labelset=_labelset(),
+        )
+    assert ei.value.label == bad_phase
+    assert "approach_object" in ei.value.allowed
+    # Disk untouched.
+    assert ann_path.read_bytes() == pre_ann
+    assert mani_path.read_bytes() == pre_mani
+
+
+def test_apply_edit_invalid_segment_raises(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6d: unknown ``segment_id`` → InvalidSegment (spec §3.6 → 400).
+    Disk untouched."""
+    from mimicanno.server.edit_repo import InvalidSegment, apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    ann_path = run_dir / "annotation.json"
+    mani_path = run_dir / "manifest.json"
+    pre_ann = ann_path.read_bytes()
+    pre_mani = mani_path.read_bytes()
+    real_run_hash = read_manifest(mani_path).run_hash
+
+    with pytest.raises(InvalidSegment) as ei:
+        apply_edit(
+            runs_root=tmp_runs_root_loadable,
+            name=loadable_canonical_name,
+            segment_id="does_not_exist__seg9999",
+            new_phase="idle",
+            if_match=real_run_hash,
+            reviewer=None,
+            labelset=_labelset(),
+        )
+    assert ei.value.segment_id == "does_not_exist__seg9999"
+    # Disk untouched.
+    assert ann_path.read_bytes() == pre_ann
+    assert mani_path.read_bytes() == pre_mani
+
+
 def test_apply_edit_run_not_found_raises(
     tmp_runs_root_loadable: Path,
 ) -> None:

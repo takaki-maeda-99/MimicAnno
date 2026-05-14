@@ -74,8 +74,31 @@ class EtagMismatch(EditError):
         self.actual = actual
 
 
-# More subclasses get filled in by subsequent T6 sub-steps
-# (T6d InvalidLabel/InvalidSegment, ...).
+class InvalidLabel(EditError):
+    """400 invalid_label — new_phase is not in the run's labelset.
+
+    Carries the rejected label + the allowed set so the HTTP layer (T8)
+    can log it. The response envelope MUST NOT echo the full allowed
+    set back (the client already fetched it via GET /api/labelset).
+    """
+
+    def __init__(self, *, label: str, allowed: set[str]) -> None:
+        super().__init__(f"invalid label: {label!r} not in labelset")
+        self.label = label
+        self.allowed = frozenset(allowed)
+
+
+class InvalidSegment(EditError):
+    """400 invalid_segment — segment_id not found in annotation.segments."""
+
+    def __init__(self, *, segment_id: str) -> None:
+        super().__init__(f"invalid segment: {segment_id!r}")
+        self.segment_id = segment_id
+
+
+# Remaining T6 sub-steps add: smoothing_ops dedup + _recompute_confidence (T6e),
+# cross-file consistency (T6f), edited_at + canonical_name (T6g), reviewer hash
+# pinning (T6h), index upsert (T6i), non-target preservation (T6j).
 
 
 # ----------------------------------------------------------------------------
@@ -118,13 +141,21 @@ def apply_edit(
 
         annotation = read_annotation_result(annotation_path)
 
-        # T6d will add: labelset / segment_id validation.
+        # Step 4a (T6d): label set membership. Cheap to fail before
+        # walking segments.
+        allowed = labelset.label_ids()
+        if new_phase not in allowed:
+            raise InvalidLabel(label=new_phase, allowed=allowed)
 
-        # Find target segment (T6d will replace with InvalidSegment guard).
+        # Step 4b (T6d): find target segment, raise InvalidSegment if
+        # absent (replaces the T6a bare ``next(...)`` whose StopIteration
+        # could leak through to the HTTP layer as a 500).
         idx = next(
-            i for i, s in enumerate(annotation.segments)
-            if s.segment_id == segment_id
+            (i for i, s in enumerate(annotation.segments) if s.segment_id == segment_id),
+            None,
         )
+        if idx is None:
+            raise InvalidSegment(segment_id=segment_id)
 
         # Step 5: derive new_run_hash (deterministic, disjoint from auto).
         reviewer_norm = reviewer or ""
