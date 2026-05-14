@@ -24,6 +24,7 @@ run.
 """
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,11 @@ from mimicanno.writers import write_annotation_json, write_manifest_json
 
 
 _LOCK_TIMEOUT_SEC: float = 30.0
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC with ``Z`` suffix, matching ``Manifest.generated_at``."""
+    return dt.datetime.now(tz=dt.UTC).isoformat().replace("+00:00", "Z")
 
 
 # ----------------------------------------------------------------------------
@@ -189,10 +195,15 @@ def apply_edit(
 
         # Step 6: annotation FIRST, manifest SECOND.
         write_annotation_json(annotation_path, annotation)
-        manifest = replace(manifest, run_hash=new_run_hash)
+
+        # Step 7 (T6g): set edited_at, preserve generated_at + canonical_name.
+        manifest = replace(
+            manifest,
+            run_hash=new_run_hash,
+            edited_at=_now_iso(),
+        )
         write_manifest_json(manifest_path, manifest)
 
-        # T6g will add: manifest.edited_at = now_iso()
         # T6i will add: runs/index.json upsert
 
     return manifest.to_dict()

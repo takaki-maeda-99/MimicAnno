@@ -140,6 +140,66 @@ def test_apply_edit_run_hash_format_sha256_prefix(
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", result["run_hash"])
 
 
+def test_apply_edit_sets_edited_at_iso8601(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6g / spec §3.2 step 7: post-edit manifest.edited_at is set to
+    ISO-8601 UTC (Z suffix). Pre-edit edited_at is None."""
+    import re
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    pre = read_manifest(run_dir / "manifest.json")
+    assert pre.edited_at is None  # fixture is pre-r1
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=pre.run_hash,
+        reviewer=None, labelset=_labelset(),
+    )
+    post = read_manifest(run_dir / "manifest.json")
+    assert post.edited_at is not None
+    assert re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z", post.edited_at,
+    ), f"unexpected format: {post.edited_at!r}"
+
+
+def test_apply_edit_preserves_generated_at(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6g / spec §3.2 step 7: generated_at documents pipeline production
+    time and MUST NOT be touched by edits."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    pre = read_manifest(run_dir / "manifest.json")
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=pre.run_hash,
+        reviewer=None, labelset=_labelset(),
+    )
+    post = read_manifest(run_dir / "manifest.json")
+    assert post.generated_at == pre.generated_at
+
+
+def test_apply_edit_preserves_canonical_name(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6g / spec §3.3: canonical_name does NOT change on edit; the dir
+    name stays historical, and the manifest field stays equal to it."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    pre = read_manifest(run_dir / "manifest.json")
+    assert pre.canonical_name == loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=pre.run_hash,
+        reviewer=None, labelset=_labelset(),
+    )
+    post = read_manifest(run_dir / "manifest.json")
+    assert post.canonical_name == loadable_canonical_name
+
+
 def test_apply_edit_recomputes_confidence(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
