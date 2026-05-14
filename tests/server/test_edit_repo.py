@@ -104,6 +104,42 @@ def test_apply_edit_reviewer_none_keeps_reviewer_id_none(
     assert seg.reviewed is True
 
 
+def test_apply_edit_cross_file_run_hash_matches(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6f / spec §5b: post-edit annotation.run_hash equals manifest.run_hash."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh,
+        reviewer=None, labelset=_labelset(),
+    )
+    new_manifest_hash = read_manifest(run_dir / "manifest.json").run_hash
+    new_ann_hash = read_annotation_result(run_dir / "annotation.json").run_hash
+    assert new_manifest_hash == new_ann_hash
+
+
+def test_apply_edit_run_hash_format_sha256_prefix(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6f: the derived run_hash matches the manifest JSON-schema pattern
+    ^sha256:[0-9a-f]{64}$."""
+    import re
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+    result = apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh,
+        reviewer="x", labelset=_labelset(),
+    )
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", result["run_hash"])
+
+
 def test_apply_edit_recomputes_confidence(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
