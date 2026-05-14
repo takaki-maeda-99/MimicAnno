@@ -200,6 +200,39 @@ def test_apply_edit_preserves_canonical_name(
     assert post.canonical_name == loadable_canonical_name
 
 
+@pytest.mark.parametrize("reviewer,reviewer_norm", [
+    (None, ""),
+    ("takaki", "takaki"),
+    ("", ""),
+])
+def test_apply_edit_run_hash_reviewer_encoding_pinned(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+    reviewer: str | None, reviewer_norm: str,
+) -> None:
+    """T6h / spec §5.1 #12: pin the exact hash input string. None and ""
+    normalize to ""; non-empty stays as-is. Replay reproducibility is
+    what D's evaluation harness depends on (release 3+)."""
+    from mimicanno.hashing import sha256_hex_of_str
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg0 = read_annotation_result(run_dir / "annotation.json").segments[0]
+    old_run_hash = read_manifest(run_dir / "manifest.json").run_hash
+    new_phase = "idle" if seg0.phase != "idle" else "approach_object"
+
+    expected_input = (
+        "edit:" + old_run_hash + ":" + seg0.segment_id
+        + ":" + new_phase + ":" + reviewer_norm
+    )
+    expected_hash = "sha256:" + sha256_hex_of_str(expected_input)
+
+    result = apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg0.segment_id, new_phase=new_phase,
+        if_match=old_run_hash, reviewer=reviewer, labelset=_labelset(),
+    )
+    assert result["run_hash"] == expected_hash
+
+
 def test_apply_edit_recomputes_confidence(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
