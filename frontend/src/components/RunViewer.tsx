@@ -399,6 +399,8 @@ function ChooserBanner({
   selection: Extract<RunSelection, { kind: "multiple" }>;
   episodeId: string;
 }) {
+  const { apiEnabled } = useApiToggle();
+  const apiSuffix = apiEnabled ? "&api=1" : "";
   const all = [selection.chosen, ...selection.alternatives];
   return (
     <div className="chooser-banner">
@@ -407,7 +409,8 @@ function ChooserBanner({
       <select
         defaultValue={selection.chosen.run_hash_short}
         onChange={(e) => {
-          window.location.search = `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}`;
+          window.location.search =
+            `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}${apiSuffix}`;
         }}
       >
         {all.map((entry) => (
