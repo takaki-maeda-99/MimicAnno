@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -538,7 +539,14 @@ def serve_cmd(
         )
         raise typer.Exit(2)
     origins = cors_origin or []
-    fastapi_app = create_app(runs_root=runs_root, cors_origins=origins)
+    # T9: reviewer comes from MIMICANNO_REVIEWER env. Empty/whitespace-only
+    # collapses to None so segments edited via this server land with
+    # reviewer_id=None rather than reviewer_id="" (matches T6h hash
+    # normalisation `(reviewer or "")`).
+    reviewer = (os.environ.get("MIMICANNO_REVIEWER") or "").strip() or None
+    fastapi_app = create_app(
+        runs_root=runs_root, cors_origins=origins, reviewer=reviewer,
+    )
     uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
 
 

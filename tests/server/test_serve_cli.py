@@ -38,6 +38,9 @@ def test_serve_cli_end_to_end(
     """Spawn ``mimicanno serve`` as a subprocess, hit each endpoint,
     then SIGTERM and wait for graceful shutdown."""
     env = os.environ.copy()
+    # Defensive: drop any developer-set reviewer so the subprocess is
+    # deterministic regardless of the host env (T9 added env consumption).
+    env.pop("MIMICANNO_REVIEWER", None)
     proc = subprocess.Popen(
         [
             "uv", "run", "--extra", "server", "mimicanno", "serve",
@@ -75,10 +78,14 @@ def test_serve_cli_missing_extra_message(
 ) -> None:
     """If fastapi can't be imported the CLI exits with a friendly message."""
     # Hide fastapi from the import system so serve_cmd's try/except fires.
+    # IMPORTANT: use monkeypatch.delitem so sys.modules entries are
+    # auto-restored after the test — bare `del sys.modules[k]` leaves
+    # mimicanno.server.* in a torn state, breaking later monkeypatch.setattr
+    # against those dotted paths (T9 regression).
     import sys
-    saved_modules = {k: v for k, v in sys.modules.items() if k.startswith("mimicanno.server")}
-    for k in saved_modules:
-        del sys.modules[k]
+    for k in list(sys.modules):
+        if k.startswith("mimicanno.server"):
+            monkeypatch.delitem(sys.modules, k, raising=False)
     import builtins
     real_import = builtins.__import__
 
@@ -98,3 +105,90 @@ def test_serve_cli_missing_extra_message(
     )
     assert result.exit_code == 2
     assert "uv sync --extra server" in (result.stderr or result.stdout)
+
+
+# ----------------------------------------------------------------------------
+# T9 — MIMICANNO_REVIEWER env passthrough (programmatic; subprocess test
+# above is already env-deterministic via env.pop)
+# ----------------------------------------------------------------------------
+
+
+def _capture_reviewer(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Patch create_app + uvicorn.run as spies, return a dict the test
+    can read after invoking the CLI."""
+    captured: dict = {}
+
+    def fake_create_app(*, runs_root, cors_origins, reviewer=None, labelset=None):
+        captured["reviewer"] = reviewer
+        return "fake_app"
+
+    def fake_uvicorn_run(app, **kwargs):  # noqa: ANN001 — spy
+        captured["uvicorn_called"] = True
+
+    monkeypatch.setattr(
+        "mimicanno.server.app.create_app", fake_create_app,
+    )
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
+    return captured
+
+
+def test_serve_cmd_reads_reviewer_env_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """T9: MIMICANNO_REVIEWER="alice" reaches create_app(reviewer="alice")."""
+    captured = _capture_reviewer(monkeypatch)
+    monkeypatch.setenv("MIMICANNO_REVIEWER", "alice")
+    from typer.testing import CliRunner
+    from mimicanno.cli import app as cli_app
+    result = CliRunner().invoke(
+        cli_app, ["serve", "--runs-root", str(tmp_path), "--port", "12345"],
+    )
+    assert result.exit_code == 0
+    assert captured["reviewer"] == "alice"
+    assert captured.get("uvicorn_called") is True
+
+
+def test_serve_cmd_reviewer_env_unset_means_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """T9: env unset → reviewer=None."""
+    captured = _capture_reviewer(monkeypatch)
+    monkeypatch.delenv("MIMICANNO_REVIEWER", raising=False)
+    from typer.testing import CliRunner
+    from mimicanno.cli import app as cli_app
+    result = CliRunner().invoke(
+        cli_app, ["serve", "--runs-root", str(tmp_path), "--port", "12345"],
+    )
+    assert result.exit_code == 0
+    assert captured["reviewer"] is None
+
+
+def test_serve_cmd_reviewer_env_empty_means_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """T9: empty string → reviewer=None (matches T6h hash normalisation)."""
+    captured = _capture_reviewer(monkeypatch)
+    monkeypatch.setenv("MIMICANNO_REVIEWER", "")
+    from typer.testing import CliRunner
+    from mimicanno.cli import app as cli_app
+    result = CliRunner().invoke(
+        cli_app, ["serve", "--runs-root", str(tmp_path), "--port", "12345"],
+    )
+    assert result.exit_code == 0
+    assert captured["reviewer"] is None
+
+
+def test_serve_cmd_reviewer_env_whitespace_only_means_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """T9 (review-flagged edge): whitespace-only env → None (.strip() guard)."""
+    captured = _capture_reviewer(monkeypatch)
+    monkeypatch.setenv("MIMICANNO_REVIEWER", "   ")
+    from typer.testing import CliRunner
+    from mimicanno.cli import app as cli_app
+    result = CliRunner().invoke(
+        cli_app, ["serve", "--runs-root", str(tmp_path), "--port", "12345"],
+    )
+    assert result.exit_code == 0
+    assert captured["reviewer"] is None
