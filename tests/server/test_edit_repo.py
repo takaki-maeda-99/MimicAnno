@@ -54,6 +54,75 @@ def test_apply_edit_happy_path(
     new_manifest = read_manifest(run_dir / "manifest.json")
     assert new_manifest.run_hash == result["run_hash"]
 
+    # T6e — segment mutation fields
+    assert new_ann.segments[0].smoothing_ops[-1] == "edited"
+    assert new_ann.segments[0].reviewed is True
+    assert new_ann.segments[0].reviewer_id == "takaki"
+
+
+def test_apply_edit_smoothing_ops_dedup(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6e: editing twice in a row leaves smoothing_ops ending with
+    exactly one 'edited' marker (no double append)."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+
+    rh1 = read_manifest(run_dir / "manifest.json").run_hash
+    r1 = apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh1,
+        reviewer="alice", labelset=_labelset(),
+    )
+    rh2 = r1["run_hash"]
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="approach_object", if_match=rh2,
+        reviewer="bob", labelset=_labelset(),
+    )
+    final_ops = read_annotation_result(run_dir / "annotation.json").segments[0].smoothing_ops
+    assert final_ops[-1] == "edited"
+    assert final_ops.count("edited") == 1
+
+
+def test_apply_edit_reviewer_none_keeps_reviewer_id_none(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6e: reviewer=None → segment.reviewer_id is None (not '', not 'None')."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh,
+        reviewer=None, labelset=_labelset(),
+    )
+    seg = read_annotation_result(run_dir / "annotation.json").segments[0]
+    assert seg.reviewer_id is None
+    assert seg.reviewed is True
+
+
+def test_apply_edit_recomputes_confidence(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6e: _recompute_confidence runs on the new segment so
+    boundary_confidence matches min(start_boundary.score, end_boundary.score)."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg0 = read_annotation_result(run_dir / "annotation.json").segments[0]
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg0.segment_id, new_phase="idle", if_match=rh,
+        reviewer=None, labelset=_labelset(),
+    )
+    new_seg = read_annotation_result(run_dir / "annotation.json").segments[0]
+    assert new_seg.boundary_confidence == min(
+        new_seg.start_boundary.score, new_seg.end_boundary.score,
+    )
+
 
 @pytest.mark.parametrize("stale_etag", [
     "sha256:" + "0" * 64,                    # complete stale

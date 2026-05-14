@@ -32,6 +32,7 @@ from mimicanno.hashing import sha256_hex_of_str
 from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.labelset import LabelSet
 from mimicanno.locks import file_lock
+from mimicanno.smoother import _recompute_confidence
 from mimicanno.writers import write_annotation_json, write_manifest_json
 
 
@@ -164,9 +165,24 @@ def apply_edit(
             ":" + new_phase + ":" + reviewer_norm,
         )
 
-        # Mutate segment (T6e will add smoothing_ops dedup +
-        # _recompute_confidence + reviewed/reviewer_id).
-        annotation.segments[idx] = replace(annotation.segments[idx], phase=new_phase)
+        # Step 4c (T6e): mutate the target segment per spec §3.2 step 4.
+        old_seg = annotation.segments[idx]
+        new_ops = list(old_seg.smoothing_ops)
+        if not new_ops or new_ops[-1] != "edited":
+            new_ops.append("edited")
+        new_seg = replace(
+            old_seg,
+            phase=new_phase,
+            smoothing_ops=new_ops,
+            reviewed=True,
+            reviewer_id=reviewer,
+        )
+        # boundary_confidence is recomputed from start/end boundary scores;
+        # overall_confidence depends on (boundary, vlm_confidence) and on
+        # reserved-phase membership — for r1 the phase is always in the
+        # labelset (T6d guard) so the formula reduces to sqrt(bc * vlm).
+        new_seg = _recompute_confidence(new_seg)
+        annotation.segments[idx] = new_seg
 
         # Step 5b: annotation.run_hash ← new (cross-file consistency).
         annotation = replace(annotation, run_hash=new_run_hash)
