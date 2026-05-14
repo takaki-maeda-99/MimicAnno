@@ -15,6 +15,7 @@ import {
 } from "../lib/manifest";
 import { selectRun, type RunSelection } from "../lib/runSelection";
 import { fetchRetry } from "../lib/fetchRetry";
+import { useApiToggle } from "../lib/ApiToggleContext";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import WaveformView from "./WaveformView";
@@ -44,6 +45,7 @@ type Props = { episodeId: string; runHashShort: string | undefined };
 
 export default function RunViewer({ episodeId, runHashShort }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const { apiBase } = useApiToggle();
   const abortRef = useRef<AbortController | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [widthPx, setWidthPx] = useState(0);
@@ -85,7 +87,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
 
     (async () => {
       try {
-        const r = await fetch("/runs/index.json", { signal: controller.signal });
+        const r = await fetch(`${apiBase}index.json`, { signal: controller.signal });
         if (!r.ok) {
           setState({ kind: "error", message: `failed to load index.json: HTTP ${r.status}` });
           return;
@@ -100,7 +102,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         const entry = selection.kind === "single" ? selection.entry : selection.chosen;
 
         const manifestUrl = resolveUrl(
-          new URL("/runs/index.json", window.location.origin).toString(),
+          new URL(`${apiBase}index.json`, window.location.origin).toString(),
           entry.manifest_url,
         );
         const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
@@ -172,7 +174,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
     })();
 
     return () => controller.abort();
-  }, [episodeId, runHashShort]);
+  }, [episodeId, runHashShort, apiBase]);
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;

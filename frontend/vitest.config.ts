@@ -10,5 +10,10 @@ export default defineConfig({
     // .tsx required for React component tests added in T13/T14.
     include: ["src/**/__tests__/**/*.test.{ts,tsx}"],
     passWithNoTests: true,
+    // T12: @testing-library/react auto-registers an afterEach(cleanup)
+    // when Vitest globals are enabled. Without this, multiple render()
+    // calls in the same file stack DOM nodes and getByTestId throws on
+    // duplicates.
+    globals: true,
   },
 });
