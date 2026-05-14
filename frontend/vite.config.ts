@@ -31,5 +31,14 @@ export default defineConfig({
   ],
   server: {
     fs: { allow: [repoRoot] },
+    // Phase 5 B r1: `?api=1` mode fetches /api/... which must reach
+    // the FastAPI backend. Default 127.0.0.1:8000; override the port
+    // with MIMICANNO_API_PORT for parallel dev sessions.
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${process.env.MIMICANNO_API_PORT ?? 8000}`,
+        changeOrigin: false,
+      },
+    },
   },
 });

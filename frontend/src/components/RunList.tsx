@@ -9,7 +9,11 @@ type State =
 
 export default function RunList() {
   const [state, setState] = useState<State>({ kind: "loading" });
-  const { apiBase } = useApiToggle();
+  const { apiBase, apiEnabled } = useApiToggle();
+  // Preserve ?api=1 across navigation so clicking a run from the list
+  // stays in API mode (otherwise the viewer would silently fall back to
+  // static /runs/index.json which may not exist in dev environments).
+  const apiSuffix = apiEnabled ? "&api=1" : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +74,7 @@ export default function RunList() {
           {sorted.map((e) => (
             <tr key={`${e.episode_id}__${e.run_hash}`}>
               <td>
-                <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}`}>
+                <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}${apiSuffix}`}>
                   {e.episode_id}
                 </a>
               </td>
