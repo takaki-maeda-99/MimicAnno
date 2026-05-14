@@ -84,14 +84,17 @@ def test_open_artifact_non_manifest_returns_path_only(
     assert body is None
 
 
-def test_open_artifact_allow_list_rejects_video(
+def test_open_artifact_allow_list_rejects_unknown(
     tmp_runs_root: Path, canonical_name: str,
 ) -> None:
-    """video.mp4 is not in the allow-list (spec §3.3)."""
+    """Names outside the allow-list (spec §3.3 + Phase 5 B r1 video addendum)
+    are 404. video.mp4 was added in r1 so the viewer's ?api=1 mode can stream
+    the <video> src through the API; this test now uses a synthetic name to
+    keep coverage of the "not in allow-list" path."""
     from mimicanno.server.runs_repo import RunsRepository
     repo = RunsRepository(tmp_runs_root)
     with pytest.raises(MimicAnnoHTTPError) as ei:
-        repo.open_artifact(canonical_name, "video.mp4")
+        repo.open_artifact(canonical_name, "secrets.env")
     assert ei.value.status == 404
     assert ei.value.code == "artifact_not_found"
 

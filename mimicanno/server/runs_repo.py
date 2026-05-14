@@ -25,6 +25,10 @@ ARTIFACT_ALLOWLIST: frozenset[str] = frozenset({
     "boundaries.json",
     "signals.json",
     "tracks.json",
+    # Phase 5 B r1: `?api=1` viewer mode routes ALL artifact fetches
+    # through /api/, including the <video> src. Streamed via FileResponse
+    # in routes.py so the 1+ MB mp4 doesn't load into memory.
+    "video.mp4",
 })
 
 # canonical_name shape: episode_id + "__" + run_hash_short.
