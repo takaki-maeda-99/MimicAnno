@@ -303,3 +303,49 @@ describe("RunViewer back link — preserves apiEnabled (PR3 follow-up)", () => {
     expect(link.getAttribute("href")).toBe("/?api=1");
   });
 });
+
+describe("RunViewer URL hash update after PATCH (BLOCKER fix from UI smoke)", () => {
+  it("after 200, history.replaceState rewrites ?hash to the new short hash", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/segments/")) {
+        return jsonResp(
+          { ...MANIFEST, run_hash: NEW_RUN_HASH },
+          { headers: { ETag: `"${NEW_RUN_HASH}"` } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const oldShort = INDEX_DOC.runs[0].run_hash_short;
+    const newShort = NEW_RUN_HASH.slice("sha256:".length, "sha256:".length + 12);
+
+    // Pre-set the URL so we can assert replaceState rewrote it.
+    window.history.replaceState(null, "", `/?run=ep0&hash=${oldShort}&api=1`);
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={oldShort} />
+      </ApiToggleProvider>,
+    );
+    const sel = (await screen.findByLabelText(
+      "phase for seg-001",
+    )) as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(sel, { target: { value: "grasp_object" } });
+    });
+
+    await waitFor(() => {
+      expect(window.location.search).toContain(`hash=${newShort}`);
+    });
+    // And the original hash is gone from the URL.
+    expect(window.location.search).not.toContain(`hash=${oldShort}`);
+  });
+});

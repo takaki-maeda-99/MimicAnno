@@ -143,6 +143,24 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
               }
             : prev,
         );
+        // Edits rewrite the manifest's run_hash. If the URL came in with
+        // an explicit ?hash=<old_short>, it now refers to a hash that's
+        // no longer in index.json — reload would surface "no run for
+        // episode_id=X hash=<old>". Bring the URL back in sync via
+        // history.replaceState (no entry pushed to the history stack,
+        // so the browser's back button still works).
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has("hash")) {
+            const PREFIX = "sha256:";
+            const SHORT_LEN = 12;
+            const stripped = result.runHash.startsWith(PREFIX)
+              ? result.runHash.slice(PREFIX.length)
+              : result.runHash;
+            url.searchParams.set("hash", stripped.slice(0, SHORT_LEN));
+            window.history.replaceState(null, "", url.toString());
+          }
+        }
         // Re-fetch annotation.json to pick up server-recomputed fields.
         try {
           const annUrl = resolveUrl(
