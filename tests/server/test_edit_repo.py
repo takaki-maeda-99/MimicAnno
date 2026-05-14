@@ -289,6 +289,34 @@ def test_apply_edit_run_hash_reviewer_encoding_pinned(
     assert result["run_hash"] == expected_hash
 
 
+def test_apply_edit_non_target_segments_unchanged(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6j / spec §5.1 #15: PATCH must touch ONLY the target segment.
+    Every other segment is dataclass-equal pre/post."""
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    pre_segs = read_annotation_result(run_dir / "annotation.json").segments
+    target_idx = 0
+    target_id = pre_segs[target_idx].segment_id
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+
+    new_phase = "idle" if pre_segs[target_idx].phase != "idle" else "approach_object"
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=target_id, new_phase=new_phase, if_match=rh,
+        reviewer=None, labelset=_labelset(),
+    )
+    post_segs = read_annotation_result(run_dir / "annotation.json").segments
+    assert len(post_segs) == len(pre_segs)
+    for i, (pre, post) in enumerate(zip(pre_segs, post_segs)):
+        if i == target_idx:
+            assert post.phase == new_phase
+            continue
+        # Non-target: dataclass-equal across every field.
+        assert post == pre, f"segment {i} ({pre.segment_id}) was mutated"
+
+
 def test_apply_edit_recomputes_confidence(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
