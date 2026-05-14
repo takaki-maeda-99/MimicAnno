@@ -55,6 +55,55 @@ def test_apply_edit_happy_path(
     assert new_manifest.run_hash == result["run_hash"]
 
 
+@pytest.mark.parametrize("stale_etag", [
+    "sha256:" + "0" * 64,                    # complete stale
+    "sha256:" + "0" * 63 + "X",              # right shape, hex-only violation
+    "SHA256:" + "0" * 64,                    # case-sensitive contract
+    "md5:" + "a" * 32,                       # wrong prefix
+    "",                                      # empty (HTTP layer responsibility,
+                                              # but defensive check here too)
+])
+def test_apply_edit_stale_etag_raises_and_disk_untouched(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+    stale_etag: str,
+) -> None:
+    """Spec §5.1 #3 + T6c: If-Match ≠ current manifest.run_hash → 412
+    EtagMismatch, no disk writes, cross-file annotation.run_hash
+    invariant preserved.
+
+    Note: index.json.lock is created/touched by file_lock(a+ open),
+    so it is NOT in the byte-identical assertion set."""
+    from mimicanno.server.edit_repo import EtagMismatch, apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    ann_path = run_dir / "annotation.json"
+    mani_path = run_dir / "manifest.json"
+    index_path = tmp_runs_root_loadable / "index.json"
+    pre_ann = ann_path.read_bytes()
+    pre_mani = mani_path.read_bytes()
+    pre_index = index_path.read_bytes()
+    pre_ann_run_hash = read_annotation_result(ann_path).run_hash
+    real_run_hash = read_manifest(mani_path).run_hash
+    seg_id = read_annotation_result(ann_path).segments[0].segment_id
+
+    with pytest.raises(EtagMismatch) as ei:
+        apply_edit(
+            runs_root=tmp_runs_root_loadable,
+            name=loadable_canonical_name,
+            segment_id=seg_id,
+            new_phase="idle",
+            if_match=stale_etag,
+            reviewer=None,
+            labelset=_labelset(),
+        )
+    assert ei.value.expected == stale_etag
+    assert ei.value.actual == real_run_hash
+    assert ann_path.read_bytes() == pre_ann
+    assert mani_path.read_bytes() == pre_mani
+    assert index_path.read_bytes() == pre_index
+    # Cross-file consistency: annotation.run_hash unchanged.
+    assert read_annotation_result(ann_path).run_hash == pre_ann_run_hash
+
+
 def test_apply_edit_run_not_found_raises(
     tmp_runs_root_loadable: Path,
 ) -> None:

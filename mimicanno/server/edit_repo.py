@@ -56,8 +56,26 @@ class RunNotFound(EditError):
         self.name = name
 
 
+class EtagMismatch(EditError):
+    """412 etag_mismatch — If-Match ≠ current manifest.run_hash.
+
+    Carries both sides so the HTTP layer (T8) can log the divergence
+    without leaking it in the response envelope. Comparison is strict
+    `==` per RFC 7232; case sensitivity and prefix shape are NOT
+    normalised here (case is locked lowercase by the manifest schema
+    regex `^sha256:[0-9a-f]{64}$`).
+    """
+
+    def __init__(self, *, expected: str, actual: str) -> None:
+        super().__init__(
+            f"etag mismatch: expected={expected!r}, actual={actual!r}",
+        )
+        self.expected = expected
+        self.actual = actual
+
+
 # More subclasses get filled in by subsequent T6 sub-steps
-# (T6c EtagMismatch, T6d InvalidLabel/InvalidSegment, ...).
+# (T6d InvalidLabel/InvalidSegment, ...).
 
 
 # ----------------------------------------------------------------------------
@@ -93,9 +111,13 @@ def apply_edit(
 
         # Step 2 (spec §3.2): reread inside the lock.
         manifest = read_manifest(manifest_path)
+
+        # Step 3 (T6c): If-Match precondition — strict `==`, no normalisation.
+        if manifest.run_hash != if_match:
+            raise EtagMismatch(expected=if_match, actual=manifest.run_hash)
+
         annotation = read_annotation_result(annotation_path)
 
-        # T6c will add: If-Match check → EtagMismatch.
         # T6d will add: labelset / segment_id validation.
 
         # Find target segment (T6d will replace with InvalidSegment guard).
