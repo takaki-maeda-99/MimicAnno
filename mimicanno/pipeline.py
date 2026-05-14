@@ -521,6 +521,8 @@ def _degrade_to_phase3_objectless(
             Artifact("boundaries", "boundaries.json", "application/json"),
             Artifact("signals", "signals.json", "application/json"),
         ],
+        # Phase 5 B r1: publish.py upserts the resolved name post-rename.
+        canonical_name=None,
     )
 
     annotation = AnnotationResult(
@@ -1093,6 +1095,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             Artifact("tracks", "tracks.json", "application/json"),
         ],
         smoothing_summary=smoothing_summary,
+        # Phase 5 B r1: publish.py upserts the resolved name post-rename.
+        canonical_name=None,
     )
 
     annotation = AnnotationResult(
@@ -1451,6 +1455,8 @@ def annotate_episode(req: AnnotateRequest) -> AnnotateResult:
             Artifact("boundaries", "boundaries.json", "application/json"),
             Artifact("signals", "signals.json", "application/json"),
         ],
+        # Phase 5 B r1: publish.py upserts the resolved name post-rename.
+        canonical_name=None,
     )
 
     annotation = AnnotationResult(

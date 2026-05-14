@@ -193,35 +193,37 @@ pnpm dev          # http://localhost:5173/?run=<canonical_name>
 
 Read-only timeline / waveform viewer for run directories. Edit affordances are deferred to Phase 5B (not started).
 
-## Server (Phase 5 A — read-only)
+## Server (Phase 5 A read-only + Phase 5 B r1 edit)
 
-A read-only HTTP backend that serves the same JSON shapes as the static
-`runs/` tree. Installed lazily via the `[server]` optional dependency
-group.
+An HTTP backend that serves the same JSON shapes as the static `runs/`
+tree and accepts phase-relabel edits with optimistic locking. Installed
+lazily via the `[server]` optional dependency group.
 
 ```bash
 uv sync --extra server
-uv run --extra server mimicanno serve --runs-root runs/ \
+MIMICANNO_REVIEWER=takaki uv run --extra server mimicanno serve \
+    --runs-root runs/ \
     --host 127.0.0.1 --port 8000 \
     --cors-origin http://localhost:5173
 ```
 
+`MIMICANNO_REVIEWER` is captured at startup and stamped as `reviewer_id`
+on every edit; unset/empty → `reviewer_id=null` on persisted segments.
+
 Endpoints:
 - `GET /healthz` — liveness probe
 - `GET /api/runs/index.json` — same shape as the static `runs/index.json`
-- `GET /api/runs/<canonical_name>/<artifact>` — `manifest.json`, `annotation.json`, `boundaries.json`, `signals.json`, `tracks.json` (artifact allow-list)
+- `GET /api/runs/<canonical_name>/<artifact>` — `manifest.json`, `annotation.json`, `boundaries.json`, `signals.json`, `tracks.json` (allow-list)
+- `GET /api/labelset` — labelset doc `{labels:[{id, requires_object}], labels_yaml_sha256}` with `Cache-Control: public, max-age=300`
+- `PATCH /api/runs/<canonical_name>/segments/<segment_id>` — change a segment's `phase` with `If-Match: "<run_hash>"` optimistic locking; returns the new manifest + `ETag: "<new_run_hash>"`. Status codes: `200 / 400 (invalid_body|invalid_label|invalid_name|invalid_segment) / 404 (run_not_found) / 405 / 412 (etag_mismatch) / 415 / 428 (etag_required)`.
 
 Behaviour:
-- Manifest responses carry `ETag: "<run_hash>"` for the future Phase 5 B
-  edit endpoints' `If-Match` optimistic concurrency.
-- Other artifacts stream via `FileResponse` so 10 MB+ tracks.json never
-  loads into memory.
-- The server absorbs the short publish dir-gap (`publish.py:141-165`) with
-  100 ms × 3 retry, so concurrent `mimicanno annotate` runs don't surface
-  500s.
+- Manifest GET responses carry `ETag: "<run_hash>"`; clients reuse it as `If-Match` on PATCH.
+- A successful PATCH atomically rewrites annotation → manifest → index under a `runs/index.json.lock` file lock, with the edit attributed to `MIMICANNO_REVIEWER` and `smoothing_ops` appended with `"edited"`.
+- Other artifacts stream via `FileResponse` so 10 MB+ tracks.json never loads into memory.
+- The server absorbs the short publish dir-gap (`publish.py:141-165`) with 100 ms × 3 retry, so concurrent `mimicanno annotate` runs don't surface 500s.
 - CORS is **opt-in**: empty `--cors-origin` → no middleware, no wildcard.
-- The viewer (`frontend/`) still consumes the static `runs/` tree; the
-  HTTP swap is deferred to Phase 5 B.
+- Frontend toggle: visit the viewer with `?api=1` to route fetches through `/api/runs/` and enable the phase dropdown. Without the toggle the viewer reads the static `runs/` tree as before.
 
 Internal layout, design contracts, and test stratification:
 [`mimicanno/server/README.md`](mimicanno/server/README.md).
