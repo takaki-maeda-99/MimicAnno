@@ -59,7 +59,20 @@ export default function SegmentTable(props: SegmentTableProps) {
           {staleRun && (
             <>
               {" "}
-              <button onClick={() => window.location.reload()}>reload</button>
+              <button
+                onClick={() => {
+                  // Bug found in UI smoke: window.location.reload() with the
+                  // OLD ?hash still in the URL hits "no run for episode_id=X
+                  // hash=<stale>". staleRun is by definition "the hash I have
+                  // is one revision behind", so the recovery is to drop ?hash
+                  // and let the viewer pick the latest run for this episode.
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("hash");
+                  window.location.href = url.toString();
+                }}
+              >
+                reload
+              </button>
             </>
           )}
         </div>

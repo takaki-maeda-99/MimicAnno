@@ -144,6 +144,54 @@ describe("SegmentTable — 412 flow (T13.9)", () => {
     );
   });
 
+  it("reload button drops ?hash so recovery hits the latest run (BLOCKER fix)", () => {
+    // staleRun = "the hash I have is behind"; reloading with the old hash
+    // still in the URL would surface "no run for episode_id=X hash=<stale>".
+    // Confirm the button strips ?hash before navigating.
+    //
+    // jsdom's window.location.href setter is non-configurable, so we
+    // replace the whole window.location with a stub that exposes just the
+    // getters the button reads (`href`) plus a setter that records the
+    // assignment.
+    window.history.replaceState(null, "", "/?run=ep0&hash=oldoldold&api=1");
+    const realLocation = window.location;
+    const realHref = realLocation.href;
+    const navigated: string[] = [];
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        get href() { return realHref; },
+        set href(v: string) { navigated.push(v); },
+      },
+    });
+
+    render(
+      <SegmentTable
+        segments={SEGMENTS}
+        apiEnabled={true}
+        labelset={LABELSET}
+        onPhaseEdit={vi.fn()}
+        editInFlight={false}
+        staleRun={true}
+        toast={{ level: "conflict", message: "etag_mismatch: x" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reload/i }));
+
+    // Restore so subsequent tests see a normal location.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: realLocation,
+    });
+
+    expect(navigated).toHaveLength(1);
+    expect(navigated[0]).not.toContain("hash=");
+    expect(navigated[0]).toContain("run=ep0");
+    expect(navigated[0]).toContain("api=1");
+  });
+
   it("disables all selects while editInFlight=true (self-ETag race guard)", () => {
     render(
       <SegmentTable
