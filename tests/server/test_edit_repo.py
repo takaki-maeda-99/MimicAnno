@@ -200,6 +200,62 @@ def test_apply_edit_preserves_canonical_name(
     assert post.canonical_name == loadable_canonical_name
 
 
+def test_apply_edit_upserts_index_row(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6i / spec §3.2 step 8: post-edit runs/index.json row has the new
+    run_hash + new run_hash_short."""
+    from mimicanno.runindex import read_index
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    rh_pre = read_manifest(run_dir / "manifest.json").run_hash
+
+    result = apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh_pre,
+        reviewer="alice", labelset=_labelset(),
+    )
+
+    idx = read_index(tmp_runs_root_loadable / "index.json")
+    assert len(idx.rows) == 1
+    row = idx.rows[0]
+    assert row.run_hash == result["run_hash"]
+    # run_hash_short is the suffix of the canonical_name (after "__").
+    suffix_len = len(loadable_canonical_name) - len(row.episode_id) - 2
+    assert row.run_hash_short == result["run_hash"][len("sha256:"):][:suffix_len]
+
+
+def test_apply_edit_index_row_preserves_episode_metadata(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """T6i: episode_id, task_text, pipeline_phase, generated_at, and
+    config/input hash shorts are unchanged by an edit."""
+    from mimicanno.runindex import read_index
+    from mimicanno.server.edit_repo import apply_edit
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    seg_id = read_annotation_result(run_dir / "annotation.json").segments[0].segment_id
+    rh = read_manifest(run_dir / "manifest.json").run_hash
+    idx_pre = read_index(tmp_runs_root_loadable / "index.json")
+    row_pre = idx_pre.rows[0]
+
+    apply_edit(
+        runs_root=tmp_runs_root_loadable, name=loadable_canonical_name,
+        segment_id=seg_id, new_phase="idle", if_match=rh,
+        reviewer=None, labelset=_labelset(),
+    )
+    idx_post = read_index(tmp_runs_root_loadable / "index.json")
+    assert len(idx_post.rows) == 1
+    row_post = idx_post.rows[0]
+    assert row_post.episode_id == row_pre.episode_id
+    assert row_post.task_text == row_pre.task_text
+    assert row_post.pipeline_phase == row_pre.pipeline_phase
+    assert row_post.generated_at == row_pre.generated_at
+    assert row_post.config_hash_short == row_pre.config_hash_short
+    assert row_post.input_hash_short == row_pre.input_hash_short
+    assert row_post.manifest_url == row_pre.manifest_url
+
+
 @pytest.mark.parametrize("reviewer,reviewer_norm", [
     (None, ""),
     ("takaki", "takaki"),

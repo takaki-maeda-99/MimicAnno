@@ -25,6 +25,7 @@ run.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,13 @@ from mimicanno.hashing import sha256_hex_of_str
 from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.labelset import LabelSet
 from mimicanno.locks import file_lock
+from mimicanno.rundir import CANONICAL_SEPARATOR
+from mimicanno.runindex import IndexFile, IndexRow, read_index, write_index_atomic
 from mimicanno.smoother import _recompute_confidence
 from mimicanno.writers import write_annotation_json, write_manifest_json
+
+
+_LOG = logging.getLogger("mimicanno.server")
 
 
 _LOCK_TIMEOUT_SEC: float = 30.0
@@ -165,9 +171,10 @@ def apply_edit(
             raise InvalidSegment(segment_id=segment_id)
 
         # Step 5: derive new_run_hash (deterministic, disjoint from auto).
+        old_run_hash = manifest.run_hash
         reviewer_norm = reviewer or ""
         new_run_hash = "sha256:" + sha256_hex_of_str(
-            "edit:" + manifest.run_hash + ":" + segment_id +
+            "edit:" + old_run_hash + ":" + segment_id +
             ":" + new_phase + ":" + reviewer_norm,
         )
 
@@ -204,6 +211,41 @@ def apply_edit(
         )
         write_manifest_json(manifest_path, manifest)
 
-        # T6i will add: runs/index.json upsert
+        # Step 8 (T6i): drop the stale row for this run (old run_hash) and
+        # insert the new one. ``runindex.upsert_row`` dedups by
+        # (episode_id, run_hash) so calling it directly would leave the old
+        # row in place — edits SHARE a canonical_name with the pre-edit run,
+        # so the old row's manifest_url now points at the new manifest. The
+        # stale row would mislead readers.
+        suffix_len = len(name) - len(manifest.episode_id) - len(CANONICAL_SEPARATOR)
+        new_row = IndexRow(
+            episode_id=manifest.episode_id,
+            run_hash=new_run_hash,
+            run_hash_short=new_run_hash[len("sha256:"):][:suffix_len],
+            config_hash_short=manifest.config_hash[len("sha256:"):][:8],
+            input_hash_short=manifest.input_hash[len("sha256:"):][:8],
+            manifest_url=f"{name}/manifest.json",
+            task_text=manifest.task.text,
+            pipeline_phase=manifest.generator.pipeline_phase,
+            generated_at=manifest.generated_at,
+        )
+        idx_path = runs_root / "index.json"
+        index = read_index(idx_path)
+        kept = [
+            r for r in index.rows
+            if not (
+                r.episode_id == manifest.episode_id
+                and r.run_hash == old_run_hash
+            )
+        ]
+        kept.append(new_row)
+        write_index_atomic(
+            idx_path,
+            IndexFile(schema_version=index.schema_version, rows=kept),
+        )
+        _LOG.info(
+            "edit: %s → %s, segment=%s, phase=%s, reviewer=%s",
+            old_run_hash, new_run_hash, segment_id, new_phase, reviewer,
+        )
 
     return manifest.to_dict()
