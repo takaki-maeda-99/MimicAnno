@@ -20,8 +20,15 @@ def create_app(
     *,
     runs_root: Path,
     cors_origins: list[str],
+    reviewer: str | None = None,
     labelset: LabelSetCache | None = None,
 ) -> FastAPI:
+    """Phase 5 A app factory + Phase 5 B r1 reviewer wiring (T7).
+
+    ``reviewer`` is forwarded to the router so the future PATCH route
+    (T8) can stamp it into edited segments. ``MIMICANNO_REVIEWER`` env
+    flows in through ``serve_cmd`` (T9).
+    """
     if labelset is None:
         labelset = LabelSetCache.from_path()
     app = FastAPI(title="mimicanno persistence", openapi_url=None)
@@ -29,10 +36,10 @@ def create_app(
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
-            allow_methods=["GET", "HEAD"],
+            allow_methods=["GET", "HEAD", "PATCH", "OPTIONS"],
             allow_headers=["*"],
             allow_credentials=False,
         )
     install_handlers(app)
-    app.include_router(make_router(runs_root, labelset))
+    app.include_router(make_router(runs_root, labelset, reviewer))
     return app

@@ -19,7 +19,9 @@ def _make_client(runs_root: Path) -> TestClient:
     from mimicanno.server.routes import make_router
     app = FastAPI()
     install_handlers(app)
-    app.include_router(make_router(runs_root, LabelSetCache.from_path()))
+    app.include_router(
+        make_router(runs_root, LabelSetCache.from_path(), reviewer=None),
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 

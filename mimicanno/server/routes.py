@@ -24,8 +24,20 @@ from mimicanno.server.runs_repo import RunsRepository
 _LOG = logging.getLogger("mimicanno.server")
 
 
-def make_router(runs_root: Path, labelset: LabelSetCache) -> APIRouter:
-    """Build a router bound to a specific runs root + labelset."""
+def make_router(
+    runs_root: Path,
+    labelset: LabelSetCache,
+    reviewer: str | None = None,
+) -> APIRouter:
+    """Build a router bound to a specific runs root + labelset.
+
+    ``reviewer`` is captured in closure for the T8 PATCH route to use
+    when stamping edits. Read endpoints don't reference it.
+    """
+    # noqa: ARG001 — reviewer is consumed by T8's PATCH route (added later
+    # in this branch). Keeping the parameter here lets create_app's
+    # signature stay stable across T7→T8.
+    del reviewer  # silence "unused argument" pre-T8; T8 will use it.
     repo = RunsRepository(runs_root)
     resolved_root = repo.root
 
