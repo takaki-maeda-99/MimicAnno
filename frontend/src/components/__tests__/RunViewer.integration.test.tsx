@@ -325,3 +325,84 @@ describe("RunViewer URL hash update after PATCH (BLOCKER fix from UI smoke)", ()
     expect(window.location.search).not.toContain(`hash=${oldShort}`);
   });
 });
+
+describe("RunViewer error toast composition (spec §3.5)", () => {
+  // Helper: render RunViewer up to the first edit, then trigger a PATCH
+  // that returns the given mocked response (or rejects).
+  async function renderAndEditWith(
+    patchResponseFactory: () => Response | Promise<never>,
+  ): Promise<void> {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/segments/")) return patchResponseFactory();
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={undefined} />
+      </ApiToggleProvider>,
+    );
+    const sel = (await screen.findByLabelText(
+      "phase for seg-001",
+    )) as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(sel, { target: { value: "grasp_object" } });
+    });
+  }
+
+  it("500 with envelope {error, message} → toast prefix is the error code, NOT 'HTTP 500'", async () => {
+    // BLOCKER caught in code review of the smoke plan: the kind:"error"
+    // branch in RunViewer was formatting as `HTTP ${httpStatus}: ${message}`,
+    // dropping the server's `error` field. spec §3.5 requires the
+    // server's error code to surface. The fix maps `errorCode` to the
+    // toast prefix when present.
+    await renderAndEditWith(() =>
+      new Response(
+        JSON.stringify({ error: "internal", message: "kapow" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("internal");
+    expect(alert.textContent).toContain("kapow");
+    expect(alert.textContent).not.toContain("HTTP 500");
+  });
+
+  it("500 without an envelope (just text body) → toast falls back to 'HTTP 500'", async () => {
+    // Defensive: if the server returns something that isn't the {error,
+    // message} shape, we still want a meaningful toast. The fallback
+    // path uses HTTP <status>.
+    await renderAndEditWith(() =>
+      new Response("internal explosion", { status: 500 }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("HTTP 500");
+  });
+
+  it("network failure (fetch rejects) → toast shows the error, editInFlight clears (E6 coverage)", async () => {
+    // E6 from the UI smoke matrix: killing the backend mid-PATCH should
+    // surface a toast and re-enable the dropdowns via the finally clause.
+    // We simulate by making fetch reject. Asserting on editInFlight is
+    // observable through dropdown disabled state.
+    await renderAndEditWith(() => Promise.reject(new Error("fetch failed")));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/fetch failed/);
+    // editInFlight cleared in finally → selects re-enabled.
+    await waitFor(() => {
+      const selects = screen.getAllByRole("combobox");
+      for (const s of selects) {
+        expect((s as HTMLSelectElement).disabled).toBe(false);
+      }
+    });
+  });
+});

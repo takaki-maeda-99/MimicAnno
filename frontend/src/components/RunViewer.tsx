@@ -210,9 +210,17 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           message: `${result.errorCode}: ${result.serverMessage}`,
         });
       } else {
+        // Spec §3.5: the toast must surface the server's `error` envelope
+        // code, not a generic "HTTP 500: …". The PatchResult.error variant
+        // carries errorCode (may be null if the response body wasn't a
+        // valid envelope — fall back to httpStatus in that case).
+        const prefix =
+          result.errorCode !== null
+            ? result.errorCode
+            : `HTTP ${result.httpStatus}`;
         setToast({
           level: "error",
-          message: `HTTP ${result.httpStatus}: ${result.message}`,
+          message: `${prefix}: ${result.message}`,
         });
       }
     } catch (e) {
