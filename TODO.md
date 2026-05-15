@@ -90,6 +90,13 @@
 - [ ] **HV-regen-bench**: 1 episode で `--signals-only --full-signals` を実測 (hamer venv 経由) → ETA 確定
 - [ ] **HV-regen**: 全 9 episode を v2 で再生成 (frames/*.pkl は温存)
 - [ ] **HV-notes**: smoke 結果を `docs/superpowers/notes/2026-05-16-hv-smoke.md` に記録
+- [ ] **HV-axes**: ブラウザ表示時、動画上の手首位置に簡易 3D xyz 軸を重畳表示 (R=X / G=Y / B=Z)
+  - 取得元: `HandEstimate.cam_t` (手首 3D 位置) + `HandEstimate.global_orient` (3×3 回転行列)
+  - 投影: HaMeR の intrinsics (`signals.json` の `cam_t` 系と整合) で軸先端 (例: 5cm) をピクセル投影
+  - 描画: `HandViewer.tsx` の動画 overlay (SVG or Canvas) に line × 3 本、左右で太さ分け
+  - **トグル UI**: ビューア上に "Axes ON/OFF" ボタン (デフォルト ON 推奨)、状態は `useState` で保持。URL クエリ (`?axes=0`) で永続化するかは impl で判断
+  - 注意: `depth_ok=False` フレームは cam_t が擬似メトリックなので軸スケールが揺れる。表示は continue するが notes に明記
+  - スコープ: 軸線 + トグルのみ。回転値の数値表示は既存パネルに任せる
 
 #### S-B2 (phase 5 B r2: 境界ドラッグ)
 - [ ] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 起こし
