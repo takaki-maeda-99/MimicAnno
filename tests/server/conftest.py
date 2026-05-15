@@ -216,3 +216,20 @@ def tmp_runs_root_loadable(tmp_path: Path) -> Path:
 def loadable_canonical_name() -> str:
     """The dir name in ``tmp_runs_root_loadable`` (matches real SO101 ep0)."""
     return _REAL_SO101_RUN.name
+
+
+# ----------------------------------------------------------------------------
+# S-RS — `tmp_parent_runs_root`
+#
+# Parent directory containing 2 run-set subdirectories (multi-mode).
+# Used by run-set switcher tests (T2+).
+# ----------------------------------------------------------------------------
+
+@pytest.fixture
+def tmp_parent_runs_root(tmp_path: Path) -> Path:
+    """Parent dir with 2 run-set subdirectories — multi-mode fixture for S-RS."""
+    for name in ("so101_phase4_v5", "piper_phase4_v5"):
+        sub = tmp_path / name
+        sub.mkdir()
+        (sub / "index.json").write_bytes(b'{"schema_version":"0.1.0","runs":[]}')
+    return tmp_path
