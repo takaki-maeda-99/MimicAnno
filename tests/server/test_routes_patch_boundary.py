@@ -1,8 +1,8 @@
 """Phase 5 B r2 T5: PATCH /api/runs/{name}/boundaries/{boundary_id} tests.
 
-Real SO101 ep0 annotation (5 segments, 151 frames):
-  seg0000 [0..19], seg0001 [20..49], seg0002 [50..87],
-  seg0003 [88..98], seg0004 [99..150]
+Real SO101 ep0 annotation (5 segments, 151 frames) — post-T16-smoke state:
+  seg0000 [0..24], seg0001 [25..54], seg0002 [55..92],
+  seg0003 [93..98], seg0004 [99..150]
 
 boundary_id = right segment's segment_id; valid inner boundaries are
 seg0001..seg0004. seg0000 is the timeline start edge (→ 400 invalid_boundary).
@@ -86,7 +86,7 @@ def test_patch_boundary_backward_200(
     run_dir = tmp_runs_root_loadable / loadable_canonical_name
     pre_manifest = read_manifest(run_dir / "manifest.json")
     fps = pre_manifest.fps
-    # boundary currently at frame 20; move to 15 (backward)
+    # boundary currently at frame 25; move to 15 (backward)
     new_frame = 15
 
     r = _patch_boundary(
@@ -134,7 +134,7 @@ def test_patch_boundary_forward_200(
     """200; left segment grows, right segment shrinks."""
     run_dir = tmp_runs_root_loadable / loadable_canonical_name
     pre_manifest = read_manifest(run_dir / "manifest.json")
-    new_frame = 25  # boundary at 20 → 25 (forward)
+    new_frame = 30  # boundary at 25 → 30 (forward)
 
     r = _patch_boundary(
         _client(tmp_runs_root_loadable),
@@ -338,7 +338,7 @@ def test_patch_boundary_left_vanishes_400(
 def test_patch_boundary_right_vanishes_400(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
-    """seg0001.end_frame=49; new_frame=50 > 49 → right would have 0 frames."""
+    """seg0001.end_frame=54; new_frame=55 > 54 → right would have 0 frames."""
     run_dir = tmp_runs_root_loadable / loadable_canonical_name
     rh = read_manifest(run_dir / "manifest.json").run_hash
     snap = _snapshot(run_dir, tmp_runs_root_loadable)
@@ -346,7 +346,7 @@ def test_patch_boundary_right_vanishes_400(
     r = _patch_boundary(
         _client(tmp_runs_root_loadable),
         loadable_canonical_name, _BOUNDARY_ID_0_1,
-        body={"frame": 50}, if_match=rh,
+        body={"frame": 55}, if_match=rh,
     )
     assert r.status_code == 400
     assert r.json()["error"] == "invalid_frame"
@@ -361,7 +361,7 @@ def test_patch_boundary_right_vanishes_400(
 def test_patch_boundary_noop_400(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
-    """new_frame=20 equals current right.start_frame → no-op rejected."""
+    """new_frame=25 equals current right.start_frame → no-op rejected."""
     run_dir = tmp_runs_root_loadable / loadable_canonical_name
     rh = read_manifest(run_dir / "manifest.json").run_hash
     snap = _snapshot(run_dir, tmp_runs_root_loadable)
@@ -369,7 +369,7 @@ def test_patch_boundary_noop_400(
     r = _patch_boundary(
         _client(tmp_runs_root_loadable),
         loadable_canonical_name, _BOUNDARY_ID_0_1,
-        body={"frame": 20}, if_match=rh,  # 20 is current boundary
+        body={"frame": 25}, if_match=rh,  # 25 is current boundary
     )
     assert r.status_code == 400
     assert r.json()["error"] == "invalid_frame"
@@ -425,19 +425,19 @@ def test_patch_boundary_min_one_frame_left_ok(
 def test_patch_boundary_min_one_frame_right_ok(
     tmp_runs_root_loadable: Path, loadable_canonical_name: str,
 ) -> None:
-    """new_frame = right.end_frame = 49 → right keeps exactly 1 frame."""
+    """new_frame = right.end_frame = 54 → right keeps exactly 1 frame."""
     run_dir = tmp_runs_root_loadable / loadable_canonical_name
     rh = read_manifest(run_dir / "manifest.json").run_hash
 
     r = _patch_boundary(
         _client(tmp_runs_root_loadable),
         loadable_canonical_name, _BOUNDARY_ID_0_1,
-        body={"frame": 49}, if_match=rh,
+        body={"frame": 54}, if_match=rh,
     )
     assert r.status_code == 200
     ann = read_annotation_result(run_dir / "annotation.json")
-    assert ann.segments[0].end_frame == 48
-    assert ann.segments[1].start_frame == 49
+    assert ann.segments[0].end_frame == 53
+    assert ann.segments[1].start_frame == 54
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +537,8 @@ def test_patch_boundary_concurrent_race(
         )
         results.append(r.status_code)
 
-    t1 = threading.Thread(target=do_patch, args=(15,))
-    t2 = threading.Thread(target=do_patch, args=(25,))
+    t1 = threading.Thread(target=do_patch, args=(15,))   # backward from 25
+    t2 = threading.Thread(target=do_patch, args=(30,))   # forward from 25
     t1.start()
     t2.start()
     t1.join()

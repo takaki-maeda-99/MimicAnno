@@ -22,7 +22,7 @@ import uvicorn
 
 
 _READY_DEADLINE_SEC = 10.0
-_BOUNDARY_ID = "episode_000000__seg0001"  # boundary at frame 20
+_BOUNDARY_ID = "episode_000000__seg0001"  # boundary at frame 25 (post-T16 smoke state)
 
 
 def _wait_ready(port: int) -> None:
@@ -84,8 +84,8 @@ def test_concurrent_boundary_patch_one_wins_one_412(
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
                 futures = [
-                    ex.submit(do_patch, 15),
-                    ex.submit(do_patch, 25),
+                    ex.submit(do_patch, 15),   # backward from current boundary
+                    ex.submit(do_patch, 30),   # forward from current boundary
                 ]
                 results = [f.result() for f in futures]
 
