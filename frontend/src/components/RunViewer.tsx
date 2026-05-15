@@ -345,6 +345,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
+  // Build back-link preserving api mode and run_set selection.
+  const runSetSuffix =
+    runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
+  const backHref = apiEnabled ? `/?api=1${runSetSuffix}` : "/";
+
   if (state.kind === "no-match") {
     const { episodeId: e, runHashShort: h } = state;
     return (
@@ -353,19 +358,18 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           ? `no run for episode_id=${e} hash=${h}`
           : `no run for episode_id=${e}`}
         {" "}
-        <a href={apiEnabled ? "/?api=1" : "/"}>all runs</a>
+        <a href={backHref}>all runs</a>
       </div>
     );
   }
   const { selection, manifest } = state.data;
-  const backHref = apiEnabled ? "/?api=1" : "/";
   return (
     <div className="run-viewer">
       <div className="back-link">
         <a href={backHref}>← runs</a>
       </div>
       {selection.kind === "multiple" && (
-        <ChooserBanner selection={selection} episodeId={episodeId} />
+        <ChooserBanner selection={selection} episodeId={episodeId} runSet={runSet} />
       )}
       {manifest.pipeline_status.degraded_from_phase !== null && (
         <div className="pipeline-status-banner">
@@ -428,12 +432,16 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
 function ChooserBanner({
   selection,
   episodeId,
+  runSet,
 }: {
   selection: Extract<RunSelection, { kind: "multiple" }>;
   episodeId: string;
+  runSet?: string;
 }) {
   const { apiEnabled } = useApiToggle();
   const apiSuffix = apiEnabled ? "&api=1" : "";
+  const runSetSuffix =
+    runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
   const all = [selection.chosen, ...selection.alternatives];
   return (
     <div className="chooser-banner">
@@ -443,7 +451,7 @@ function ChooserBanner({
         defaultValue={selection.chosen.run_hash_short}
         onChange={(e) => {
           window.location.search =
-            `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}${apiSuffix}`;
+            `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}${apiSuffix}${runSetSuffix}`;
         }}
       >
         {all.map((entry) => (

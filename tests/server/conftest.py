@@ -233,3 +233,27 @@ def tmp_parent_runs_root(tmp_path: Path) -> Path:
         sub.mkdir()
         (sub / "index.json").write_bytes(b'{"schema_version":"0.1.0","runs":[]}')
     return tmp_path
+
+
+@pytest.fixture
+def tmp_parent_runs_root_loadable(tmp_path: Path) -> Path:
+    """Multi-mode parent dir with a real loadable so101 run-set subdirectory.
+
+    Skips if the real SO101 v5 run is not checked out locally.
+    Used for S-RS T5: PATCH with ?run_set= integration test.
+    """
+    if not _REAL_SO101_RUN.is_dir():
+        pytest.skip(
+            f"loadable fixture source missing: {_REAL_SO101_RUN}; "
+            "this dev box only — CI should commit a frozen fixture instead.",
+        )
+    sub = tmp_path / "so101_phase4_v5"
+    sub.mkdir()
+    _build_loadable_fixture(sub)
+    return tmp_path
+
+
+@pytest.fixture
+def loadable_run_set_name() -> str:
+    """The run-set subdirectory name in ``tmp_parent_runs_root_loadable``."""
+    return "so101_phase4_v5"
