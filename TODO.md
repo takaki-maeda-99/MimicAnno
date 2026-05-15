@@ -8,34 +8,15 @@
 | S-RS | run-set switcher UI ドロップダウン | PR #9 (main) |
 | S-B2 | 境界ドラッグ PATCH + BoundaryDragLayer | `9c25b87` (main) |
 | S-UI | ダークテーマ + HandScrubBar + HandViewer サイドパネル | `68aafcf` (main) |
+| S-HG | HandSignalGraph — xyz cam_t 時系列グラフ + 外れ値ロバストレンジ | `3ae28bb` (main) |
+| S-B3 | reviewed 単独トグル — backend + frontend + tests | `14eb192` (main) |
+| origin push | 17 コミットを `origin/main` に push 済 | `041acdd..3a75cca` |
 
 ---
 
 ## 残タスク
 
-### 1. origin/main push
-
-- [ ] `git push origin main` — local main が origin より ahead
-
----
-
-### 2. S-B3 — reviewed 単独トグル — `feat/phase5-b-r3-reviewed-toggle`
-
-実装済み・**未コミット** (working tree に uncommitted 状態):
-
-- [x] spec: `docs/superpowers/specs/2026-05-16-phase5-b-r3-reviewed-toggle-design.md`
-- [x] plan: `docs/superpowers/plans/2026-05-16-phase5-b-r3-reviewed-toggle-plan.md`
-- [x] backend: `mimicanno/server/reviewed_repo.py`
-- [x] backend route: `mimicanno/server/routes.py` 変更済
-- [x] frontend: `frontend/src/lib/reviewedClient.ts`
-- [x] frontend: `frontend/src/components/RunViewer.tsx`、`SegmentTable.tsx` 変更済
-- [x] tests: `tests/server/test_routes_patch_reviewed.py`、`frontend/src/__tests__/reviewed-toggle.test.tsx`
-- [ ] **コミット + テスト確認**
-- [ ] **main にマージ**
-
----
-
-### 3. S-D — Evaluation harness — `feat/phase5-d-eval-harness`
+### 1. S-D — Evaluation harness — `feat/phase5-d-eval-harness`
 
 spec/plan 完成、実装ゼロ:
 
@@ -52,15 +33,15 @@ spec/plan 完成、実装ゼロ:
 
 ---
 
-### 4. その他 (低優先度)
+### 2. その他 (低優先度)
 
-- **gem4 新ロボット設定**: `mimicanno/configs/robot/gem4_*.yaml` x3 + run scripts — B-r3 に同梱するか別 PR か判断
-- **テストギャップ**: `tests/fixtures/loadable_run/` に合成固定データをコミットして CI 対応
+- **gem4 新ロボット設定**: `mimicanno/configs/robot/gem4_*.yaml` x3 + run scripts — 別 PR で整理
+- **テストギャップ**: `tests/fixtures/loadable_run/` に合成固定データをコミットして CI 対応 (詳細は git 履歴の旧 TODO 参照)
 
 ---
 
-## 推奨マージ順
+## 推奨次ステップ
 
 ```
-origin/main push → S-B3 commit+merge → S-D impl+merge
+S-D impl+merge (Phase 5 D)
 ```
