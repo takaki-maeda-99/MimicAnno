@@ -29,7 +29,7 @@ export default function HandScrubBar({ widthPx, totalFrames, currentFrame, onSee
       style={{ display: "block", background: "var(--bg-surface)", cursor: "crosshair", maxWidth: "100%" }}
       onClick={handleClick}
     >
-      <line x1={x} y1={0} x2={x} y2={24} stroke="#f1f5f9" strokeWidth={1.5} pointerEvents="none" />
+      <line x1={x} y1={0} x2={x} y2={24} style={{ stroke: "var(--text)" }} strokeWidth={1.5} pointerEvents="none" />
     </svg>
   );
 }
