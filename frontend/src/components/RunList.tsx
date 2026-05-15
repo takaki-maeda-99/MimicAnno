@@ -1,14 +1,21 @@
 import { useEffect, useState } from "react";
 import { useApiToggle } from "../lib/ApiToggleContext";
 import { assertIndexSchema, SUPPORTED_MAJORS, type IndexDoc } from "../lib/manifest";
+import type { HandIndexDoc } from "../lib/handsClient";
 
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "ok"; doc: IndexDoc };
 
+type HandState =
+  | { kind: "loading" }
+  | { kind: "hidden" }
+  | { kind: "ok"; doc: HandIndexDoc };
+
 export default function RunList() {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [handState, setHandState] = useState<HandState>({ kind: "loading" });
   const { apiBase, apiEnabled } = useApiToggle();
   // Preserve ?api=1 across navigation so clicking a run from the list
   // stays in API mode (otherwise the viewer would silently fall back to
@@ -50,6 +57,26 @@ export default function RunList() {
     };
   }, [apiBase]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/hands/index.json");
+        if (!r.ok) {
+          if (!cancelled) setHandState({ kind: "hidden" });
+          return;
+        }
+        const doc = (await r.json()) as HandIndexDoc;
+        if (!cancelled) setHandState({ kind: "ok", doc });
+      } catch {
+        if (!cancelled) setHandState({ kind: "hidden" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
   if (state.doc.runs.length === 0) {
@@ -85,6 +112,27 @@ export default function RunList() {
           ))}
         </tbody>
       </table>
+      {handState.kind === "ok" && handState.doc.episodes.length > 0 && (
+        <div className="hand-episode-list">
+          <h2>手のデータ</h2>
+          <ul>
+            {handState.doc.episodes.map((ep) =>
+              ep.signals_ready ? (
+                <li key={ep.episode_id}>
+                  <a href={`?hand=${encodeURIComponent(ep.episode_id)}&api=1`}>
+                    {ep.episode_id}
+                  </a>
+                </li>
+              ) : (
+                <li key={ep.episode_id} className="hand-episode-no-signals">
+                  {ep.episode_id}{" "}
+                  <span className="hand-no-signals-label">(signals未生成)</span>
+                </li>
+              ),
+            )}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
