@@ -75,7 +75,7 @@ describe("frame index calculation", () => {
   it("clamps currentTime beyond total_frames to last frame", async () => {
     render(<HandViewer episodeId="GX010085" />);
     await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-    expect(screen.getByText(/frame: 0 \/ 2/)).toBeTruthy();
+    expect(screen.getByText(/frame 0 \/ 2/)).toBeTruthy();
   });
 });
 
@@ -168,7 +168,7 @@ it("null frame entry shows 未検出 for both hands", async () => {
 it("HandViewer owns currentTimeSec: onTimeChange updates frame display", async () => {
   render(<HandViewer episodeId="GX010085" />);
   await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  expect(screen.getByText(/frame: 0 \/ 2/)).toBeTruthy();
+  expect(screen.getByText(/frame 0 \/ 2/)).toBeTruthy();
 
   const video = document.querySelector("video");
   expect(video).not.toBeNull();
@@ -177,5 +177,27 @@ it("HandViewer owns currentTimeSec: onTimeChange updates frame display", async (
     video!.dispatchEvent(new Event("timeupdate"));
   });
   // frame = round(1.0 * 30) = 30, clamped to total_frames-1 = 2
-  await waitFor(() => screen.getByText(/frame: 2 \/ 2/));
+  await waitFor(() => screen.getByText(/frame 2 \/ 2/));
+});
+
+it("loaded state に back-link が存在し '/' を指す", async () => {
+  render(<HandViewer episodeId="GX010085" />);
+  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+  const link = screen.getByText("← runs") as HTMLAnchorElement;
+  expect(link.getAttribute("href")).toBe("/");
+});
+
+it("h1 タイトルが存在しない", async () => {
+  render(<HandViewer episodeId="GX010085" />);
+  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+  expect(document.querySelector("h1")).toBeNull();
+});
+
+it("scrub-info にフレーム番号と時刻が表示される", async () => {
+  render(<HandViewer episodeId="GX010085" />);
+  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+  const info = document.querySelector(".hand-scrub-info");
+  expect(info).not.toBeNull();
+  expect(info!.textContent).toMatch(/frame 0 \/ 2/);
+  expect(info!.textContent).toMatch(/00:00\.0/);
 });
