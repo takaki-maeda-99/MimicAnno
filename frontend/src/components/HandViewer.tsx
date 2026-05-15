@@ -1,11 +1,116 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   HandIndexDoc,
   HandMetaDoc,
   HandSignalFrame,
   HandSignalsDoc,
 } from "../lib/handsClient";
-import VideoPlayer from "./VideoPlayer";
+import { projectHandAxes, drawAxes } from "../lib/handAxes";
+
+const AXIS_LENGTH_M = 0.05;
+
+function VideoWithAxes({
+  videoUrl,
+  currentTimeSec,
+  onTimeChange,
+  onError,
+  videoWidth,
+  videoHeight,
+  intrinsics,
+  rightHand,
+  leftHand,
+}: {
+  videoUrl: string;
+  currentTimeSec: number;
+  onTimeChange: (t: number) => void;
+  onError: (msg: string) => void;
+  videoWidth: number;
+  videoHeight: number;
+  intrinsics?: { fx: number; fy: number; cx: number; cy: number };
+  rightHand: HandSignalFrame | null;
+  leftHand: HandSignalFrame | null;
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [displayed, setDisplayed] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (Math.abs(v.currentTime - currentTimeSec) > 0.05) v.currentTime = currentTimeSec;
+  }, [currentTimeSec]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    setDisplayed({ w: v.clientWidth, h: v.clientHeight });
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      setDisplayed({ w: v.clientWidth, h: v.clientHeight });
+    });
+    ro.observe(v);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = displayed.w * dpr;
+    canvas.height = displayed.h * dpr;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, displayed.w, displayed.h);
+    if (videoWidth <= 0 || videoHeight <= 0 || displayed.w <= 0) return;
+    const scaleX = displayed.w / videoWidth;
+    const scaleY = displayed.h / videoHeight;
+    for (const hand of [rightHand, leftHand]) {
+      if (!hand) continue;
+      const proj = projectHandAxes({
+        cam_t: hand.cam_t,
+        euler_deg: hand.euler_deg,
+        axisLengthM: AXIS_LENGTH_M,
+        videoWidth,
+        videoHeight,
+        intrinsics,
+      });
+      if (!proj) continue;
+      drawAxes({ ctx, proj, scaleX, scaleY, lineWidth: 3, alpha: hand.depth_ok ? 0.95 : 0.6 });
+    }
+  }, [displayed, rightHand, leftHand, videoWidth, videoHeight, intrinsics]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+      <video
+        ref={videoRef}
+        src={videoUrl}
+        controls
+        style={{ display: "block", maxWidth: "100%" }}
+        onTimeUpdate={(e) => onTimeChange(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => {
+          setDisplayed({ w: e.currentTarget.clientWidth, h: e.currentTarget.clientHeight });
+        }}
+        onError={(e) => {
+          const code = e.currentTarget.error?.code;
+          onError(`video playback failed${code !== undefined ? ` (code ${code})` : ""}`);
+        }}
+      />
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: displayed.w,
+          height: displayed.h,
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+}
 
 // /api/hands/ is hardcoded — there is no static fallback for hand data.
 // This is an intentional divergence from the RunViewer pattern (useApiToggle).
@@ -193,6 +298,28 @@ export default function HandViewer({ episodeId }: Props) {
     totalFrames - 1,
   );
   const frameKey = `frame_${String(currentFrame).padStart(6, "0")}`;
+  const frameEntry = signals[frameKey] as
+    | { right: HandSignalFrame | null; left: HandSignalFrame | null }
+    | undefined;
+  const rightHand = frameEntry?.right ?? null;
+  const leftHand = frameEntry?.left ?? null;
+  const videoW = (meta.video_width as number | undefined) ?? 0;
+  const videoH = (meta.video_height as number | undefined) ?? 0;
+  // Extract real camera intrinsics from depth_meta if available (OpenCV
+  // fisheye with k1..k4 = 0 reduces to a pinhole; we ignore distortion).
+  const depthMeta = meta.depth_meta as { preset_params?: { fl_x_ref?: number; fl_y_ref?: number }; ref_w_native?: number } | undefined;
+  const refW = depthMeta?.ref_w_native ?? 5312;
+  const flXRef = depthMeta?.preset_params?.fl_x_ref;
+  const flYRef = depthMeta?.preset_params?.fl_y_ref;
+  const intrinsics =
+    flXRef !== undefined && flYRef !== undefined && videoW > 0
+      ? {
+          fx: (flXRef * videoW) / refW,
+          fy: (flYRef * videoW) / refW,
+          cx: videoW / 2,
+          cy: videoH / 2,
+        }
+      : undefined;
 
   return (
     <div className="hand-viewer">
@@ -200,11 +327,16 @@ export default function HandViewer({ episodeId }: Props) {
       <a href="/">← 戻る</a>
       <div className="hand-viewer-layout">
         <div className="hand-viewer-video">
-          <VideoPlayer
+          <VideoWithAxes
             videoUrl={`${HANDS_API_BASE}${episodeId}/video`}
             currentTimeSec={currentTimeSec}
             onTimeChange={setCurrentTimeSec}
             onError={setVideoError}
+            videoWidth={videoW}
+            videoHeight={videoH}
+            intrinsics={intrinsics}
+            rightHand={rightHand}
+            leftHand={leftHand}
           />
           {videoError && <div className="error">{videoError}</div>}
           <div>frame: {currentFrame} / {totalFrames - 1}</div>
