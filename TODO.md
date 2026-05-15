@@ -89,7 +89,7 @@
 #### S-HV (hand-viewer) ✅ main マージ済 (`5f2e8fb`)
 - [x] **HV-T5**: smoke 完了 + ブラウザ 4 項目確認済 (2026-05-16)
 - [x] **HV-axes**: wrist XYZ 軸 canvas overlay 実装済 (`2307219`、`feat/hand-viewer-axes` ブランチ)
-- [ ] **HV-regen**: 全 9 episode を v2 で再生成 (frames/*.pkl は温存。`hamer/.hamer/bin/python scripts/run_hand_estimation.py --signals-only --full-signals --out data/hands/<ep>/`)
+- [x] **HV-regen**: 全 9 episode を v2 で再生成済み (2026-05-15 23:48、T1 実行時に同時生成。全 ep schema_v=2、cam_t/euler_deg/depth_ok/pinch_m 確認済み)
 
 #### S-B2 (phase 5 B r2: 境界ドラッグ)
 - [x] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 完成・push済 (`3925d23`)
