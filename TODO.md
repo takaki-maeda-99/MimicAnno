@@ -118,6 +118,35 @@
 2. S-B2 (impl + smoke 完了後)
 3. S-D (B2 マージ後に frontend 統合)
 
+---
+
+## テストギャップ: loadable fixture の frozen 化
+
+**現状:** `tests/server/` の約 59 テストが実行環境に `runs/so101_phase4_v5/episode_000000__e35061106394/` が存在しない場合にスキップされる。
+
+```
+SKIPPED: loadable fixture source missing: .../runs/so101_phase4_v5/episode_000000__e35061106394;
+         this dev box only — CI should commit a frozen fixture instead.
+```
+
+**原因:** `tests/server/conftest.py` の `tmp_runs_root_loadable` fixture がリポジトリ外の実データ (`runs/` ディレクトリ) をコピーして使っているため。実データは大きく `.gitignore` 対象なので CI では常にスキップになる。
+
+**本来の姿:** `tests/fixtures/loadable_run/` 以下に小さな合成済み固定データ (annotation.json / boundaries.json / signals.json / tracks.json + manifest.json) をコミットし、`conftest.py` の `_REAL_SO101_RUN` をそこへ向ける。実データのコピーは不要 (スキーマ的に正しければ十分)。
+
+**修正手順:**
+1. `runs/so101_phase4_v5/episode_000000__e35061106394/` から 5 アーティファクトをコピー
+   ```
+   cp runs/so101_phase4_v5/episode_000000__e35061106394/{manifest,annotation,boundaries,signals,tracks}.json \
+      tests/fixtures/loadable_run/
+   ```
+2. `tests/server/conftest.py` の `_REAL_SO101_RUN` を変更:
+   ```python
+   _REAL_SO101_RUN = Path(__file__).resolve().parent.parent / "fixtures" / "loadable_run"
+   ```
+3. `tests/fixtures/loadable_run/` を `git add` してコミット
+
+**優先度:** 低 (ローカル開発では実データがあるので実害なし)。ただし CI を将来追加するなら必須。
+
 ### 司令塔 (S-MAIN = このセッション) の責務
 - 各ストリームの完了 notes/handoff をレビュー、マージ承認
 - `MEMORY.md` index 編集はここのみ (他ストリームは `project_*.md` の新規ファイル作成のみ、index 追加要求は notes 経由)
