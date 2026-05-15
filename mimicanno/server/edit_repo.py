@@ -35,9 +35,9 @@ from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.labelset import LabelSet
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
-from mimicanno.runindex import IndexFile, IndexRow, read_index, write_index_atomic
+from mimicanno.runindex import IndexRow
 from mimicanno.smoother import _recompute_confidence
-from mimicanno.writers import write_annotation_json, write_manifest_json
+from mimicanno.server.write_txn import write_run_atomically
 
 
 _LOG = logging.getLogger("mimicanno.server")
@@ -197,26 +197,14 @@ def apply_edit(
         new_seg = _recompute_confidence(new_seg)
         annotation.segments[idx] = new_seg
 
-        # Step 5b: annotation.run_hash ← new (cross-file consistency).
+        # Step 6-8: write annotation → manifest → index atomically.
         annotation = replace(annotation, run_hash=new_run_hash)
-
-        # Step 6: annotation FIRST, manifest SECOND.
-        write_annotation_json(annotation_path, annotation)
-
-        # Step 7 (T6g): set edited_at, preserve generated_at + canonical_name.
         manifest = replace(
             manifest,
             run_hash=new_run_hash,
             edited_at=_now_iso(),
         )
-        write_manifest_json(manifest_path, manifest)
 
-        # Step 8 (T6i): drop the stale row for this run (old run_hash) and
-        # insert the new one. ``runindex.upsert_row`` dedups by
-        # (episode_id, run_hash) so calling it directly would leave the old
-        # row in place — edits SHARE a canonical_name with the pre-edit run,
-        # so the old row's manifest_url now points at the new manifest. The
-        # stale row would mislead readers.
         suffix_len = len(name) - len(manifest.episode_id) - len(CANONICAL_SEPARATOR)
         new_row = IndexRow(
             episode_id=manifest.episode_id,
@@ -229,19 +217,13 @@ def apply_edit(
             pipeline_phase=manifest.generator.pipeline_phase,
             generated_at=manifest.generated_at,
         )
-        idx_path = runs_root / "index.json"
-        index = read_index(idx_path)
-        kept = [
-            r for r in index.rows
-            if not (
-                r.episode_id == manifest.episode_id
-                and r.run_hash == old_run_hash
-            )
-        ]
-        kept.append(new_row)
-        write_index_atomic(
-            idx_path,
-            IndexFile(schema_version=index.schema_version, rows=kept),
+        write_run_atomically(
+            runs_root=runs_root,
+            canonical_name=name,
+            annotation=annotation,
+            manifest=manifest,
+            index_row=new_row,
+            old_run_hash=old_run_hash,
         )
         _LOG.info(
             "edit: %s → %s, segment=%s, phase=%s, reviewer=%s",
