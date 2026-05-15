@@ -69,9 +69,9 @@
 ### Day 0 prereqs (新 worktree セッション起動前)
 
 マスター計画 §-1 より:
-- [ ] **origin/main を push** (local main `637d036` が origin より進んでいる)
-- [ ] **各 worktree branch を main に rebase** (`feat/hand-viewer`, `feat/phase5-b-r2-boundary-drag`, `feat/phase5-d-eval-harness` を `637d036` 起点に揃える)
-- [ ] **各 worktree で submodule init + npm install** (`git submodule update --init --recursive` + `cd frontend && npm install`)
+- [x] **origin/main を push** (2026-05-16 完了、`45d8dae` push 済み)
+- [x] **各 worktree branch を main に rebase** (feat/run-set-switcher / feat/phase5-b-r2-boundary-drag / feat/phase5-d-eval-harness を `45d8dae` 起点に揃え済み)
+- [x] **各 worktree で submodule init + pnpm install** (全 3 worktree 完了。`npm install` ではなく `pnpm install --frozen-lockfile` を使用)
 
 ### 並列ストリーム
 
