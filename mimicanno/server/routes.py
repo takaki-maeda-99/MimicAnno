@@ -54,13 +54,16 @@ def make_router(
     ) -> Path:
         if run_set is None or run_set == ".":
             return parent_root
-        # Security: symlink-safe 1-level check — must be direct child of parent_root.
-        effective = (parent_root / run_set).resolve()
-        if not effective.is_relative_to(parent_root) or effective == parent_root:
+        # Security: run_set must be a plain name — no path separators or ".."
+        # Use Path(run_set).name comparison so "a/b" and "../x" are caught
+        # without calling .resolve() (which would follow symlinks and fail the
+        # is_relative_to check if the symlink target is outside parent_root).
+        if Path(run_set).name != run_set:
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_run_set",
                 message=f"run_set {run_set!r} is not a direct subdirectory",
             )
+        effective = parent_root / run_set
         if not effective.is_dir():
             raise MimicAnnoHTTPError(
                 status=404, code="run_set_not_found",
