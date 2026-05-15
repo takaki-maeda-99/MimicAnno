@@ -221,6 +221,14 @@ class AnnotateRequest:
     link_video: bool
     force: bool
     config: AnnotationConfig
+    # バッチ実行時に事前ロード済みのVLMを差し込めるようにする。
+    # None のときは従来通り pipeline 内部で LocalGemmaVLMLabeler を新規ロードする。
+    preloaded_vlm: object | None = None
+    # バッチ実行時に事前ロード済みのSAM3 Runtime を差し込めるようにする。
+    # None のときは従来通り annotate_episode_phase3 内部で SAM3Runtime.load()
+    # を呼び、関数末尾で close() する。preloaded を渡したときは close せず
+    # _close_all_sessions() のみ呼び、ライフサイクルは呼び出し元の責務。
+    preloaded_sam3_runtime: object | None = None
 
 
 @dataclass(slots=True)
@@ -780,9 +788,12 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     # Extract initial frame (frame 0 with @5% retry)
     initial_frame = _extract_initial_frame(req.video, n_frames)
 
-    # Load shared Gemma instance
+    # Load shared Gemma instance (バッチモードでは事前ロード済みを再利用)
     vlm_cfg = req.config.vlm
-    vlm = LocalGemmaVLMLabeler(vlm_cfg)
+    if req.preloaded_vlm is not None:
+        vlm = req.preloaded_vlm  # type: ignore[assignment]
+    else:
+        vlm = LocalGemmaVLMLabeler(vlm_cfg)
     planner = LocalGemmaTrackingPlanner(vlm.shared_handle())
 
     # Step A — entity extraction
@@ -814,22 +825,31 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     assert tracking_cfg.sam3_checkpoint is not None, (
         "tracking.sam3_checkpoint must be set by CLI for target_phase=3"
     )
-    try:
-        sam3_runtime = SAM3Runtime.load(checkpoint=tracking_cfg.sam3_checkpoint)
-    except SAM3InitFailed as e:
-        return _degrade_to_phase3_objectless(
-            req, req.config, vlm,
-            fps=fps, duration_sec=duration_sec, n_frames=n_frames,
-            episode_id=episode_id, config_hash=config_hash,
-            input_hash=input_hash, run_hash=run_hash,
-            label_set=label_set, probe=probe, loaded=loaded,
-            adapter=adapter, adapter_config_sha=adapter_config_sha,
-            timestamps=timestamps, gripper_s=gripper_s,
-            vel_s=vel_s, accel_s=accel_s, action_s=action_s,
-            has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
-            degrade_reason="sam3_init_failed",
-            underlying_log=repr(e),
-        )
+    # --- SAM3 ランタイム取得 (preloaded を優先、無ければ新規 load) ---
+    if req.preloaded_sam3_runtime is not None:
+        # preloaded 経路: ライフサイクルは呼び出し元の責務。
+        # close() は呼ばず、_close_all_sessions() で次の ep に備える。
+        sam3_runtime = req.preloaded_sam3_runtime  # type: ignore[assignment]
+        _owns_sam3_runtime = False
+    else:
+        # 従来経路 (mimicanno annotate CLI 1ep 1プロセス): 自前で load/close。
+        try:
+            sam3_runtime = SAM3Runtime.load(checkpoint=tracking_cfg.sam3_checkpoint)
+        except SAM3InitFailed as e:
+            return _degrade_to_phase3_objectless(
+                req, req.config, vlm,
+                fps=fps, duration_sec=duration_sec, n_frames=n_frames,
+                episode_id=episode_id, config_hash=config_hash,
+                input_hash=input_hash, run_hash=run_hash,
+                label_set=label_set, probe=probe, loaded=loaded,
+                adapter=adapter, adapter_config_sha=adapter_config_sha,
+                timestamps=timestamps, gripper_s=gripper_s,
+                vel_s=vel_s, accel_s=accel_s, action_s=action_s,
+                has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
+                degrade_reason="sam3_init_failed",
+                underlying_log=repr(e),
+            )
+        _owns_sam3_runtime = True
 
     try:
         plan = ground_initial_detections(
@@ -877,7 +897,12 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             mask_image_size_px=mask_image_size_px,
         )
     finally:
-        sam3_runtime.close()  # free GPU before Stage 3
+        if _owns_sam3_runtime:
+            sam3_runtime.close()  # free GPU before Stage 3
+        else:
+            # preloaded 経路: ライフサイクルは呼び出し元の責務。
+            # ここではセッションだけ片付けて次のエピソードで使えるようにする。
+            sam3_runtime._close_all_sessions()
 
     object_signals = compute_object_signals(
         tracks,
