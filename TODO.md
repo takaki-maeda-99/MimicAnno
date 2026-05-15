@@ -47,71 +47,72 @@
 
 ---
 
-## ワークツリー分割計画 (2026-05-15, rev3)
+## ワークツリー分割計画 (2026-05-15, rev4 — 2026-05-16 更新)
 
-実際の状況 (`git status` 実測, HEAD=`7e6326c`):
-- **T1+T2 shipped** (`d9718d7`, `7e6326c`)
-- **T3/T4 in-progress (uncommitted on main)** — `frontend/src/App.tsx` `RunList.tsx` (M) + `HandViewer.tsx` `handsClient.ts` + 各 `__tests__/` (新規)
-- 加えて `scripts/start_ui.sh`, `scripts/batch_gem4.sh`, submodule pointer bump (UniDAC/hamer), TODO.md (本ファイル) が untracked/M
-- 既存 worktree: `MimicAnno-planner-fix` (`feat/planner-visual-prompts` @ `a5939b4`) は別件で稼働中
+**マスター計画 (出口基準・依存 DAG・リスク表):** `docs/superpowers/plans/2026-05-15-worktree-coordination-plan.md` (rev2 reviewed, `637d036`)
 
-### 事前整理 (worktree を切る前に main で完結させる)
-- [ ] **A0-0: 旧スクリプト出力の棚卸し & 掃除** (ディレクトリ汚染対策)
-  - 対象:
-    - `runs/` の世代物: `so101_phase4`/`_v2`/`_v3`/`_v3_export`/`_v4`/`_v5_smoke`, `piper_phase4`/`_zc`, `piper_smoke`, `sam3_local_smoke`/`_smoke_export`, `episode_000000__*`, `hamer`, `unidac_depth` 等 (現行は `_v5` のみ)
-    - `data/depth/` (11G): 現行 `precompute_depth.py` が生成するレイアウトと一致しないエピソード
-    - `data/video/` (19G): `data/video/new/` 以外の旧配置
-  - **保護対象 (絶対消さない)**:
-    - `_vlm_dumps/*.jsonl` — FT 学習データ ([[project_gemma_ft_pipeline]])。allowlist 方式で残す
-    - `data/hands/<ep>/frames/*.pkl` — T1 (signals.json) の再生成元。HaMeR 推論は重い
-  - 手順 (いきなり `rm` しない):
-    1. 候補リスト + サイズ + mtime + `runs/index.json` 参照有無を `docs/cleanup-2026-05-15.md` に書き出してコミット
-    2. ユーザー sign-off
-    3. `git ls-files --others --ignored --exclude-standard` で `.gitignore` 済み確認
-    4. `rm -rf`
-  - 完了条件: `du -sh runs data/depth data/video data/hands` 削減量を記録 + 残ったものが「現行スクリプトで再生成可能」を明記
+実際の状況 (HEAD=`637d036`):
+- **Hand Viewer T1〜T4 shipped** on main (`d9718d7`, `7e6326c`, `2ab7f7b`)
+- A0-* (事前整理) **すべて完了** (詳細は下記)
+- worktree 4 本稼働中: `main` / `MimicAnno-hand-viewer` / `MimicAnno-phase5b-r2` / `MimicAnno-phase5d` (+ 別件 `MimicAnno-planner-fix`)
+- `feat/hand-viewer` worktree は T3/T4 main 取り込みに伴い main 同期済 (uncommitted 破棄、`reset --hard main`)
+- ディスク掃除済: 約 **24G 削減** (`9145e33`, 詳細は `docs/cleanup-2026-05-15.md`)
 
-- [ ] **A0-1: 未コミットファイルの所属確定** (実測ベース)
-  - T2 関連 (M: `mimicanno/cli.py`, `mimicanno/server/app.py`, `tests/server/test_serve_cli.py` + 新規: `mimicanno/server/hands_routes.py`, `tests/server/test_hands_routes.py`, `tests/server/fixtures/`) → **hand-viewer worktree** へ移して continue
-  - `docs/superpowers/specs/2026-05-15-hand-viewer-design.md`, `docs/superpowers/plans/2026-05-15-hand-viewer-plan.md` → hand-viewer worktree (T1 と一緒に push し忘れているので持っていく)
-  - `docs/superpowers/plans/2026-05-15-phase5-b-r1-smoke-wrapup-plan.md`, `docs/superpowers/notes/2026-05-15-phase5-b-r1-handoff.md` → main に直接コミット (済作業の記録)
-  - `scripts/start_ui.sh`, `scripts/batch_gem4.sh` → 用途確認のうえ main へ
-  - `TODO.md` 変更 (本ファイル) → main にコミット
-- [ ] **A0-2: submodule dirty 状態の解消** — `UniDAC`, `hamer` の `m` フラグ。worktree は `.git/modules` を共有するので、新 worktree にも dirt が引き継がれる。**worktree 切る前に解消必須**
-- [ ] **A0-3: ローカル古ブランチ整理** — `fix/phase5-a-video-streaming`, `fix/phase5-b-r1-dev-followup` がマージ済みなら削除 + `git fetch --prune`
-- [ ] **A0-4: `feat/hand-viewer` の remote 状態確認** — 既に push されている場合は新 worktree 作成時に衝突。必要なら remote 側を削除 (要 sign-off) または既存を再利用
+### 事前整理 (完了) ✅
 
-### 並列ストリーム (それぞれ worktree を切る)
+- [x] **A0-0**: 旧出力掃除 (`docs/cleanup-2026-05-15.md` 記録、`9145e33`)。runs 11G→2.7G、data/video 19G→3G、合計 ~24G 削減。`_vlm_dumps/aggregated/*.jsonl` は `_vlm_dumps_archive/2026-05-15/` へ退避
+- [x] **A0-1**: 未コミットファイル仕分け完了。T2 は `7e6326c`、T3/T4 は `2ab7f7b`、scripts/TODO は `111befe`、cleanup docs は `e789058`/`9145e33`、coordination plan は `637d036`
+- [x] **A0-2**: submodule (UniDAC/hamer/sam3) commit + push 済 (UniDAC `bb34cf2`, hamer `2b05f6c`)、pointer bump `adc0547`
+- [x] **A0-3**: `git fetch --prune`、`fix/phase5-a-video-streaming` 削除、`fix/phase5-b-r1-dev-followup` (PR #8) も merge `0bf0318` 取込後に `git branch -D` 済
+- [x] **A0-4**: `feat/hand-viewer` remote 状態確認済 (local-only、衝突なし)
 
-レビューで「hand-viewer を T1+T2 と T3+T4 で 2 worktree に分けるのは過剰 (単一開発者ではマージオーバーヘッドが上回る)」と指摘あり → **hand-viewer は 1 worktree に統合**。
+### Day 0 prereqs (新 worktree セッション起動前)
 
-| Worktree | ブランチ | スコープ | 依存 |
+マスター計画 §-1 より:
+- [ ] **origin/main を push** (local main `637d036` が origin より進んでいる)
+- [ ] **各 worktree branch を main に rebase** (`feat/hand-viewer`, `feat/phase5-b-r2-boundary-drag`, `feat/phase5-d-eval-harness` を `637d036` 起点に揃える)
+- [ ] **各 worktree で submodule init + npm install** (`git submodule update --init --recursive` + `cd frontend && npm install`)
+
+### 並列ストリーム
+
+詳細はマスター計画参照。3 ストリームすべて独立 (DAG レビュー反映)。
+
+| ID | Worktree | ブランチ | 残作業 |
 |---|---|---|---|
-| `MimicAnno-hand-viewer` | `feat/hand-viewer` | Hand Viewer T3+T4+T5 (T1/T2 取り込み済、T3/T4 uncommitted を移送) | なし |
-| `MimicAnno-phase5b-r2` | `feat/phase5-b-r2-boundary-drag` | Phase 5 B r2 (境界ドラッグ編集) — spec/plan 起こしから | なし |
-| `MimicAnno-phase5d` | `feat/phase5-d-eval-harness` | Phase 5 D (Evaluation harness) — spec 起こしから | B writable API |
+| **S-HV** | `MimicAnno-hand-viewer` | `feat/hand-viewer` | T5 smoke + regen (T1-T4 は main 済) |
+| **S-B2** | `MimicAnno-phase5b-r2` | `feat/phase5-b-r2-boundary-drag` | spec → plan → impl (境界ドラッグ) |
+| **S-D** | `MimicAnno-phase5d` | `feat/phase5-d-eval-harness` | spec → plan → impl (eval harness、Phase 5 A read-only API を消費し B2 と並列可) |
 
 ### 各 worktree でやること
 
-#### hand-viewer (T3–T5)
-- [ ] **HV-T3**: `frontend/src/lib/handsClient.ts` + `HandViewer.tsx` + テスト (進行中, main 上 uncommitted → worktree へ移送)
-- [ ] **HV-T4**: `RunList.tsx` 拡張 + テスト (進行中)
-- [ ] **HV-T5**: 統合 smoke (`mimicanno serve` + `pnpm dev`、`?hand=GX010085&api=1`)
-- [ ] **HV-regen**: A0-0 で `data/hands/<ep>/frames/` を**温存した上で** 全 episode signals.json v2 再生成 (`--signals-only --full-signals`)
+#### S-HV (hand-viewer)
+- [ ] **HV-T5**: 統合 smoke (`scripts/start_ui.sh` or 手動で `mimicanno serve --hands-root data/hands --runs-root runs/so101_phase4_v5` + `pnpm dev`、`?hand=GX010085&api=1`)。確認項目は `docs/superpowers/plans/2026-05-15-hand-viewer-plan.md` T5
+- [ ] **HV-regen-bench**: 1 episode で `--signals-only --full-signals` を実測 (hamer venv 経由) → ETA 確定
+- [ ] **HV-regen**: 全 9 episode を v2 で再生成 (frames/*.pkl は温存)
+- [ ] **HV-notes**: smoke 結果を `docs/superpowers/notes/2026-05-16-hv-smoke.md` に記録
 
-#### phase5-b-r2 (Edit UI 継続)
-- [ ] **B2-spec**: 境界ドラッグの spec 起こし (`docs/superpowers/specs/YYYY-MM-DD-phase5-b-r2-boundary-drag-design.md`)
-- [ ] **B2-plan**: 実装 plan
-- [ ] **B2-impl**: PATCH endpoint 拡張 + UI ドラッグハンドル
-- [ ] (将来) r3: reviewed 単独トグル、r4: object edit
+#### S-B2 (phase 5 B r2: 境界ドラッグ)
+- [ ] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 起こし
+- [ ] **B2-spec-review**: spec-document-reviewer subagent でレビュー
+- [ ] **B2-plan**: `docs/superpowers/plans/2026-05-16-phase5-b-r2-boundary-drag-plan.md`
+- [ ] **B2-impl**: PATCH endpoint 拡張 + `BoundaryDragLayer.tsx` + `RunViewer.tsx` hook + tests
+- [ ] **B2-smoke**: SO101 v5 + Piper v5 で境界編集 → 保存 → 再読込が往復することを確認
+- [ ] **B2-future**: r3 reviewed 単独トグル / r4 object edit は別 PR
 
-#### phase5-d (Evaluation harness)
-- [ ] **D-spec**: phase 5 当初 spec から D 部分を抜き出して詳細化
-- [ ] **D-plan + impl**: 後続
+#### S-D (Phase 5 D: Evaluation harness)
+- [ ] **D-spec**: `docs/superpowers/specs/2026-05-16-phase5-d-eval-harness-design.md` (Phase 5 当初 spec の D 部分を詳細化)
+- [ ] **D-spec-review**: spec-document-reviewer subagent
+- [ ] **D-plan**: 実装 plan
+- [ ] **D-impl-backend**: eval CLI/サーバー側 (B2 と並列可)
+- [ ] **D-impl-frontend**: 結果表示 UI (B2 マージ後)
 
-### 完了条件 / マージ順
-1. A0-* (main 整理) を先に commit/push
-2. hand-viewer T1+T2 → main マージ
-3. hand-viewer-frontend (T3+T4) → main マージ (T5 smoke 後)
-4. phase5-b-r2 / phase5-d は独立にマージ可
+### マージ順 (master plan §3)
+1. S-HV (smoke 完了次第、最短マージ)
+2. S-B2 (impl + smoke 完了後)
+3. S-D (B2 マージ後に frontend 統合)
+
+### 司令塔 (S-MAIN = このセッション) の責務
+- 各ストリームの完了 notes/handoff をレビュー、マージ承認
+- `MEMORY.md` index 編集はここのみ (他ストリームは `project_*.md` の新規ファイル作成のみ、index 追加要求は notes 経由)
+- 全ストリーム完了後に `docs/superpowers/notes/2026-05-1X-multi-worktree-summary.md` で handoff
 
