@@ -205,11 +205,17 @@ def _generate_signals(
     frame_results: Dict[int, List[HandEstimate]],
     out_path: Path,
     sigma: float,
+    full: bool = False,
 ) -> None:
-    """Write signals.json with (optionally smoothed) per-frame pinch distance.
+    """Write signals.json.
 
-    NaN-aware Gaussian smoothing: frames where a hand is not detected are
-    excluded from the smoothing kernel (they don't pull neighbors toward zero).
+    full=False (default): schema_version 1 — pinch distance only (key "value").
+    full=True: schema_version 2 — pinch_m, cam_t, euler_deg, depth_ok per hand.
+      - All frames where a hand is detected are written; both-hands-undetected
+        frames emit {"right": null, "left": null} (key is NOT dropped).
+      - cam_t and euler_deg are present for every detected hand regardless of
+        depth_ok; depth_ok=False indicates pseudo-metric (unreliable absolute
+        value, relative change still valid).
     """
     from scipy.ndimage import gaussian_filter1d
 
@@ -247,20 +253,51 @@ def _generate_signals(
     r_smooth = _smooth_nan(r_arr, sigma)
     l_smooth = _smooth_nan(l_arr, sigma)
 
-    out: dict = {"schema_version": 1}
-    for i, fi in enumerate(frame_indices):
-        key = f"frame_{fi:06d}"
-        rv = r_smooth[i]
-        lv = l_smooth[i]
-        out[key] = {
-            "right": {"value": round(float(rv), 6), "depth_ok": right_depth_ok[i]}
-                     if right_detected[i] and np.isfinite(rv) else None,
-            "left": {"value": round(float(lv), 6), "depth_ok": left_depth_ok[i]}
-                    if left_detected[i] and np.isfinite(lv) else None,
-        }
-        # Omit frames where neither side was detected
-        if out[key]["right"] is None and out[key]["left"] is None:
-            del out[key]
+    if full:
+        from scipy.spatial.transform import Rotation
+        out: dict = {"schema_version": 2}
+        for i, fi in enumerate(frame_indices):
+            key = f"frame_{fi:06d}"
+            hands = frame_results.get(fi, [])
+            rh = next((h for h in hands if h.is_right), None)
+            lh = next((h for h in hands if not h.is_right), None)
+            rv = r_smooth[i]
+            lv = l_smooth[i]
+
+            def _hand_entry(h: Optional[HandEstimate], pinch_smooth: float) -> Optional[dict]:
+                if h is None:
+                    return None
+                arr = Rotation.from_matrix(h.global_orient.astype(float)).as_euler("ZYX", degrees=True)
+                return {
+                    "pinch_m": round(float(pinch_smooth), 6) if np.isfinite(pinch_smooth) else None,
+                    "cam_t": [round(float(v), 6) for v in h.cam_t],
+                    "euler_deg": {
+                        "yaw": round(float(arr[0]), 3),
+                        "pitch": round(float(arr[1]), 3),
+                        "roll": round(float(arr[2]), 3),
+                    },
+                    "depth_ok": h.wrist_depth_m is not None,
+                }
+
+            out[key] = {
+                "right": _hand_entry(rh, rv),
+                "left": _hand_entry(lh, lv),
+            }
+    else:
+        out = {"schema_version": 1}
+        for i, fi in enumerate(frame_indices):
+            key = f"frame_{fi:06d}"
+            rv = r_smooth[i]
+            lv = l_smooth[i]
+            out[key] = {
+                "right": {"value": round(float(rv), 6), "depth_ok": right_depth_ok[i]}
+                         if right_detected[i] and np.isfinite(rv) else None,
+                "left": {"value": round(float(lv), 6), "depth_ok": left_depth_ok[i]}
+                        if left_detected[i] and np.isfinite(lv) else None,
+            }
+            # v1 omits frames where neither side was detected
+            if out[key]["right"] is None and out[key]["left"] is None:
+                del out[key]
 
     out_path.write_text(json.dumps(out, indent=2))
 
@@ -574,8 +611,8 @@ def run(args: argparse.Namespace) -> dict:
     # Signals
     # -----------------------------------------------------------------------
     signals_path = out_dir / "signals.json"
-    print(f"generating signals.json (pinch_smooth_sigma={args.pinch_smooth_sigma})…", flush=True)
-    _generate_signals(all_frame_indices, frame_results, signals_path, args.pinch_smooth_sigma)
+    print(f"generating signals.json (pinch_smooth_sigma={args.pinch_smooth_sigma}, full={args.full_signals})…", flush=True)
+    _generate_signals(all_frame_indices, frame_results, signals_path, args.pinch_smooth_sigma, full=args.full_signals)
     meta["signals_path"] = str(signals_path)
     _save_meta()
 
@@ -604,14 +641,43 @@ def run(args: argparse.Namespace) -> dict:
     return meta
 
 
+def run_signals_only(args: argparse.Namespace) -> None:
+    """Regenerate signals.json from existing frames/*.pkl without re-running HaMeR."""
+    out_dir = Path(args.out)
+    frames_dir = out_dir / "frames"
+    meta_path = out_dir / "meta.json"
+
+    if not meta_path.exists():
+        print(f"error: {meta_path} not found — cannot read fps/shape without meta.json", file=sys.stderr)
+        sys.exit(1)
+
+    pkl_paths = sorted(frames_dir.glob("frame_*.pkl"))
+    if not pkl_paths:
+        print(f"error: no frame_*.pkl found in {frames_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    frame_results: Dict[int, List[HandEstimate]] = {}
+    for p in pkl_paths:
+        frame_idx = int(p.stem.split("_")[1])
+        with open(p, "rb") as f:
+            frame_results[frame_idx] = pickle.load(f)
+
+    frame_indices = sorted(frame_results.keys())
+    signals_path = out_dir / "signals.json"
+    print(f"generating signals.json from {len(frame_indices)} frames "
+          f"(sigma={args.pinch_smooth_sigma}, full={args.full_signals})…", flush=True)
+    _generate_signals(frame_indices, frame_results, signals_path, args.pinch_smooth_sigma, full=args.full_signals)
+    print(f"wrote {signals_path}", flush=True)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Phase B: HaMeR hand estimation with UniDAC metric depth.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    ap.add_argument("--video", required=True, help="input MP4 video")
-    ap.add_argument("--depth", required=True, help="Phase A output directory (frames/*.npy)")
+    ap.add_argument("--video", default=None, help="input MP4 video (not required with --signals-only)")
+    ap.add_argument("--depth", default=None, help="Phase A output directory (not required with --signals-only)")
     ap.add_argument("--out", required=True, help="output directory")
     ap.add_argument("--stride", type=int, default=None,
                     help="frame subsampling (default: read from depth/meta.json, else 1)")
@@ -630,12 +696,22 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="HaMeR DataLoader batch size (default: 8)")
     ap.add_argument("--pinch-smooth-sigma", type=float, default=2.0,
                     help="Gaussian smoothing sigma [frames] for pinch_distance_m in signals.json (0 = no smoothing, default: 2.0)")
+    ap.add_argument("--signals-only", action="store_true",
+                    help="skip HaMeR estimation; regenerate signals.json from existing frames/*.pkl")
+    ap.add_argument("--full-signals", action="store_true",
+                    help="write schema_version 2 signals.json with cam_t + euler_deg (default: v1 pinch-only)")
     ap.set_defaults(save_viz=True)
     return ap
 
 
 def main() -> int:
     args = _build_parser().parse_args()
+    if args.signals_only:
+        run_signals_only(args)
+        return 0
+    if args.video is None or args.depth is None:
+        print("error: --video and --depth are required unless --signals-only is set", file=sys.stderr)
+        return 1
     meta = run(args)
     return 0 if not meta["failures"] else 2
 
