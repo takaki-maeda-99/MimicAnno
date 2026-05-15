@@ -545,3 +545,41 @@ def test_patch_boundary_concurrent_race(
     t2.join()
 
     assert sorted(results) == [200, 412]
+
+
+# ---------------------------------------------------------------------------
+# T9 hash disjoint: r2 vs r1 vs auto-pipeline (spec §3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_hash_disjoint_r2_r1_auto(
+    tmp_runs_root_loadable: Path, loadable_canonical_name: str,
+) -> None:
+    """Spec §3.5: r2 preimage byte[5]='b', r1 byte[5]='s', auto has no
+    'edit:' prefix — all three hashes are distinct for the same base hash."""
+    from mimicanno.config import compose_run_hash
+
+    run_dir = tmp_runs_root_loadable / loadable_canonical_name
+    manifest = read_manifest(run_dir / "manifest.json")
+    old_rh = manifest.run_hash
+
+    # r2: "edit:boundary:" + ...
+    r2_hash = derive_boundary_run_hash(old_rh, _BOUNDARY_ID_0_1, 15, None)
+
+    # r1: "edit:" + old_rh + ":" + seg_id + ":" + phase + ":"
+    r1_hash = "sha256:" + sha256_hex_of_str(
+        "edit:" + old_rh + ":" + _BOUNDARY_ID_0_1 + ":approach_object:"
+    )
+
+    # auto-pipeline: SHA-256 of config_hash_bytes + input_hash_bytes (no "edit:" prefix)
+    auto_hash = compose_run_hash(manifest.config_hash, manifest.input_hash)
+
+    assert r2_hash != r1_hash, "r2 and r1 hashes must differ"
+    assert r2_hash != auto_hash, "r2 and auto-pipeline hashes must differ"
+    assert r1_hash != auto_hash, "r1 and auto-pipeline hashes must differ"
+
+    # Verify byte[5] of the preimage distinguishes the two edit namespaces
+    r2_preimage = "edit:boundary:" + old_rh
+    r1_preimage = "edit:" + old_rh
+    assert r2_preimage[5] == "b"
+    assert r1_preimage[5] == "s"
