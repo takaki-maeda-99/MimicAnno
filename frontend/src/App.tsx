@@ -8,18 +8,17 @@ export default function App() {
   const episodeId = params.get("run");
   const handEpisodeId = params.get("hand");
   const runHashShort = params.get("hash") ?? undefined;
-  // Phase 5 B r1 T12: ?api=1 switches fetches from static /runs/ to the
-  // FastAPI /api/runs/ backend (and gates the editable phase dropdown
-  // shipped in T13).
   const apiEnabled = params.get("api") === "1";
+  // S-RS: ?run_set= selects a subdirectory under the runs root.
+  const runSet = params.get("run_set") ?? undefined;
 
   const inner =
     handEpisodeId !== null ? (
       <HandViewer episodeId={handEpisodeId} />
     ) : episodeId === null ? (
-      <RunList />
+      <RunList runSet={runSet} />
     ) : (
-      <RunViewer episodeId={episodeId} runHashShort={runHashShort} />
+      <RunViewer episodeId={episodeId} runHashShort={runHashShort} runSet={runSet} />
     );
   return <ApiToggleProvider apiEnabled={apiEnabled}>{inner}</ApiToggleProvider>;
 }
