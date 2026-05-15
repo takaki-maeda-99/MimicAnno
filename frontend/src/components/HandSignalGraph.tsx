@@ -22,14 +22,37 @@ function extractSeries(
   return pts;
 }
 
+function robustRange(pts: DataPoint[]): { minVal: number; maxVal: number } {
+  // Use only depth_ok=true values to avoid outliers from HaMeR pseudo-metric frames.
+  const vals: number[] = [];
+  for (const pt of pts) {
+    if (!pt || !pt.depth_ok) continue;
+    for (const v of pt.cam_t) vals.push(v);
+  }
+  if (vals.length === 0) {
+    // Fallback: use all frames if no depth_ok=true data
+    for (const pt of pts) {
+      if (!pt) continue;
+      for (const v of pt.cam_t) vals.push(v);
+    }
+  }
+  if (vals.length === 0) return { minVal: 0, maxVal: 1 };
+  vals.sort((a, b) => a - b);
+  const p2 = vals[Math.floor(vals.length * 0.02)];
+  const p98 = vals[Math.ceil(vals.length * 0.98 - 1)];
+  const pad = (p98 - p2) * 0.1 || 0.01;
+  return { minVal: p2 - pad, maxVal: p98 + pad };
+}
+
 function buildPaths(
   pts: DataPoint[],
   axisIdx: 0 | 1 | 2,
   minVal: number,
-  range: number,
+  maxVal: number,
   widthPx: number,
 ): { solid: string; dashed: string } {
   const n = pts.length;
+  const range = maxVal - minVal || 1;
   let solidD = "";
   let dashedD = "";
   let inSolid = false;
@@ -43,7 +66,8 @@ function buildPaths(
       continue;
     }
     const x = ((n <= 1 ? 0 : i / (n - 1)) * widthPx).toFixed(1);
-    const y = (PAD_V + (1 - (pt.cam_t[axisIdx] - minVal) / range) * (HEIGHT - PAD_V * 2)).toFixed(1);
+    const rawY = PAD_V + (1 - (pt.cam_t[axisIdx] - minVal) / range) * (HEIGHT - PAD_V * 2);
+    const y = Math.max(0, Math.min(HEIGHT, rawY)).toFixed(1);
 
     if (pt.depth_ok) {
       solidD += inSolid ? ` L ${x} ${y}` : ` M ${x} ${y}`;
@@ -78,19 +102,7 @@ export default function HandSignalGraph({
   if (widthPx <= 0 || totalFrames <= 0) return null;
 
   const pts = extractSeries(signals, side, totalFrames);
-
-  let minVal = Infinity;
-  let maxVal = -Infinity;
-  for (const pt of pts) {
-    if (!pt) continue;
-    for (const v of pt.cam_t) {
-      if (v < minVal) minVal = v;
-      if (v > maxVal) maxVal = v;
-    }
-  }
-  if (!isFinite(minVal)) return null;
-
-  const range = maxVal - minVal || 1;
+  const { minVal, maxVal } = robustRange(pts);
   const axes = [0, 1, 2] as const;
   const playheadX = ((totalFrames <= 1 ? 0 : currentFrame / (totalFrames - 1)) * widthPx).toFixed(1);
 
@@ -119,7 +131,7 @@ export default function HandSignalGraph({
       >
         {axes.map((axisIdx) => {
           const color = COLORS[axisIdx === 0 ? "x" : axisIdx === 1 ? "y" : "z"];
-          const { solid, dashed } = buildPaths(pts, axisIdx, minVal, range, widthPx);
+          const { solid, dashed } = buildPaths(pts, axisIdx, minVal, maxVal, widthPx);
           return (
             <g key={axisIdx}>
               {solid && (
