@@ -1,3 +1,5 @@
+html { background: var(--bg); }
+
 :root {
   --bg:          #171717;
   --bg-surface:  #262626;
