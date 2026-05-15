@@ -56,6 +56,33 @@ class PublishRequest:
             self.input_hash_short = self.input_hash.removeprefix("sha256:")[:8]
 
 
+def _upsert_canonical_name_in_manifest(
+    manifest_path: Path, canonical_name: str,
+) -> None:
+    """Phase 5 B r1 (spec 2026-05-13 §3.3): bake the resolved
+    canonical_name into the tmp manifest.json after write_artifacts
+    validated the bare-hash invariant (publish.py:120-125) but BEFORE
+    the rename at line 165.
+
+    HASH INVARIANT: this upsert is safe ONLY because
+    ``Manifest.to_dict()`` conditionally emits ``canonical_name`` (the
+    field is omitted when None — see schema.py). The hash recorded
+    INSIDE ``manifest.run_hash`` (a plain field, not a digest of the
+    file) is not recomputed by this upsert, so downstream consumers
+    (`_existing_run_hash`, the line-121 assertion if rerun) keep
+    reading the same value.
+
+    If ``Manifest.to_dict()`` ever starts including ``canonical_name``
+    unconditionally, the assertion at line 121 would catch the breakage
+    before this upsert runs.
+    """
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["canonical_name"] = canonical_name
+    manifest_path.write_text(
+        json.dumps(raw, indent=2, sort_keys=False), encoding="utf-8",
+    )
+
+
 def _existing_run_hash(run_dir: Path) -> str | None:
     manifest = run_dir / "manifest.json"
     if not manifest.exists():
@@ -137,6 +164,14 @@ def publish(
                     shutil.rmtree(paths.tmp, ignore_errors=True)
                     _self_heal_index(runs_root, req, name)
                     return PublishOutcome.REUSED_LOCKED
+
+            # Step 6.5 (Phase 5 B r1 spec §3.3): bake canonical_name into
+            # the tmp manifest now that the collision-resolved name is
+            # known. See `_upsert_canonical_name_in_manifest` docstring
+            # for the hash-invariant guarantee.
+            _upsert_canonical_name_in_manifest(
+                paths.tmp / "manifest.json", name,
+            )
 
             # Step 7: run-directory replacement (§6.5).
             # 7a) remove .writer.json from the soon-to-be-final dir.

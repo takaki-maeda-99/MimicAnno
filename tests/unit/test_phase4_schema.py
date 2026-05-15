@@ -47,6 +47,13 @@ def test_subtask_segment_smoothing_ops_unknown_op_rejected() -> None:
         _make_segment(smoothing_ops=["not_an_op"])
 
 
+def test_subtask_segment_smoothing_ops_edited_accepted() -> None:
+    """Phase 5 B r1: ``"edited"`` is a valid smoothing op marking human
+    relabel via PATCH /api/runs/<name>/segments/<id>."""
+    seg = _make_segment(smoothing_ops=["merge_same_label", "edited"])
+    assert seg.smoothing_ops == ["merge_same_label", "edited"]
+
+
 def test_subtask_segment_smoothing_ops_none_rejected() -> None:
     with pytest.raises(TypeError, match="smoothing_ops must be"):
         _make_segment(smoothing_ops=None)

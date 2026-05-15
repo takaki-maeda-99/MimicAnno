@@ -129,9 +129,11 @@ LabelSource = Literal[
 ]
 
 
-SmoothingOpName = Literal["merge_same_label", "merge_short", "viterbi_relabel"]
+SmoothingOpName = Literal[
+    "merge_same_label", "merge_short", "viterbi_relabel", "edited",
+]
 _ALLOWED_SMOOTHING_OPS: frozenset[str] = frozenset({
-    "merge_same_label", "merge_short", "viterbi_relabel",
+    "merge_same_label", "merge_short", "viterbi_relabel", "edited",
 })
 
 
@@ -371,6 +373,13 @@ class Manifest:
     # Phase 4 only — None on Phase 1/2/3 manifests; key omitted from to_dict
     # output when None to preserve forward-compat with older readers (spec §4.3).
     smoothing_summary: SmoothingSummary | None = None
+    # Phase 5 B r1 — canonical_name materializes the run's dir name into the
+    # manifest so post-edit readers don't have to derive it from disk path
+    # (spec 2026-05-13-phase5-B §3.3). edited_at carries the latest human
+    # PATCH time (§3.2 step 7). Both conditionally emitted to keep pre-r1
+    # manifests byte-identical (load-bearing for T4's hash invariant).
+    canonical_name: str | None = None
+    edited_at: str | None = None
 
     def artifact(self, role: str) -> Artifact:
         for a in self.artifacts:
@@ -400,6 +409,10 @@ class Manifest:
         }
         if self.smoothing_summary is not None:
             d["smoothing_summary"] = self.smoothing_summary.to_dict()
+        if self.canonical_name is not None:
+            d["canonical_name"] = self.canonical_name
+        if self.edited_at is not None:
+            d["edited_at"] = self.edited_at
         return d
 
 

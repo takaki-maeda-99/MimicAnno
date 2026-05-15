@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useApiToggle } from "../lib/ApiToggleContext";
 import { assertIndexSchema, SUPPORTED_MAJORS, type IndexDoc } from "../lib/manifest";
 
 type State =
@@ -8,12 +9,13 @@ type State =
 
 export default function RunList() {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const { apiBase } = useApiToggle();
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch("/runs/index.json");
+        const r = await fetch(`${apiBase}index.json`);
         if (r.status === 404) {
           if (!cancelled) {
             setState({
@@ -42,7 +44,7 @@ export default function RunList() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiBase]);
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 if TYPE_CHECKING:
     from fastapi import FastAPI, Request
@@ -59,14 +60,22 @@ def install_handlers(app: FastAPI) -> None:
     async def _http_exception_handler(
         request: Request, exc: Exception,
     ) -> JSONResponse:
-        assert isinstance(exc, HTTPException)
+        # Accept both Starlette's base HTTPException (auto-405 emitter)
+        # and FastAPI's subclass.
+        assert isinstance(exc, StarletteHTTPException)
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        # Phase 5 B r1 spec §5.1 #11: forward exc.headers so Starlette's
+        # auto-405 ``Allow: GET, HEAD`` survives the envelope rewrap.
+        # Hand-raised HTTPException without headers stays default.
+        exc_headers = getattr(exc, "headers", None)
+        headers = dict(exc_headers) if exc_headers else None
         return JSONResponse(
             status_code=exc.status_code,
             content=_envelope(
                 code=f"http_{exc.status_code}",
                 message=detail,
             ),
+            headers=headers,
         )
 
     async def _unhandled_handler(
@@ -83,5 +92,9 @@ def install_handlers(app: FastAPI) -> None:
         )
 
     app.add_exception_handler(MimicAnnoHTTPError, _mimicanno_handler)
+    # Register the Starlette base HTTPException so Starlette's auto-405
+    # (raised before FastAPI's wrapper) also routes through our envelope.
+    # FastAPI's HTTPException is a subclass so both are caught.
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(HTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_handler)

@@ -15,6 +15,14 @@ import {
 } from "../lib/manifest";
 import { selectRun, type RunSelection } from "../lib/runSelection";
 import { fetchRetry } from "../lib/fetchRetry";
+import { useApiToggle } from "../lib/ApiToggleContext";
+import {
+  patchSegmentPhase,
+  runNameFromManifestUrl,
+  type PatchResult,
+} from "../lib/editClient";
+import { loadLabelset, type LabelSetDoc } from "../lib/labelsetClient";
+import SegmentTable, { type SegmentTableToast } from "./SegmentTable";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import WaveformView from "./WaveformView";
@@ -44,6 +52,27 @@ type Props = { episodeId: string; runHashShort: string | undefined };
 
 export default function RunViewer({ episodeId, runHashShort }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const { apiBase, apiEnabled } = useApiToggle();
+  const [labelset, setLabelset] = useState<LabelSetDoc | null>(null);
+  const [editInFlight, setEditInFlight] = useState(false);
+  const [staleRun, setStaleRun] = useState(false);
+  const [toast, setToast] = useState<SegmentTableToast | undefined>(undefined);
+
+  useEffect(() => {
+    if (!apiEnabled) return;
+    let cancelled = false;
+    loadLabelset(apiBase)
+      .then((doc) => {
+        if (!cancelled) setLabelset(doc);
+      })
+      .catch(() => {
+        // Non-fatal: SegmentTable falls back to read-only when labelset=null.
+        if (!cancelled) setLabelset(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, apiEnabled]);
   const abortRef = useRef<AbortController | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [widthPx, setWidthPx] = useState(0);
@@ -71,6 +100,143 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
     setCurrentTimeSec(0);
   }, [episodeId, runHashShort]);
 
+  // T13.10: PATCH callback. Single-in-flight guarded by editInFlight; on
+  // 200 we update manifest.run_hash to the response ETag and re-fetch
+  // annotation.json so server-recomputed overall_confidence + appended
+  // smoothing_ops "edited" + reviewer_id show up in the table. On 412
+  // we set staleRun (sticky until reload) and toast. editInFlight is
+  // cleared in a finally so a thrown error or aborted re-fetch can't
+  // wedge the UI.
+  const onPhaseEdit = async (
+    segmentId: string,
+    newPhase: string,
+    _oldPhase: string,
+  ): Promise<PatchResult> => {
+    if (state.kind !== "loaded") {
+      return {
+        kind: "error",
+        httpStatus: 0,
+        errorCode: null,
+        message: "viewer not loaded",
+      };
+    }
+    const data = state.data;
+    setEditInFlight(true);
+    setToast(undefined);
+    let result: PatchResult;
+    try {
+      const runName = runNameFromManifestUrl(data.manifestUrl);
+      result = await patchSegmentPhase({
+        apiBase,
+        runName,
+        segmentId,
+        newPhase,
+        ifMatchRunHash: data.manifest.run_hash,
+      });
+      if (result.kind === "ok") {
+        const newManifest = { ...data.manifest, run_hash: result.runHash };
+        setState((prev) =>
+          prev.kind === "loaded"
+            ? {
+                kind: "loaded",
+                data: { ...prev.data, manifest: newManifest },
+              }
+            : prev,
+        );
+        // Edits rewrite the manifest's run_hash. If the URL came in with
+        // an explicit ?hash=<old_short>, it now refers to a hash that's
+        // no longer in index.json — reload would surface "no run for
+        // episode_id=X hash=<old>". Bring the URL back in sync via
+        // history.replaceState (no entry pushed to the history stack,
+        // so the browser's back button still works).
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has("hash")) {
+            const PREFIX = "sha256:";
+            const SHORT_LEN = 12;
+            const stripped = result.runHash.startsWith(PREFIX)
+              ? result.runHash.slice(PREFIX.length)
+              : result.runHash;
+            url.searchParams.set("hash", stripped.slice(0, SHORT_LEN));
+            window.history.replaceState(null, "", url.toString());
+          }
+        }
+        // Re-fetch annotation.json to pick up server-recomputed fields.
+        try {
+          const annUrl = resolveUrl(
+            data.manifestUrl,
+            artifactUrl(newManifest, "annotation"),
+          );
+          const r = await fetchRetry(annUrl);
+          if (r.ok) {
+            const ann = (await r.json()) as AnnotationResult;
+            setState((prev) =>
+              prev.kind === "loaded"
+                ? {
+                    kind: "loaded",
+                    data: {
+                      ...prev.data,
+                      annotation: { kind: "ok", data: ann },
+                    },
+                  }
+                : prev,
+            );
+          } else {
+            setToast({
+              level: "sync_warning",
+              message: "saved, but local view may be stale (refetch failed)",
+            });
+          }
+        } catch {
+          setToast({
+            level: "sync_warning",
+            message: "saved, but local view may be stale (refetch failed)",
+          });
+        }
+      } else if (result.kind === "conflict") {
+        setStaleRun(true);
+        setToast({
+          level: "conflict",
+          message: `${result.errorCode}: ${result.serverMessage}`,
+        });
+      } else if (result.kind === "invalid") {
+        setToast({
+          level: "invalid",
+          message: `${result.errorCode}: ${result.serverMessage}`,
+        });
+      } else if (result.kind === "not_found") {
+        setToast({
+          level: "error",
+          message: `${result.errorCode}: ${result.serverMessage}`,
+        });
+      } else {
+        // Spec §3.5: the toast must surface the server's `error` envelope
+        // code, not a generic "HTTP 500: …". The PatchResult.error variant
+        // carries errorCode (may be null if the response body wasn't a
+        // valid envelope — fall back to httpStatus in that case).
+        const prefix =
+          result.errorCode !== null
+            ? result.errorCode
+            : `HTTP ${result.httpStatus}`;
+        setToast({
+          level: "error",
+          message: `${prefix}: ${result.message}`,
+        });
+      }
+    } catch (e) {
+      result = {
+        kind: "error",
+        httpStatus: 0,
+        errorCode: null,
+        message: e instanceof Error ? e.message : String(e),
+      };
+      setToast({ level: "error", message: result.message });
+    } finally {
+      setEditInFlight(false);
+    }
+    return result;
+  };
+
   const setVideoError = (message: string) => {
     setState((prev) =>
       prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, videoError: message } } : prev,
@@ -85,7 +251,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
 
     (async () => {
       try {
-        const r = await fetch("/runs/index.json", { signal: controller.signal });
+        const r = await fetch(`${apiBase}index.json`, { signal: controller.signal });
         if (!r.ok) {
           setState({ kind: "error", message: `failed to load index.json: HTTP ${r.status}` });
           return;
@@ -100,7 +266,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         const entry = selection.kind === "single" ? selection.entry : selection.chosen;
 
         const manifestUrl = resolveUrl(
-          new URL("/runs/index.json", window.location.origin).toString(),
+          new URL(`${apiBase}index.json`, window.location.origin).toString(),
           entry.manifest_url,
         );
         const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
@@ -172,7 +338,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
     })();
 
     return () => controller.abort();
-  }, [episodeId, runHashShort]);
+  }, [episodeId, runHashShort, apiBase]);
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
@@ -237,6 +403,17 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           />
         )}
       </div>
+      {state.data.annotation.kind === "ok" && (
+        <SegmentTable
+          segments={state.data.annotation.data.segments}
+          apiEnabled={apiEnabled}
+          labelset={labelset}
+          onPhaseEdit={onPhaseEdit}
+          editInFlight={editInFlight}
+          staleRun={staleRun}
+          toast={toast}
+        />
+      )}
     </div>
   );
 }

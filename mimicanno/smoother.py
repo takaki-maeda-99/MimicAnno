@@ -25,7 +25,9 @@ from typing import Literal
 from mimicanno.config import SmootherConfig
 from mimicanno.schema import SmoothingSummary, SubtaskSegment
 
-SmoothingOp = Literal["merge_same_label", "merge_short", "viterbi_relabel"]
+SmoothingOp = Literal[
+    "merge_same_label", "merge_short", "viterbi_relabel", "edited",
+]
 _RESERVED_PHASES: frozenset[str] = frozenset({"unlabeled", "unknown"})
 _LOG = logging.getLogger(__name__)
 
