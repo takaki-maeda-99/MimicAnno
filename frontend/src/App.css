@@ -1,7 +1,8 @@
+html { background: var(--bg); }
+
 :root {
   --bg:          #171717;
   --bg-surface:  #262626;
-  --bg-elevated: #404040;
   --text:        #e5e5e5;
   --text-muted:  #737373;
   --border:      #404040;

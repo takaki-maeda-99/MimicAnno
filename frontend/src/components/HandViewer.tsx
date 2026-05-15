@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   HandIndexDoc,
   HandMetaDoc,
@@ -6,6 +6,7 @@ import type {
   HandSignalsDoc,
 } from "../lib/handsClient";
 import { projectHandAxes, drawAxes } from "../lib/handAxes";
+import HandScrubBar from "./HandScrubBar";
 
 const AXIS_LENGTH_M = 0.05;
 
@@ -116,6 +117,12 @@ function VideoWithAxes({
 // This is an intentional divergence from the RunViewer pattern (useApiToggle).
 const HANDS_API_BASE = "/api/hands/";
 
+function formatTime(sec: number): string {
+  const mm = Math.floor(sec / 60).toString().padStart(2, "0");
+  const ss = (sec % 60).toFixed(1).padStart(4, "0");
+  return `${mm}:${ss}`;
+}
+
 type LoadedState = {
   meta: HandMetaDoc;
   signals: HandSignalsDoc;
@@ -205,6 +212,21 @@ export default function HandViewer({ episodeId }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [widthPx, setWidthPx] = useState(0);
+  const obsRef = useRef<ResizeObserver | null>(null);
+  const rowRef = useCallback((node: HTMLDivElement | null) => {
+    obsRef.current?.disconnect();
+    obsRef.current = null;
+    if (node) {
+      if (typeof ResizeObserver === "undefined") return;
+      const obs = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect.width ?? 0;
+        if (w > 0) setWidthPx(w);
+      });
+      obs.observe(node);
+      obsRef.current = obs;
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -323,10 +345,11 @@ export default function HandViewer({ episodeId }: Props) {
 
   return (
     <div className="hand-viewer">
-      <h1>hand viewer — {episodeId}</h1>
-      <a href="/">← 戻る</a>
+      <div className="back-link">
+        <a href="/">← runs</a>
+      </div>
       <div className="hand-viewer-layout">
-        <div className="hand-viewer-video">
+        <div className="hand-viewer-video" ref={rowRef}>
           <VideoWithAxes
             videoUrl={`${HANDS_API_BASE}${episodeId}/video`}
             currentTimeSec={currentTimeSec}
@@ -339,7 +362,15 @@ export default function HandViewer({ episodeId }: Props) {
             leftHand={leftHand}
           />
           {videoError && <div className="error">{videoError}</div>}
-          <div>frame: {currentFrame} / {totalFrames - 1}</div>
+          <HandScrubBar
+            widthPx={widthPx}
+            totalFrames={totalFrames}
+            currentFrame={currentFrame}
+            onSeek={(f) => fps > 0 && setCurrentTimeSec(f / fps)}
+          />
+          <div className="hand-scrub-info">
+            frame {currentFrame} / {totalFrames - 1}{"  |  "}{formatTime(currentTimeSec)}
+          </div>
         </div>
         <div className="hand-viewer-data">
           <HandDataPanel frameKey={frameKey} signals={signals} />

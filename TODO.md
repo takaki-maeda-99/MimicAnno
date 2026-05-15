@@ -12,8 +12,12 @@
 
 ### UI デザイン改善 (2026-05-16)
 
-- [ ] **全体テーマをダーク/コントラスト系に変更** — 現状は `background: #fafafa` の白背景で視認性が低い。`App.css` を起点に全体を暗め or コントラスト強めのテーマに変更
-- [ ] **HandViewer を RunViewer 相当の GUI に統一** — 手の動画ビューアが RunViewer (so101 ラベリング画面) と比べてレイアウト・コントロールが貧弱。最低限以下を揃える:
+- [x] **UI 改善** (spec: `docs/superpowers/specs/2026-05-16-ui-improvement-design.md`, plan: `docs/superpowers/plans/2026-05-16-ui-improvement-plan.md`, レビュー×1 完了 rev2)
+  - 全体テーマをダーク系に変更 (T1)
+  - HandScrubBar 新規コンポーネント (T2)
+  - HandViewer レイアウト改修 (T3)
+- [x] **[旧メモ] 全体テーマをダーク/コントラスト系に変更** — 現状は `background: #fafafa` の白背景で視認性が低い。`App.css` を起点に全体を暗め or コントラスト強めのテーマに変更
+- [x] **HandViewer を RunViewer 相当の GUI に統一** — 手の動画ビューアが RunViewer (so101 ラベリング画面) と比べてレイアウト・コントロールが貧弱。最低限以下を揃える:
   - RunViewer と同じ動画プレイヤー (`VideoPlayer.tsx`) + タイムラインを流用
   - フレームスクラブ / 再生ボタン / 現在フレーム番号表示
   - 手首 xyz / 向き / pinch パネルを RunViewer のサイドパネル的配置に揃える
@@ -90,24 +94,24 @@
 
 | ID | Worktree | ブランチ | 残作業 |
 |---|---|---|---|
-| **S-HV** | `MimicAnno-hand-viewer` | `feat/hand-viewer` | T5 smoke + regen (T1-T4 は main 済) |
-| **S-B2** | `MimicAnno-phase5b-r2` | `feat/phase5-b-r2-boundary-drag` | spec → plan → impl (境界ドラッグ) |
-| **S-D** | `MimicAnno-phase5d` | `feat/phase5-d-eval-harness` | spec → plan → impl (eval harness、Phase 5 A read-only API を消費し B2 と並列可) |
+| **S-HV** | ✅ SHIPPED | `feat/hand-viewer` | 全完了 (regen 含む、2026-05-16) |
+| **S-B2** | ✅ SHIPPED | `feat/phase5-b-r2-boundary-drag` | main マージ済 (`9c25b87`、2026-05-16) |
+| **S-D** | `MimicAnno-phase5d` | `feat/phase5-d-eval-harness` | **D-impl-backend + D-impl-frontend** (spec/plan 完成済) |
 | **S-RS** | ✅ SHIPPED | `feat/run-set-switcher` | UI ドロップダウンで runs/ 直下のサブディレクトリを切り替え (2026-05-16) |
 
 ### 各 worktree でやること
 
-#### S-HV (hand-viewer) ✅ main マージ済 (`5f2e8fb`)
+#### S-HV (hand-viewer) ✅ 完了 (2026-05-16)
 - [x] **HV-T5**: smoke 完了 + ブラウザ 4 項目確認済 (2026-05-16)
 - [x] **HV-axes**: wrist XYZ 軸 canvas overlay 実装済 (`2307219`、`feat/hand-viewer-axes` ブランチ)
-- [x] **HV-regen**: 全 9 episode を v2 で再生成済み (2026-05-15 23:48、T1 実行時に同時生成。全 ep schema_v=2、cam_t/euler_deg/depth_ok/pinch_m 確認済み)
+- [x] **HV-regen**: 全 9 episode を v2 で再生成済 (2026-05-16 04:00、signals.json 更新確認済)
 
-#### S-B2 (phase 5 B r2: 境界ドラッグ)
+#### S-B2 (phase 5 B r2: 境界ドラッグ) ✅ 完了 (2026-05-16)
 - [x] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 完成・push済 (`3925d23`)
 - [x] **B2-spec-review**: 独立レビュー 12 件反映済
 - [x] **B2-plan**: `docs/superpowers/plans/2026-05-16-phase5-b-r2-boundary-drag-plan.md` 完成・push済
-- [ ] **B2-impl**: PATCH endpoint 拡張 + `BoundaryDragLayer.tsx` + `RunViewer.tsx` hook + tests
-- [ ] **B2-smoke**: SO101 v5 + Piper v5 で境界編集 → 保存 → 再読込が往復することを確認
+- [x] **B2-impl**: PATCH endpoint 拡張 + `BoundaryDragLayer.tsx` + `RunViewer.tsx` hook + tests
+- [x] **B2-smoke**: main マージ済 (`9c25b87`)
 - [ ] **B2-future**: r3 reviewed 単独トグル / r4 object edit は別 PR
 
 #### S-D (Phase 5 D: Evaluation harness)
@@ -125,9 +129,9 @@
 - [x] **RS-smoke**: so101(23) / piper(39) 切り替え確認、traversal ブロック確認
 
 ### マージ順 (master plan §3)
-1. S-HV (smoke 完了次第、最短マージ)
-2. S-B2 (impl + smoke 完了後)
-3. S-D (B2 マージ後に frontend 統合)
+1. ~~S-HV~~ ✅ マージ済
+2. ~~S-B2~~ ✅ マージ済
+3. S-D (impl 完了後にマージ)
 
 ---
 
