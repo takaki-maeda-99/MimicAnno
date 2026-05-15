@@ -7,6 +7,7 @@ Two route families + /healthz:
   the ETag); other artifacts stream via FileResponse to keep memory flat
   for 10 MB+ tracks.json (spec §4.1 #20).
 - ``GET /healthz`` → liveness for uvicorn ``--reload`` and future E
+- ``GET /api/run-sets`` → list of run-set subdirectories (S-RS)
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from mimicanno.server.edit_repo import (
@@ -28,7 +29,7 @@ from mimicanno.server.edit_repo import (
 )
 from mimicanno.server.errors import MimicAnnoHTTPError
 from mimicanno.server.labelset import LabelSetCache
-from mimicanno.server.runs_repo import RunsRepository
+from mimicanno.server.runs_repo import RunsRepository, list_run_sets
 
 _LOG = logging.getLogger("mimicanno.server")
 
@@ -40,20 +41,46 @@ def make_router(
 ) -> APIRouter:
     """Build a router bound to a specific runs root + labelset.
 
-    ``reviewer`` is captured in closure for the T8 PATCH route to use
-    when stamping edits. Read endpoints don't reference it.
-    """
-    repo = RunsRepository(runs_root)
-    resolved_root = repo.root
+    ``runs_root`` may be a parent directory (multi-mode) or a run-set
+    directory that already contains index.json (legacy mode). The
+    ``?run_set=`` query parameter selects a subdirectory at request time.
 
-    def get_repo() -> RunsRepository:
-        return repo
+    ``reviewer`` is captured in closure for the PATCH route.
+    """
+    parent_root = runs_root.resolve()
+
+    def get_effective_root(
+        run_set: str | None = Query(None, alias="run_set"),
+    ) -> Path:
+        if run_set is None or run_set == ".":
+            return parent_root
+        # Security: symlink-safe 1-level check — must be direct child of parent_root.
+        effective = (parent_root / run_set).resolve()
+        if not effective.is_relative_to(parent_root) or effective == parent_root:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_run_set",
+                message=f"run_set {run_set!r} is not a direct subdirectory",
+            )
+        if not effective.is_dir():
+            raise MimicAnnoHTTPError(
+                status=404, code="run_set_not_found",
+                message=f"run_set {run_set!r} not found",
+            )
+        return effective
 
     router = APIRouter()
 
     @router.get("/healthz")
     def healthz() -> dict[str, str]:
-        return {"status": "ok", "runs_root": str(resolved_root)}
+        return {"status": "ok", "runs_root": str(parent_root)}
+
+    @router.get("/api/run-sets")
+    def get_run_sets() -> Response:
+        data = list_run_sets(parent_root)
+        return Response(
+            content=json.dumps(data).encode(),
+            media_type="application/json",
+        )
 
     @router.get("/api/labelset")
     def get_labelset() -> Response:
@@ -68,8 +95,11 @@ def make_router(
         )
 
     @router.api_route("/api/runs/index.json", methods=["GET", "HEAD"])
-    def get_index(r: RunsRepository = Depends(get_repo)) -> Response:
-        return Response(content=r.read_index(), media_type="application/json")
+    def get_index(
+        effective_root: Path = Depends(get_effective_root),
+    ) -> Response:
+        repo = RunsRepository(effective_root)
+        return Response(content=repo.read_index(), media_type="application/json")
 
     @router.api_route(
         "/api/runs/{name}/segments/{segment_id}",
@@ -79,6 +109,7 @@ def make_router(
         name: str,
         segment_id: str,
         request: Request,
+        effective_root: Path = Depends(get_effective_root),
     ) -> Response:
         # Step 1: Content-Type (415). RFC 7231 case-insensitive.
         ct = (
@@ -128,15 +159,10 @@ def make_router(
             )
 
         # Step 4: edit_repo.apply_edit + EditError → HTTP mapping.
-        # T11: dispatch the blocking write to a threadpool worker so the
-        # event loop stays responsive (otherwise PATCH would block
-        # /healthz and other endpoints) AND so two concurrent PATCHes
-        # race for the file_lock instead of being serialised at the
-        # event-loop level.
         try:
             new_manifest = await asyncio.to_thread(
                 apply_edit,
-                runs_root=runs_root,
+                runs_root=effective_root,
                 name=name,
                 segment_id=segment_id,
                 new_phase=body["phase"],
@@ -180,23 +206,20 @@ def make_router(
     def get_artifact(
         name: str,
         artifact: str,
-        r: RunsRepository = Depends(get_repo),
+        effective_root: Path = Depends(get_effective_root),
     ) -> Response:
-        path, body = r.open_artifact(name, artifact)
+        repo = RunsRepository(effective_root)
+        path, body = repo.open_artifact(name, artifact)
         headers: dict[str, str] = {"Cache-Control": "no-cache"}
 
         if artifact == "manifest.json":
             # body is guaranteed non-None here (open_artifact contract).
             assert body is not None
-            # Parse for ETag. Failure (truncated JSON) raises and is caught
-            # by the global Exception handler → 500 without stack leak.
             parsed = cast(dict[str, Any], json.loads(body))
             run_hash = parsed.get("run_hash")
             if isinstance(run_hash, str):
                 headers["ETag"] = f'"{run_hash}"'
             else:
-                # Surface the issue early: Phase 5 B's If-Match will silently
-                # fall through to unconditional updates if ETag is missing.
                 _LOG.warning(
                     "manifest %s/%s lacks run_hash; ETag header omitted",
                     name, artifact,
@@ -205,8 +228,7 @@ def make_router(
                 content=body, headers=headers, media_type="application/json",
             )
 
-        # Non-manifest: FileResponse streams. Pick media_type from the
-        # artifact suffix so video.mp4 doesn't get served as JSON.
+        # Non-manifest: FileResponse streams.
         media_type = "video/mp4" if artifact.endswith(".mp4") else "application/json"
         return FileResponse(
             path=path, headers=headers, media_type=media_type,
