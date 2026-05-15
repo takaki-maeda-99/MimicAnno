@@ -7,6 +7,7 @@ import type {
 } from "../lib/handsClient";
 import { projectHandAxes, drawAxes } from "../lib/handAxes";
 import HandScrubBar from "./HandScrubBar";
+import HandSignalGraph from "./HandSignalGraph";
 
 const AXIS_LENGTH_M = 0.05;
 
@@ -371,6 +372,22 @@ export default function HandViewer({ episodeId }: Props) {
           <div className="hand-scrub-info">
             frame {currentFrame} / {totalFrames - 1}{"  |  "}{formatTime(currentTimeSec)}
           </div>
+          <HandSignalGraph
+            signals={signals}
+            side="right"
+            widthPx={widthPx}
+            totalFrames={totalFrames}
+            currentFrame={currentFrame}
+            onSeek={(f) => fps > 0 && setCurrentTimeSec(f / fps)}
+          />
+          <HandSignalGraph
+            signals={signals}
+            side="left"
+            widthPx={widthPx}
+            totalFrames={totalFrames}
+            currentFrame={currentFrame}
+            onSeek={(f) => fps > 0 && setCurrentTimeSec(f / fps)}
+          />
         </div>
         <div className="hand-viewer-data">
           <HandDataPanel frameKey={frameKey} signals={signals} />
