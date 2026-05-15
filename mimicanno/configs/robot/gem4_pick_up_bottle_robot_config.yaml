@@ -1,21 +1,10 @@
 # GEM4_pick_up_bottle GenericAdapter v0.2.0 robot-config
-#
-# gripper_pos 実測 (全 301 ep, N=57278 フレーム, 2026-05-16):
-#   min=-5.2302  p1=-5.1246  p5=-5.0944
-#   p95=-1.6093  p99=-1.4250  max=-0.0269
-#
-# 正規化: (g - (-5.25)) / (0 - (-5.25)) = (g + 5.25) / 5.25
-#   → min 付近 ≈ 0.0 (閉), max 付近 ≈ 1.0 (開)
-# scale_min: 実測 min -5.23 より少し余裕を見て -5.25
-# scale_max: 実測 max -0.027 → 0.0 で丸め
-#
-# 注意: info.json の gripper_convention {closed_at:1, open_at:0} は
-#   生値と整合しないため信用しない。実測ベースで決定。
+# 再ダウンロード版 (2026-05-16) では全エピソード gripper_pos が 0~1 正規化済み
 schema_version: "0.2.0"
 name: gem4_pick_up_bottle
 gripper_column: observation.state.gripper_pos
-gripper_scale_min: -5.25
-gripper_scale_max: 0.0
+gripper_scale_min: 0.0
+gripper_scale_max: 1.0
 eef_xyz_column: observation.state.ee_pos
 eef_rotvec_column: observation.state.ee_rotvec
 eef_quat_column: null

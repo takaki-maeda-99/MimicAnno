@@ -1,0 +1,8 @@
+schema_version: "0.2.0"
+name: gem4_open_the_jar
+gripper_column: "observation.state.gripper_pos"
+gripper_scale_min: 0.0
+gripper_scale_max: 1.0
+eef_xyz_column: "observation.state.ee_pos"
+eef_rotvec_column: "observation.state.ee_rotvec"
+eef_quat_column: null
