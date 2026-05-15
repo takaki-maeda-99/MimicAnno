@@ -169,3 +169,76 @@ def test_aggregate_empty() -> None:
     assert agg.total_edits == 0
     assert agg.client_coverage == 0.0
     assert agg.total_segments == 0
+
+
+# ----------------------------------------------------------------------------
+# Phase 5 D — render smoke + empty_segments guard
+# ----------------------------------------------------------------------------
+
+
+def test_render_markdown_smoke() -> None:
+    """render.render_markdown returns a str containing a header and a row per run."""
+    from mimicanno.eval.render import render_markdown
+
+    m1 = compute_metrics(
+        _make_annotation(history=[_event(duration_ms=500)], n_human=1, n_total=4),
+        "run_a",
+    )
+    m2 = compute_metrics(
+        _make_annotation(history=[_event(duration_ms=200)], n_human=0, n_total=2),
+        "run_b",
+    )
+    agg = aggregate([m1, m2])
+
+    out = render_markdown([m1, m2], agg)
+    assert isinstance(out, str)
+    # Header from render_markdown.
+    assert "MimicAnno eval" in out
+    # Required columns mentioned in spec.
+    for col in (
+        "run",
+        "edits",
+        "edit_time_ms",
+        "client_cov",
+        "human_segs",
+        "total_segs",
+        "label_agr",
+    ):
+        assert col in out
+    # Each run name and the aggregate row appear.
+    assert "run_a" in out
+    assert "run_b" in out
+    assert "**total**" in out
+
+
+def test_render_json_smoke() -> None:
+    """render.render_json returns parseable JSON with the {runs, aggregate} shape."""
+    from mimicanno.eval.render import render_json
+
+    m1 = compute_metrics(
+        _make_annotation(history=[_event(duration_ms=500)], n_human=1, n_total=4),
+        "run_a",
+    )
+    agg = aggregate([m1])
+
+    out = render_json([m1], agg)
+    assert isinstance(out, str)
+    import json as _json
+    parsed = _json.loads(out)
+    assert isinstance(parsed, dict)
+    assert isinstance(parsed.get("runs"), list)
+    assert len(parsed["runs"]) == 1
+    assert parsed["runs"][0]["run"] == "run_a"
+    assert isinstance(parsed.get("aggregate"), dict)
+    assert parsed["aggregate"]["run"] == "**total**"
+
+
+def test_empty_segments_no_zerodiv() -> None:
+    """compute_metrics on an annotation with zero segments must not ZeroDivide;
+    label_agreement defaults to 0.0 and total_segments to 0."""
+    ann = _make_annotation(n_total=0, history=[])
+    m = compute_metrics(ann, "run_empty")
+    assert m.total_segments == 0
+    assert m.label_agreement == 0.0
+    assert m.total_edits == 0
+    assert m.client_coverage == 0.0
