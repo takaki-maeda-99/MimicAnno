@@ -196,6 +196,7 @@ def annotate(
                 model_id=preflight.model_id,
                 resolved_checkpoint=preflight.resolved_checkpoint,
                 fixture_path=preflight.fixture_path,
+                is_lora_adapter=preflight.is_lora_adapter,
                 keyframes_per_segment=vlm_keyframes,
                 max_retries=vlm_max_retries,
             )
