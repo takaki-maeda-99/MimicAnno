@@ -52,16 +52,35 @@ run-set 間は完全に独立なので per-run-set ロックで正しい。`mimi
 
 ---
 
+## §1.5 レビューで判明した追加 MUST-fix (rev2)
+
+**R-M1: パストラバーサルチェックをシンボリックリンク対応に変更**
+`effective.parent != parent_root` は symlink 先が別 dir の場合に誤拒否する。
+`runs_repo.py` の `_is_under(candidate, root)` パターン (`is_relative_to`) と同じ方法を使い、
+`effective.is_relative_to(parent_root) and effective != parent_root` で 1 レベル直下を確認する。
+
+**R-M2: `fetchRunSets` は固定パス `/api/run-sets` を使う**
+`apiBase.replace("/runs/", "/run-sets")` は brittle。
+`fetch("/api/run-sets")` と直接書き、`apiEnabled=true` の場合のみ呼ぶ。
+
+**R-M3: `editClient.patchSegmentPhase` に `runSet?: string` 引数追加**
+`RunViewer.tsx` の `patchSegmentPhase` 呼び出しが `apiBase` しか渡さないため、PATCH URL に `?run_set=` が付かない。
+`editClient.ts` の `patchSegmentPhase` に `runSet?: string` を追加し、URL を
+`${apiBase}${name}/segments/${id}${runSet ? `?run_set=${runSet}` : ""}` で構成する。
+
+---
+
 ## §2 変更ファイル一覧
 
 | ファイル | 変更内容 |
 |---|---|
 | `mimicanno/server/runs_repo.py` | `list_run_sets(parent: Path) -> list[dict]` 追加 |
 | `mimicanno/server/routes.py` | `make_router` を `parent_root` ベースに変更、`?run_set=` 対応、`/api/run-sets` 追加 |
-| `frontend/src/lib/runsClient.ts` | 新規: `fetchRunSets()` |
+| `frontend/src/lib/runsClient.ts` | 新規: `fetchRunSets()` (固定 `/api/run-sets`, api mode 専用) |
+| `frontend/src/lib/editClient.ts` | `patchSegmentPhase` に `runSet?: string` 追加 |
 | `frontend/src/components/RunList.tsx` | run-set ドロップダウン + `?run_set=` URL param |
-| `frontend/src/App.tsx` | `run_set` URL param を `apiBase` に反映 |
-| `frontend/src/components/RunViewer.tsx` | artifact fetch に `?run_set=` を pass-through |
+| `frontend/src/App.tsx` | `run_set` URL param を `RunList` / `RunViewer` に prop で渡す |
+| `frontend/src/components/RunViewer.tsx` | artifact fetch (index.json + manifest + PATCH) に `?run_set=` を pass-through |
 
 CLIの `cli.py` は変更不要 (`--runs-root` は既存のまま; 親 dir を渡せばよい)。
 
@@ -129,9 +148,9 @@ def make_router(
     def get_effective_root(run_set: str | None = Query(None, alias="run_set")) -> Path:
         if run_set is None or run_set == ".":
             return parent_root
-        # security: ensure it's a direct subdir (no path traversal)
+        # security: symlink-safe check — must be exactly 1 level under parent_root
         effective = (parent_root / run_set).resolve()
-        if effective.parent != parent_root:
+        if not effective.is_relative_to(parent_root) or effective == parent_root:
             raise MimicAnnoHTTPError(status=400, code="invalid_run_set",
                                      message=f"run_set {run_set!r} is not a direct subdirectory")
         if not effective.is_dir():
@@ -193,7 +212,7 @@ def get_index(effective_root: Path = Depends(get_effective_root)) -> Response:
 `patch_segment` 内の `runs_root=runs_root` を `runs_root=effective_root` に変更。
 テスト: PATCH に `?run_set=so101_phase4_v5` が通ること (existing `test_routes_patch.py` パターンを参考)。
 
-### T6: `conftest.py` に `tmp_parent_runs_root` fixture 追加 (T1-T5 と同 commit でも可)
+### T6: `conftest.py` に `tmp_parent_runs_root` fixture 追加 (T1 と同 commit; T2 より先に必要)
 
 ```python
 @pytest.fixture
@@ -212,14 +231,16 @@ def tmp_parent_runs_root(tmp_path):
 // frontend/src/lib/runsClient.ts
 export type RunSetEntry = { name: string; label: string };
 
-export async function fetchRunSets(apiBase: string): Promise<RunSetEntry[]> {
-  const r = await fetch(`${apiBase.replace("/runs/", "/run-sets")}`);
+// api mode 専用。/api/run-sets は固定パス (apiBase 非依存)。
+export async function fetchRunSets(): Promise<RunSetEntry[]> {
+  const r = await fetch("/api/run-sets");
   if (!r.ok) return [];
   return r.json() as Promise<RunSetEntry[]>;
 }
 ```
 
 テスト (`__tests__/runsClient.test.ts`): vi.fn() で fetch をモック、`[{name:"so101_phase4_v5", label:"so101_phase4_v5"}]` を返すこと。
+`RunList.tsx` では `apiEnabled=true` の場合のみ `fetchRunSets()` を呼ぶ。
 
 ### T8: `RunList.tsx` にドロップダウン追加 (1 commit)
 
@@ -237,15 +258,39 @@ export async function fetchRunSets(apiBase: string): Promise<RunSetEntry[]> {
 
 シンプルな方針: `App.tsx` で `useSearchParams` → `runSet` を `RunList` / `RunViewer` に prop で渡す。
 
-### T10: `RunViewer.tsx` で artifact fetch に `?run_set=` pass-through (1 commit)
+### T10: `RunViewer.tsx` + `editClient.ts` で全 fetch / PATCH に `?run_set=` pass-through (1 commit)
 
-`RunViewer` が受け取った `runSet` を全 fetch URL に付加。例:
+`RunViewer` が受け取った `runSet` prop を全 fetch URL と PATCH 呼び出しに付加。
+
 ```typescript
 const qs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
-const url = `${apiBase}${name}/manifest.json${qs}`;
+// index.json
+const r = await fetch(`${apiBase}index.json${qs}`);
+// manifest URL (ETag + artifact base)
+const manifestUrl = `${apiBase}${name}/manifest.json${qs}`;
+// PATCH
+await patchSegmentPhase({ apiBase, runName, segmentId, phase, ifMatch, runSet });
 ```
 
-テスト: `runSet="so101_phase4_v5"` を渡したとき fetch URL に `?run_set=so101_phase4_v5` が含まれること。
+`editClient.ts` の `patchSegmentPhase` に `runSet?: string` を追加:
+```typescript
+export async function patchSegmentPhase(args: {
+  apiBase: string;
+  runName: string;
+  segmentId: string;
+  phase: string;
+  ifMatch: string;
+  runSet?: string;
+}): Promise<...> {
+  const qs = args.runSet && args.runSet !== "." ? `?run_set=${encodeURIComponent(args.runSet)}` : "";
+  const url = `${args.apiBase}${encodeURIComponent(args.runName)}/segments/${encodeURIComponent(args.segmentId)}${qs}`;
+  ...
+}
+```
+
+テスト:
+- `runSet="so101_phase4_v5"` を渡したとき index.json / manifest / PATCH URL に `?run_set=so101_phase4_v5` が含まれること
+- `runSet` なし / `.` の場合は QS なし (`?` 自体が付かないこと)
 
 ### T11: mypy --strict 確認 + 既存 tests all green (1 commit でまとめ可)
 
