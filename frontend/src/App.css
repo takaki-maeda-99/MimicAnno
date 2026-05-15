@@ -42,7 +42,7 @@ body { margin: 0; font-family: system-ui, sans-serif; color: var(--text); backgr
 .waveform-unit { color: var(--text-muted); }
 
 /* HandViewer */
-.hand-viewer { padding: 1rem; }
+.hand-viewer { padding: 1rem; background: var(--bg); }
 .hand-viewer-layout { display: flex; flex-direction: row; gap: 1rem; align-items: flex-start; }
 .hand-viewer-video { flex: 3; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
 .hand-viewer-data { flex: 2; min-width: 0; background: var(--bg-surface); border-radius: 4px; }
