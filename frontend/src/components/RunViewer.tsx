@@ -350,13 +350,17 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           ? `no run for episode_id=${e} hash=${h}`
           : `no run for episode_id=${e}`}
         {" "}
-        <a href="/">all runs</a>
+        <a href={apiEnabled ? "/?api=1" : "/"}>all runs</a>
       </div>
     );
   }
   const { selection, manifest } = state.data;
+  const backHref = apiEnabled ? "/?api=1" : "/";
   return (
     <div className="run-viewer">
+      <div className="back-link">
+        <a href={backHref}>← runs</a>
+      </div>
       {selection.kind === "multiple" && (
         <ChooserBanner selection={selection} episodeId={episodeId} />
       )}

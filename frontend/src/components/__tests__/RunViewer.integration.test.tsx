@@ -280,6 +280,30 @@ describe("RunViewer integration — PATCH carries manifest.run_hash in If-Match"
   });
 });
 
+describe("RunViewer back link — preserves apiEnabled (PR3 follow-up)", () => {
+  it("apiEnabled=true → ← runs href points at /?api=1", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={undefined} />
+      </ApiToggleProvider>,
+    );
+    const link = await screen.findByText("← runs");
+    expect(link.getAttribute("href")).toBe("/?api=1");
+  });
+});
+
 describe("RunViewer URL hash update after PATCH (BLOCKER fix from UI smoke)", () => {
   it("after 200, history.replaceState rewrites ?hash to the new short hash", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);

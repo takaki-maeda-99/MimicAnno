@@ -116,7 +116,11 @@ def _build_planner_prompt(
         "USER:\n"
         "[FRAME]\n"
         "\n"
-        "Identify all objects that need to be tracked. Respond with ONE JSON "
+        "Identify all objects that need to be tracked. Use visually descriptive "
+        "noun phrases optimised for an open-vocabulary segmentation model "
+        "(include colour, material, or shape when helpful for visual grounding "
+        "— e.g. 'yellow tape', 'transparent plastic bottle', 'robotic claw' or "
+        "'metal end effector' instead of just 'gripper'). Respond with ONE JSON "
         "object, no prose, no markdown fences:\n"
         "{\n"
         '  "objects": ["<object to manipulate>", ...],\n'
