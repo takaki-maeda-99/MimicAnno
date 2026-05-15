@@ -223,6 +223,7 @@ class VLMConfig:
     mask_overlay: MaskOverlayConfig = MaskOverlayConfig()
     resolved_checkpoint: str | None = None
     fixture_path: Path | None = None  # runtime-only; NOT in to_dict / config_hash
+    is_lora_adapter: bool = False     # runtime-only; True when model_id is a local Unsloth LoRA adapter dir
 
     def to_dict(self) -> dict[str, Any]:
         # NB: fixture_path is deliberately omitted (see class docstring).

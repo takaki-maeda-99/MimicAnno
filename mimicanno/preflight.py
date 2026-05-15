@@ -38,6 +38,7 @@ class PreflightResult:
     model_id: str
     resolved_checkpoint: str
     fixture_path: Path | None = None  # populated only for fixture:// URIs
+    is_lora_adapter: bool = False     # True when model_id is a local LoRA adapter dir
 
 
 def _hf_model_info(model_id: str, revision: str | None) -> str:
@@ -89,7 +90,13 @@ def resolve_vlm_model(arg: str, *, offline: bool) -> PreflightResult:
 
     # Case A: explicit 40-hex sha.
     if revision is not None and SHA40_REGEX.match(revision):
-        return PreflightResult(model_id=model_id, resolved_checkpoint=revision)
+        # Detect local LoRA adapter dirs (contain adapter_config.json).
+        is_lora = Path(model_id).is_dir() and (Path(model_id) / "adapter_config.json").exists()
+        return PreflightResult(
+            model_id=model_id,
+            resolved_checkpoint=revision,
+            is_lora_adapter=is_lora,
+        )
 
     # Case B: needs HF API lookup.
     if offline:

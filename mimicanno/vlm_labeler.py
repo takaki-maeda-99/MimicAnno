@@ -515,6 +515,50 @@ def _hf_load_model_and_processor(
     return model, processor
 
 
+def _unsloth_load_model_and_processor(
+    *, model_id: str, dtype: str,
+) -> tuple[Any, Any]:
+    """Load a Unsloth LoRA adapter (4-bit QLoRA) + processor.
+
+    ``model_id`` must be a local directory containing ``adapter_config.json``.
+    The base model path is read from ``adapter_config.json::base_model_name_or_path``.
+    Unsloth's ``FastLanguageModel.from_pretrained`` accepts the adapter dir
+    directly and fuses the LoRA weights automatically.
+
+    ``device`` is not accepted because Unsloth manages device placement
+    internally (always targets CUDA).
+    """
+    import json
+    import torch
+    from pathlib import Path
+    from transformers import AutoProcessor
+
+    adapter_cfg = json.loads((Path(model_id) / "adapter_config.json").read_text())
+    base_model = adapter_cfg["base_model_name_or_path"]
+
+    try:
+        from unsloth import FastLanguageModel
+    except ImportError as exc:
+        raise ImportError(
+            "unsloth is required to load LoRA adapters. "
+            "Activate the unsloth_env conda environment: "
+            "conda activate unsloth_env"
+        ) from exc
+
+    torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
+                   "float32": torch.float32}[dtype]
+    model, _ = FastLanguageModel.from_pretrained(
+        model_name=model_id,
+        max_seq_length=4096,
+        load_in_4bit=True,
+        dtype=torch_dtype,
+    )
+    FastLanguageModel.for_inference(model)
+    # Use the base model's processor (tokenizer/image processor).
+    processor = AutoProcessor.from_pretrained(base_model)
+    return model, processor
+
+
 def _maybe_dump_vlm_input(
     request: VLMRequest,
     prompt: str,
@@ -609,12 +653,18 @@ class LocalGemmaVLMLabeler:
         if config.resolved_checkpoint is None:
             raise ValueError("resolved_checkpoint must be set by pre-flight (§2.5)")
         self._config = config
-        model, processor = _hf_load_model_and_processor(
-            model_id=config.model_id,
-            revision=config.resolved_checkpoint,
-            device=config.device,
-            dtype=config.dtype,
-        )
+        if config.is_lora_adapter:
+            model, processor = _unsloth_load_model_and_processor(
+                model_id=config.model_id,
+                dtype=config.dtype,
+            )
+        else:
+            model, processor = _hf_load_model_and_processor(
+                model_id=config.model_id,
+                revision=config.resolved_checkpoint,
+                device=config.device,
+                dtype=config.dtype,
+            )
         self._model: Any = model
         self._processor: Any = processor
 
