@@ -50,20 +50,20 @@ MimicAnno フロントエンドに 2 つの UI 改善を行う。
 | `.waveform-label` | `color: #444` | `color: var(--text-muted)` |
 | `.waveform-unit` | `color: #999` | `color: var(--text-muted)` |
 
-### HandViewer CSS のクラス化
+### HandViewer CSS クラスの新規定義
 
-HandViewer の以下インラインスタイルを App.css の CSS クラスに移す（インラインスタイル削除）。
+`HandViewer.tsx` は既に `className` 文字列でクラス名を参照しているが、**これらのクラスは App.css に定義されていない**（インラインスタイルとして存在する部分もある）。今回 App.css に以下のクラスを**新規作成**し、HandViewer.tsx のインラインスタイルを対応する className 参照に置き換える。
 
-- `.hand-viewer` — パディング・背景色
-- `.hand-viewer-layout` — flex レイアウト定義（今回のサイドパネル化で新定義）
-- `.hand-viewer-video` — 左ペイン
-- `.hand-viewer-data` — 右ペイン
-- `.hand-data-panel` — データパネル背景・パディング
-- `.hand-side` — 各手セクション
-- `.hand-undetected` — 未検出ラベル色
+- `.hand-viewer` — パディング・背景色（`var(--bg)`）
+- `.hand-viewer-layout` — flex row レイアウト、gap（今回の新レイアウト定義）
+- `.hand-viewer-video` — 左ペイン、`flex: 3`
+- `.hand-viewer-data` — 右ペイン、`flex: 2`、背景 `var(--bg-surface)`
+- `.hand-data-panel` — パディング
+- `.hand-side` — 各手セクション、マージン
+- `.hand-undetected` — 未検出ラベル色（`var(--text-muted)`）
 - `.hand-estimated` — `depth_ok=false` グレーアウト（`opacity: 0.4`）
-- `.hand-badge` — (推定) バッジスタイル
-- `.hand-scrub-info` — フレーム番号・時刻表示行
+- `.hand-badge` — (推定) バッジスタイル（文字色 `var(--text-muted)`）
+- `.hand-scrub-info` — フレーム番号・時刻表示行（`font-size: 11px; color: var(--text-muted)`）
 
 ### スコープ外
 
@@ -137,11 +137,12 @@ const frame = Math.min(
 
 #### ResizeObserver パターン
 
-RunViewer の `rowRef` と同一パターンで `.hand-viewer-video` の幅を計測し `widthPx` state に反映する。
+`VideoWithAxes` 内部の `<video>` は `maxWidth: 100%` + `inline-block` ラッパーで描画されるため、`.hand-viewer-video`（コンテナ）の幅と実際のビデオ描画幅が一致しない場合がある。スクラブバーをビデオと同幅にするため、ResizeObserver は **`VideoWithAxes` のラッパー `<div>`（`wrapRef`）** ではなく `.hand-viewer-video` にアタッチし、`HandScrubBar` の `widthPx` は `maxWidth: 100%` で渡す。スクラブバー自体も `maxWidth: 100%` にするため、ビデオより広くなることはない。
 
 ```tsx
 const rowRef = useCallback((node: HTMLDivElement | null) => {
   obsRef.current?.disconnect();
+  obsRef.current = null;  // RunViewer と同様に null クリア
   if (node) {
     const obs = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? 0;
@@ -162,9 +163,10 @@ const ss = (totalSec % 60).toFixed(1).padStart(4, "0");
 // → "frame 540 / 1799  |  00:18.0"
 ```
 
-#### `h1` タグの削除
+#### `h1` タグの削除 と back-link テキスト変更
 
-現在の `<h1>hand viewer — {episodeId}</h1>` は削除し、RunViewer と同様に back-link のみにする。タイトルは URL から判断可能。
+- `<h1>hand viewer — {episodeId}</h1>` を削除する
+- `<a href="/">← 戻る</a>` を `<a href="/" className="back-link">← runs</a>` に変更し、RunViewer と同じスタイル・テキストに統一する
 
 ---
 
@@ -176,7 +178,7 @@ const ss = (totalSec % 60).toFixed(1).padStart(4, "0");
 |---|---|
 | `widthPx=0` でレンダリングしない | `null` を返すこと |
 | `totalFrames=0` でレンダリングしない | `null` を返すこと |
-| クリックで `onSeek` が正しいフレームで呼ばれる | 中央クリック → `totalFrames / 2` |
+| クリックで `onSeek` が正しいフレームで呼ばれる | 中央クリック（x = widthPx/2）、`totalFrames=10` → `Math.round(0.5 * 10) = 5`、`totalFrames=5` → `Math.round(0.5 * 5) = 3`（Math.round は .5 を切り上げ） |
 | プレイヘッドが正しい x 座標に描画される | `currentFrame / totalFrames * widthPx` |
 
 ### 既存: `HandViewer.test.tsx` への追加
@@ -185,7 +187,8 @@ const ss = (totalSec % 60).toFixed(1).padStart(4, "0");
 |---|---|
 | `loaded` 状態でスクラブバーが存在する | SVG 要素の存在確認 |
 | back-link が `"/"` を指す | `← runs` の `href` 確認 |
-| `h1` タグが存在しない | タイトル要素が削除されていること |
+| `h1` タグが存在しない | `queryByRole('heading', { level: 1 })` が null を返すこと |
+| back-link テキストが変更されている | `getByRole('link', { name: '← runs' })` が存在し `href="/"` であること |
 
 ### 変更なし
 
