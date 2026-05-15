@@ -1,0 +1,20 @@
+# GEM4_replace_the_cookie GenericAdapter v0.2.0 robot-config
+# 通常グループ用 (ep000-029, ep115-300)
+#
+# gripper_pos 実測 (正常グループ, 2026-05-16):
+#   min=0.385  p1=0.527  p99=5.617  max=6.504
+#
+# 正規化: (g - 0.3) / (6.5 - 0.3)
+# scale_min: 実測 min より少し余裕を見て 0.3
+# scale_max: 実測 max 6.504 → 6.5 で丸め（ep172 付近の外れ値含む）
+#
+# 注意: ep030-114 はゼロ点が -2π ズレている別グループ。
+#   そちらは gem4_replace_the_cookie_offset_robot_config.yaml を使うこと。
+schema_version: "0.2.0"
+name: gem4_replace_the_cookie
+gripper_column: observation.state.gripper_pos
+gripper_scale_min: 0.3
+gripper_scale_max: 6.5
+eef_xyz_column: observation.state.ee_pos
+eef_rotvec_column: observation.state.ee_rotvec
+eef_quat_column: null

@@ -1,0 +1,20 @@
+# GEM4_replace_the_cookie GenericAdapter v0.2.0 robot-config
+# オフセットグループ用 (ep030-114)
+#
+# このグループはグリッパーセンサーのゼロ点が -2π (≈-6.2832) だけズレている。
+# gripper_offset: 6.2832 で補正してから通常グループと同じスケールで正規化する。
+#
+# 補正後の実測レンジ (ep30-114 + 2π, 2026-05-16):
+#   min=0.446  p99=4.581  max=5.240
+# → 通常グループ (0.385〜6.5) とほぼ一致することを確認済み。
+#
+# 処理順: g += 6.2832 → (g - 0.3) / (6.5 - 0.3) → clip [0,1]
+schema_version: "0.2.0"
+name: gem4_replace_the_cookie_offset
+gripper_column: observation.state.gripper_pos
+gripper_offset: 6.2832
+gripper_scale_min: 0.3
+gripper_scale_max: 6.5
+eef_xyz_column: observation.state.ee_pos
+eef_rotvec_column: observation.state.ee_rotvec
+eef_quat_column: null

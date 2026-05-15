@@ -6,10 +6,14 @@ Schema versions:
 - ``0.1.0`` (Phase 1): ``gripper_column``, ``eef_xyz_column``, ``eef_quat_column``.
   Gripper signal is clipped to [0, 1]. EE pose is xyz + quat -> shape (T, 7).
 - ``0.2.0`` (Phase 5): adds ``eef_rotvec_column``, ``gripper_scale_min``,
-  ``gripper_scale_max``. Gripper is normalized via
-  ``(g - min) / (max - min)`` then clipped to [0, 1] when both scale bounds
-  are set; otherwise behavior is identical to 0.1.0. EE pose is xyz + rotvec
-  -> shape (T, 6) when ``eef_rotvec_column`` is set; xyz + quat -> (T, 7) is
+  ``gripper_scale_max``, ``gripper_offset``. Gripper pipeline:
+  1. ``g += gripper_offset`` (default 0.0 — no-op when omitted).
+  2. ``g = (g - min) / (max - min)`` when both scale bounds are set.
+  3. ``g = clip(g, 0, 1)``.
+  ``gripper_offset`` is applied before normalization so it can fix sensors
+  whose zero-point drifted by a known constant (e.g. ``+2π ≈ +6.2832`` for
+  a rotary encoder that reset mid-session). EE pose is xyz + rotvec ->
+  shape (T, 6) when ``eef_rotvec_column`` is set; xyz + quat -> (T, 7) is
   still supported. ``eef_rotvec_column`` and ``eef_quat_column`` are
   mutually exclusive.
 """
@@ -35,6 +39,7 @@ class GenericAdapter:
     eef_rotvec_column: str | None = None
     gripper_scale_min: float | None = None
     gripper_scale_max: float | None = None
+    gripper_offset: float = 0.0
 
     @classmethod
     def from_yaml(cls, path: Path) -> GenericAdapter:
@@ -63,11 +68,14 @@ class GenericAdapter:
             eef_rotvec_column=eef_rotvec_column,
             gripper_scale_min=cfg.get("gripper_scale_min"),
             gripper_scale_max=cfg.get("gripper_scale_max"),
+            gripper_offset=float(cfg.get("gripper_offset", 0.0)),
         )
 
     def gripper_signal(self, df: pa.Table) -> np.ndarray:
         col = df.column(self.gripper_column)
         g = np.asarray(col.to_pylist(), dtype=np.float64)
+        if self.gripper_offset != 0.0:
+            g = g + self.gripper_offset
         if (
             self.gripper_scale_min is not None
             and self.gripper_scale_max is not None
