@@ -162,14 +162,25 @@ def _build_loadable_fixture(dst_runs_root: Path) -> str:
     for fname in _LOADABLE_ARTIFACT_FILES:
         shutil.copy(_REAL_SO101_RUN / fname, dst_run / fname)
 
-    # Manifest: inject canonical_name (source predates T4) + strip video row.
+    # Manifest: inject canonical_name + strip video row.
+    # Also normalise run_hash back to the auto-pipeline value so that
+    # test_edit_short_circuit invariant holds regardless of T16 / smoke edits.
     raw = json.loads((_REAL_SO101_RUN / "manifest.json").read_text())
     raw["canonical_name"] = name
     raw["artifacts"] = [a for a in raw["artifacts"] if a.get("role") != "video"]
+    from mimicanno.config import compose_run_hash as _compose
+    auto_rh = _compose(raw["config_hash"], raw["input_hash"])
+    raw["run_hash"] = auto_rh
+    raw.pop("edited_at", None)
     (dst_run / "manifest.json").write_text(json.dumps(raw, indent=2))
 
+    # Also reset run_hash in annotation.json so it matches the manifest.
+    ann_raw = json.loads((dst_run / "annotation.json").read_text())
+    ann_raw["run_hash"] = auto_rh
+    (dst_run / "annotation.json").write_text(json.dumps(ann_raw))
+
     # Single-row index.json (real index has 23 rows; tests only need one).
-    rh = str(raw["run_hash"])
+    rh = auto_rh
     rh_hex = rh[len("sha256:"):] if rh.startswith("sha256:") else rh
     ch = str(raw["config_hash"])
     ch_hex = ch[len("sha256:"):] if ch.startswith("sha256:") else ch

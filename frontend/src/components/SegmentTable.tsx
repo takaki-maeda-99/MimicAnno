@@ -1,15 +1,17 @@
 /**
  * Phase 5 B r1 T13.6-T13.9 — segment list with optional phase dropdown.
+ * Phase 5 B r3 — reviewed column becomes a checkbox when editable.
  *
  * Read-only in static (?api unset) mode; editable when apiEnabled=true and
  * a labelset is loaded. Edit flow is driven by the parent (RunViewer):
- * parent owns optimistic state, this component only emits onPhaseEdit and
- * reflects pending/disabled state via props.
+ * parent owns optimistic state, this component only emits onPhaseEdit /
+ * onReviewedToggle and reflects pending/disabled state via props.
  */
 import { useState, useEffect } from "react";
 import type { SubtaskSegment } from "../lib/manifest";
 import type { LabelSetDoc } from "../lib/labelsetClient";
 import type { PatchResult } from "../lib/editClient";
+import type { ReviewedPatchResult } from "../lib/reviewedClient";
 
 export interface SegmentTableToast {
   level: "conflict" | "invalid" | "error" | "sync_warning";
@@ -25,6 +27,10 @@ export interface SegmentTableProps {
     newPhase: string,
     oldPhase: string,
   ) => Promise<PatchResult>;
+  onReviewedToggle: (
+    segmentId: string,
+    newReviewed: boolean,
+  ) => Promise<ReviewedPatchResult>;
   editInFlight: boolean;
   staleRun: boolean;
   toast?: SegmentTableToast;
@@ -40,6 +46,7 @@ export default function SegmentTable(props: SegmentTableProps) {
     apiEnabled,
     labelset,
     onPhaseEdit,
+    onReviewedToggle,
     editInFlight,
     staleRun,
     toast,
@@ -99,6 +106,7 @@ export default function SegmentTable(props: SegmentTableProps) {
               labelset={labelset}
               disabled={disabled}
               onPhaseEdit={onPhaseEdit}
+              onReviewedToggle={onReviewedToggle}
             />
           ))}
         </tbody>
@@ -114,6 +122,7 @@ function SegmentRow({
   labelset,
   disabled,
   onPhaseEdit,
+  onReviewedToggle,
 }: {
   idx: number;
   segment: SubtaskSegment;
@@ -125,6 +134,10 @@ function SegmentRow({
     newPhase: string,
     oldPhase: string,
   ) => Promise<PatchResult>;
+  onReviewedToggle: (
+    segmentId: string,
+    newReviewed: boolean,
+  ) => Promise<ReviewedPatchResult>;
 }) {
   // Controlled <select>: local optimistic value, reset on parent's segment
   // change (after server re-fetches). Rollback = setLocalPhase(oldPhase)
@@ -134,6 +147,12 @@ function SegmentRow({
   useEffect(() => {
     setLocalPhase(segment.phase);
   }, [segment.phase]);
+
+  // Optimistic reviewed state: flips immediately, rolls back on non-ok.
+  const [localReviewed, setLocalReviewed] = useState(segment.reviewed);
+  useEffect(() => {
+    setLocalReviewed(segment.reviewed);
+  }, [segment.reviewed]);
 
   const onChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newPhase = e.target.value;
@@ -148,6 +167,19 @@ function SegmentRow({
       // On "ok", parent re-fetch will update segment.phase → effect resets us.
     } catch {
       setLocalPhase(oldPhase);
+    }
+  };
+
+  const onReviewedChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newReviewed = e.target.checked;
+    setLocalReviewed(newReviewed);
+    try {
+      const r = await onReviewedToggle(segment.segment_id, newReviewed);
+      if (r.kind !== "ok") {
+        setLocalReviewed(!newReviewed);
+      }
+    } catch {
+      setLocalReviewed(!newReviewed);
     }
   };
 
@@ -177,7 +209,19 @@ function SegmentRow({
         )}
       </td>
       <td>{fmt(segment.overall_confidence)}</td>
-      <td>{segment.reviewed ? "✓" : "–"}</td>
+      <td>
+        {editable ? (
+          <input
+            type="checkbox"
+            checked={localReviewed}
+            disabled={disabled}
+            aria-label={`reviewed for ${segment.segment_id}`}
+            onChange={onReviewedChange}
+          />
+        ) : (
+          <span>{segment.reviewed ? "✓" : "–"}</span>
+        )}
+      </td>
       <td>{segment.label_source}</td>
     </tr>
   );
