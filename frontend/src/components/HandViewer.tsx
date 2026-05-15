@@ -117,6 +117,12 @@ function VideoWithAxes({
 // This is an intentional divergence from the RunViewer pattern (useApiToggle).
 const HANDS_API_BASE = "/api/hands/";
 
+function formatTime(sec: number): string {
+  const mm = Math.floor(sec / 60).toString().padStart(2, "0");
+  const ss = (sec % 60).toFixed(1).padStart(4, "0");
+  return `${mm}:${ss}`;
+}
+
 type LoadedState = {
   meta: HandMetaDoc;
   signals: HandSignalsDoc;
@@ -337,12 +343,6 @@ export default function HandViewer({ episodeId }: Props) {
         }
       : undefined;
 
-  function formatTime(sec: number): string {
-    const mm = Math.floor(sec / 60).toString().padStart(2, "0");
-    const ss = (sec % 60).toFixed(1).padStart(4, "0");
-    return `${mm}:${ss}`;
-  }
-
   return (
     <div className="hand-viewer">
       <div className="back-link">
@@ -354,7 +354,7 @@ export default function HandViewer({ episodeId }: Props) {
             videoUrl={`${HANDS_API_BASE}${episodeId}/video`}
             currentTimeSec={currentTimeSec}
             onTimeChange={setCurrentTimeSec}
-            onError={(msg) => setVideoError(msg)}
+            onError={setVideoError}
             videoWidth={videoW}
             videoHeight={videoH}
             intrinsics={intrinsics}
