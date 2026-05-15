@@ -10,6 +10,17 @@
 
 ## MimicAnno UI
 
+### UI デザイン改善 (2026-05-16)
+
+- [ ] **全体テーマをダーク/コントラスト系に変更** — 現状は `background: #fafafa` の白背景で視認性が低い。`App.css` を起点に全体を暗め or コントラスト強めのテーマに変更
+- [ ] **HandViewer を RunViewer 相当の GUI に統一** — 手の動画ビューアが RunViewer (so101 ラベリング画面) と比べてレイアウト・コントロールが貧弱。最低限以下を揃える:
+  - RunViewer と同じ動画プレイヤー (`VideoPlayer.tsx`) + タイムラインを流用
+  - フレームスクラブ / 再生ボタン / 現在フレーム番号表示
+  - 手首 xyz / 向き / pinch パネルを RunViewer のサイドパネル的配置に揃える
+  - depth_ok=false のグレーアウト表示は維持
+
+  **参考:** `frontend/src/components/RunViewer.tsx`、`frontend/src/components/VideoPlayer.tsx`、`frontend/src/components/Timeline.tsx`
+
 - [ ] **手の状態ビューア** (spec: `docs/superpowers/specs/2026-05-15-hand-viewer-design.md`, plan: `docs/superpowers/plans/2026-05-15-hand-viewer-plan.md`)
   - 上 70%: 元動画
   - 下 30%: 手首位置 (x, y, z)・手首の向き・親指–人差し指間の絶対距離 をフレームごとに表示
