@@ -205,9 +205,11 @@ def make_router(
                 content=body, headers=headers, media_type="application/json",
             )
 
-        # Non-manifest: FileResponse streams.
+        # Non-manifest: FileResponse streams. Pick media_type from the
+        # artifact suffix so video.mp4 doesn't get served as JSON.
+        media_type = "video/mp4" if artifact.endswith(".mp4") else "application/json"
         return FileResponse(
-            path=path, headers=headers, media_type="application/json",
+            path=path, headers=headers, media_type=media_type,
         )
 
     return router

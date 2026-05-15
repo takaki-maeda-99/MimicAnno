@@ -90,8 +90,11 @@ def test_6_get_boundaries_200(
 def test_7_get_artifact_404_when_not_in_allowlist(
     tmp_runs_root: Path, canonical_name: str,
 ) -> None:
+    # video.mp4 was added to the allow-list in Phase 5 B r1 so the
+    # viewer's ?api=1 mode can stream <video src>; use a different
+    # rejected name here to keep coverage of the allow-list 404 path.
     client = _make_client(tmp_runs_root)
-    r = client.get(f"/api/runs/{canonical_name}/video.mp4")
+    r = client.get(f"/api/runs/{canonical_name}/secrets.env")
     assert r.status_code == 404
     assert r.json()["error"] == "artifact_not_found"
 
