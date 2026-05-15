@@ -21,10 +21,12 @@ import {
   runNameFromManifestUrl,
   type PatchResult,
 } from "../lib/editClient";
+import { patchBoundaryFrame } from "../lib/boundaryClient";
 import { loadLabelset, type LabelSetDoc } from "../lib/labelsetClient";
 import SegmentTable, { type SegmentTableToast } from "./SegmentTable";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
+import TimelineRuler from "./TimelineRuler";
 import WaveformView from "./WaveformView";
 
 type ArtifactSlot<T> =
@@ -55,6 +57,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
   const { apiBase, apiEnabled } = useApiToggle();
   const [labelset, setLabelset] = useState<LabelSetDoc | null>(null);
   const [editInFlight, setEditInFlight] = useState(false);
+  const [boundaryPatchInFlight, setBoundaryPatchInFlight] = useState(false);
   const [staleRun, setStaleRun] = useState(false);
   const [toast, setToast] = useState<SegmentTableToast | undefined>(undefined);
 
@@ -237,6 +240,79 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
     return result;
   };
 
+  const onBoundaryDragCommit = async (
+    boundaryId: string,
+    newFrame: number,
+  ): Promise<void> => {
+    if (state.kind !== "loaded") return;
+    const data = state.data;
+    setBoundaryPatchInFlight(true);
+    setToast(undefined);
+    try {
+      const runName = runNameFromManifestUrl(data.manifestUrl);
+      const result = await patchBoundaryFrame({
+        apiBase,
+        runName,
+        boundaryId,
+        newFrame,
+        ifMatchRunHash: data.manifest.run_hash,
+      });
+      if (result.kind === "ok") {
+        const newManifest = { ...data.manifest, run_hash: result.runHash };
+        setState((prev) =>
+          prev.kind === "loaded"
+            ? { kind: "loaded", data: { ...prev.data, manifest: newManifest } }
+            : prev,
+        );
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has("hash")) {
+            const PREFIX = "sha256:";
+            const SHORT_LEN = 12;
+            const stripped = result.runHash.startsWith(PREFIX)
+              ? result.runHash.slice(PREFIX.length)
+              : result.runHash;
+            url.searchParams.set("hash", stripped.slice(0, SHORT_LEN));
+            window.history.replaceState(null, "", url.toString());
+          }
+        }
+        try {
+          const annUrl = resolveUrl(
+            data.manifestUrl,
+            artifactUrl(newManifest, "annotation"),
+          );
+          const r = await fetchRetry(annUrl);
+          if (r.ok) {
+            const ann = (await r.json()) as AnnotationResult;
+            setState((prev) =>
+              prev.kind === "loaded"
+                ? { kind: "loaded", data: { ...prev.data, annotation: { kind: "ok", data: ann } } }
+                : prev,
+            );
+          } else {
+            setToast({ level: "sync_warning", message: "saved, but local view may be stale (refetch failed)" });
+          }
+        } catch {
+          setToast({ level: "sync_warning", message: "saved, but local view may be stale (refetch failed)" });
+        }
+      } else if (result.kind === "conflict") {
+        setStaleRun(true);
+        setToast({ level: "conflict", message: `${result.errorCode}: ${result.serverMessage}` });
+      } else if (result.kind === "invalid") {
+        setToast({ level: "invalid", message: `${result.errorCode}: ${result.serverMessage}` });
+      } else if (result.kind === "not_found") {
+        setToast({ level: "error", message: `${result.errorCode}: ${result.serverMessage}` });
+      } else {
+        const prefix = result.errorCode !== null ? result.errorCode : `HTTP ${result.httpStatus}`;
+        setToast({ level: "error", message: `${prefix}: ${result.message}` });
+      }
+    } catch (e) {
+      setToast({ level: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBoundaryPatchInFlight(false);
+    }
+  };
+
   const setVideoError = (message: string) => {
     setState((prev) =>
       prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, videoError: message } } : prev,
@@ -407,13 +483,22 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           />
         )}
       </div>
+      {apiEnabled && state.data.annotation.kind === "ok" && (
+        <TimelineRuler
+          widthPx={widthPx}
+          segments={state.data.annotation.data.segments}
+          fps={state.data.manifest.fps}
+          pendingPatch={editInFlight || boundaryPatchInFlight}
+          onDragCommit={onBoundaryDragCommit}
+        />
+      )}
       {state.data.annotation.kind === "ok" && (
         <SegmentTable
           segments={state.data.annotation.data.segments}
           apiEnabled={apiEnabled}
           labelset={labelset}
           onPhaseEdit={onPhaseEdit}
-          editInFlight={editInFlight}
+          editInFlight={editInFlight || boundaryPatchInFlight}
           staleRun={staleRun}
           toast={toast}
         />
