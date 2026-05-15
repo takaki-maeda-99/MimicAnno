@@ -85,31 +85,23 @@
 
 ### 各 worktree でやること
 
-#### S-HV (hand-viewer)
-- [ ] **HV-T5**: 統合 smoke (`scripts/start_ui.sh` or 手動で `mimicanno serve --hands-root data/hands --runs-root runs/so101_phase4_v5` + `pnpm dev`、`?hand=GX010085&api=1`)。確認項目は `docs/superpowers/plans/2026-05-15-hand-viewer-plan.md` T5
-- [ ] **HV-regen-bench**: 1 episode で `--signals-only --full-signals` を実測 (hamer venv 経由) → ETA 確定
-- [ ] **HV-regen**: 全 9 episode を v2 で再生成 (frames/*.pkl は温存)
-- [ ] **HV-notes**: smoke 結果を `docs/superpowers/notes/2026-05-16-hv-smoke.md` に記録
-- [ ] **HV-axes**: ブラウザ表示時、動画上の手首位置に簡易 3D xyz 軸を重畳表示 (R=X / G=Y / B=Z)
-  - 取得元: `HandEstimate.cam_t` (手首 3D 位置) + `HandEstimate.global_orient` (3×3 回転行列)
-  - 投影: HaMeR の intrinsics (`signals.json` の `cam_t` 系と整合) で軸先端 (例: 5cm) をピクセル投影
-  - 描画: `HandViewer.tsx` の動画 overlay (SVG or Canvas) に line × 3 本、左右で太さ分け
-  - **トグル UI**: ビューア上に "Axes ON/OFF" ボタン (デフォルト ON 推奨)、状態は `useState` で保持。URL クエリ (`?axes=0`) で永続化するかは impl で判断
-  - 注意: `depth_ok=False` フレームは cam_t が擬似メトリックなので軸スケールが揺れる。表示は continue するが notes に明記
-  - スコープ: 軸線 + トグルのみ。回転値の数値表示は既存パネルに任せる
+#### S-HV (hand-viewer) ✅ main マージ済 (`5f2e8fb`)
+- [x] **HV-T5**: smoke 完了 + ブラウザ 4 項目確認済 (2026-05-16)
+- [x] **HV-axes**: wrist XYZ 軸 canvas overlay 実装済 (`2307219`、`feat/hand-viewer-axes` ブランチ)
+- [ ] **HV-regen**: 全 9 episode を v2 で再生成 (frames/*.pkl は温存。`hamer/.hamer/bin/python scripts/run_hand_estimation.py --signals-only --full-signals --out data/hands/<ep>/`)
 
 #### S-B2 (phase 5 B r2: 境界ドラッグ)
-- [ ] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 起こし
-- [ ] **B2-spec-review**: spec-document-reviewer subagent でレビュー
-- [ ] **B2-plan**: `docs/superpowers/plans/2026-05-16-phase5-b-r2-boundary-drag-plan.md`
+- [x] **B2-spec**: `docs/superpowers/specs/2026-05-16-phase5-b-r2-boundary-drag-design.md` 完成・push済 (`3925d23`)
+- [x] **B2-spec-review**: 独立レビュー 12 件反映済
+- [x] **B2-plan**: `docs/superpowers/plans/2026-05-16-phase5-b-r2-boundary-drag-plan.md` 完成・push済
 - [ ] **B2-impl**: PATCH endpoint 拡張 + `BoundaryDragLayer.tsx` + `RunViewer.tsx` hook + tests
 - [ ] **B2-smoke**: SO101 v5 + Piper v5 で境界編集 → 保存 → 再読込が往復することを確認
 - [ ] **B2-future**: r3 reviewed 単独トグル / r4 object edit は別 PR
 
 #### S-D (Phase 5 D: Evaluation harness)
-- [ ] **D-spec**: `docs/superpowers/specs/2026-05-16-phase5-d-eval-harness-design.md` (Phase 5 当初 spec の D 部分を詳細化)
-- [ ] **D-spec-review**: spec-document-reviewer subagent
-- [ ] **D-plan**: 実装 plan
+- [x] **D-spec**: `docs/superpowers/specs/2026-05-16-phase5-d-eval-harness-design.md` 完成・push済 (`69d4d27`)
+- [x] **D-spec-review**: 独立レビュー反映済
+- [x] **D-plan**: `docs/superpowers/plans/2026-05-16-phase5-d-eval-harness-plan.md` 完成・push済
 - [ ] **D-impl-backend**: eval CLI/サーバー側 (B2 と並列可)
 - [ ] **D-impl-frontend**: 結果表示 UI (B2 マージ後)
 
