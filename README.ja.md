@@ -174,6 +174,143 @@ eef_quat_column:       null
 
 profile YAML が export の挙動全部 (source adapter / action 表現の delta_basis (`body_frame_t` / `world` / `base`) / per-frame extra columns / sidecar 配置 / gates (`require_reviewed`, `forbid_unlabeled_segments`, `forbid_degraded_pipeline`)) を制御します。`mimicanno/jsonschemas/export_profile.schema.json` でバリデート。
 
+## Hand Pipeline 環境構築
+
+Hand Pipeline は MimicAnno 本体とは独立した 2 つの実行環境を使います。
+
+### 一括セットアップ
+
+```bash
+bash scripts/setup_envs.sh          # 3 環境すべて
+bash scripts/setup_envs.sh --unidac # UniDAC のみ
+bash scripts/setup_envs.sh --hamer  # HaMeR のみ
+bash scripts/setup_envs.sh --core   # MimicAnno core のみ
+```
+
+既存の環境はスキップされます（冪等）。
+
+### 3 つの実行環境
+
+| 環境 | 用途 | Python |
+|------|------|--------|
+| `conda env: unidac` | Phase A 深度前計算 (UniDAC) | 3.10 |
+| `hamer/.hamer` venv | Phase B 手姿勢推定 (HaMeR) | 3.10 |
+| `.venv` (uv) | MimicAnno 本体・アノテーション | 3.11+ |
+
+### 手動で取得が必要なファイル
+
+#### MANO モデル (HaMeR 必須)
+
+1. [https://mano.is.tue.mpg.de](https://mano.is.tue.mpg.de) でアカウント登録してダウンロード
+2. 以下のパスに配置:
+
+```
+hamer/_DATA/data/mano/MANO_RIGHT.pkl
+```
+
+#### UniDAC モデルウェイト
+
+```
+UniDAC/checkpoints/unidac.pt
+UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+```
+
+HaMeR のデモデータ（`hamer/_DATA/hamer_ckpts/` など）は `setup_envs.sh` が `fetch_demo_data.sh` 経由で自動ダウンロードします（gdown + Google Drive、インターネット接続必須）。
+
+## Hand Pipeline (Phase A / B)
+
+GoPro Hero 11 Max Lens Mod で撮影した魚眼動画から、フレームごとの手の 3D 姿勢と指間距離を算出するサブパイプライン。
+
+### 入力仕様
+
+| 項目 | 値 |
+|------|-----|
+| 動画解像度 | **2704 × 1520** (fisheye のみ対応) |
+| フレームレート | 29.97 fps |
+| カメラモデル | OPENCV_FISHEYE (equidistant, k1..k4 = 0) |
+| 焦点距離 (参照解像度) | fl_x = 1820 px、fl_y = 1275 px (5312px幅基準) |
+
+fisheye 以外の解像度 (例: 1920×1080) は `run_all_pipeline.sh` の自動検出でスキップされます。
+
+### Phase A — 深度前計算 (`scripts/precompute_depth.py`)
+
+UniDAC (Preset A) で魚眼フレームの距離マップを ERP 空間に出力します。
+
+| 項目 | 値 |
+|------|-----|
+| 実行環境 | `conda activate unidac` |
+| 入力 | `data/video/new/<NAME>.MP4` |
+| 出力 `.npy` shape | `(512, 704)` float32 — ERP パッチの euclid 距離 [m] |
+| 出力先 | `data/depth/<NAME>/frames/frame_NNNNNN.npy` |
+| メタ | `data/depth/<NAME>/meta.json` |
+
+> UniDAC の出力は **Z深度ではなく ray 距離 (euclid distance)** です。  
+> バックプロジェクション: `cam_t = depth × unit_ray`
+
+### Phase B — 手姿勢推定 (`scripts/run_hand_estimation.py`)
+
+HaMeR (MANO) + Phase A 深度を融合してメトリック手姿勢を出力します。
+
+| 項目 | 値 |
+|------|-----|
+| 実行環境 | `hamer/.hamer/bin/python` + `CUDA_VISIBLE_DEVICES=N` |
+| 入力動画 | `data/video/new/<NAME>.MP4` |
+| 入力深度 | `data/depth/<NAME>/` (Phase A 出力) |
+| per-frame 出力 | `data/hands/<NAME>/frames/frame_NNNNNN.pkl` — `list[HandEstimate]` |
+| 時系列出力 | `data/hands/<NAME>/signals.json` |
+| メタ | `data/hands/<NAME>/meta.json` |
+
+### `HandEstimate` フィールド
+
+| フィールド | shape / 型 | 内容 |
+|-----------|-----------|------|
+| `is_right` | `bool` | 右手かどうか |
+| `cam_t` | `(3,)` float32 | 手首の metric カメラ座標 [m] (x, y, z) |
+| `global_orient` | `(3, 3)` float32 | 手首の回転行列 |
+| `hand_pose` | `(15, 3, 3)` float32 | 指関節の回転行列 × 15 関節 |
+| `betas` | `(10,)` float32 | MANO 形状パラメータ |
+| `joints_3d` | `(21, 3)` float32 | 全関節の 3D 座標 [m]（カメラ座標系） |
+| `joints_2d` | `(21, 2)` float32 | 全関節の 2D 投影（pinhole 近似） |
+| `bbox` | `(4,)` float32 | 検出 bbox [x1, y1, x2, y2] (px) |
+| `wrist_depth_m` | `float \| None` | UniDAC 手首深度 [m]。`None` = 深度取得不可 |
+| `depth_interpolated` | `bool` | `True` = 補間で埋めたフレーム |
+| `pinch_distance_m` | `float \| None` | 親指先端–人差し指先端 間距離 [m]。手が検出されれば常に有効 |
+
+MANO joint index: wrist=0, thumb_tip=4, index_tip=8（標準 21 点）。
+
+### `signals.json` スキーマ
+
+```json
+{
+  "schema_version": 1,
+  "frame_000060": {
+    "right": {"value": 0.0811, "depth_ok": true},
+    "left": null
+  }
+}
+```
+
+- `value`: Gaussian smoothing 済み (σ=2 frames) の `pinch_distance_m` [m]
+- `depth_ok`: `wrist_depth_m` が非 `None`（UniDAC 深度補正済み）かどうか
+- 手が検出されなかったフレームはキーごと省略
+- `depth_ok=false` でも `value` は MANO メトリックスケールで有効
+
+### 一括実行
+
+```bash
+# 全 fisheye 動画を GPU 2/3 で並列処理
+bash scripts/run_all_pipeline.sh
+
+# 特定動画のみ
+bash scripts/run_all_pipeline.sh GX010175 GX010176
+
+# Phase A スキップ (深度計算済みの場合)
+bash scripts/run_all_pipeline.sh --skip-phase-a
+
+# GPU 指定
+bash scripts/run_all_pipeline.sh --gpus 0 1
+```
+
 ## ビューア
 
 ```bash

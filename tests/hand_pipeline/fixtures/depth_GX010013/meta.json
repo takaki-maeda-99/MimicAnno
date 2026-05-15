@@ -1,0 +1,40 @@
+{
+  "unidac_version": "f23b211-dirty",
+  "preset": "A",
+  "fwd_sz": [
+    512,
+    704
+  ],
+  "cano_sz": [
+    1400,
+    1400
+  ],
+  "source": "video/GX010013.MP4",
+  "source_type": "video",
+  "source_metadata": {
+    "fps": 29.97002997002997,
+    "total_input_frames": 1042,
+    "width": 2704,
+    "height": 1520
+  },
+  "stride": 1,
+  "ref_w_native": 5312,
+  "cam_params_at_W": "fl_x = fl_x_ref * W/5312, fl_y = fl_y_ref * W/5312, cx = W/2, cy = H/2, k1..k4 = 0, camera_model = OPENCV_FISHEYE",
+  "preset_params": {
+    "config": "configs/test/dac_dinov3l+dpt_indoor_test_scannetpp.json",
+    "fl_x_ref": 1820.0,
+    "fl_y_ref": 1275.0,
+    "k1": 0.0,
+    "k2": 0.0,
+    "k3": 0.0,
+    "k4": 0.0,
+    "crop_wFoV": 150,
+    "camera_model": "OPENCV_FISHEYE"
+  },
+  "frames_processed": 1,
+  "frames_skipped_existing": 0,
+  "total_elapsed_seconds": 1.635,
+  "fps_avg": 0.612,
+  "failures": [],
+  "interrupted": false
+}

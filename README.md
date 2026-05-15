@@ -183,6 +183,143 @@ Three default profiles ship under `mimicanno/configs/exports/`:
 
 Profile YAML controls everything about the export: source adapter, action representation (`body_frame_t` / `world` / `base` delta basis), per-frame extra columns, sidecar location, and gates (`require_reviewed`, `forbid_unlabeled_segments`, `forbid_degraded_pipeline`). Validated against `mimicanno/jsonschemas/export_profile.schema.json`.
 
+## Hand Pipeline — Environment Setup
+
+The hand pipeline uses two environments separate from the MimicAnno core.
+
+### One-shot setup
+
+```bash
+bash scripts/setup_envs.sh          # all three environments
+bash scripts/setup_envs.sh --unidac # UniDAC only
+bash scripts/setup_envs.sh --hamer  # HaMeR only
+bash scripts/setup_envs.sh --core   # MimicAnno core only
+```
+
+Existing environments are skipped (idempotent).
+
+### Three environments
+
+| Environment | Purpose | Python |
+|-------------|---------|--------|
+| `conda env: unidac` | Phase A depth precomputation (UniDAC) | 3.10 |
+| `hamer/.hamer` venv | Phase B hand pose estimation (HaMeR) | 3.10 |
+| `.venv` (uv) | MimicAnno core / annotation | 3.11+ |
+
+### Files that require manual download
+
+#### MANO model (required for HaMeR)
+
+1. Register and download from [https://mano.is.tue.mpg.de](https://mano.is.tue.mpg.de)
+2. Place at:
+
+```
+hamer/_DATA/data/mano/MANO_RIGHT.pkl
+```
+
+#### UniDAC model weights
+
+```
+UniDAC/checkpoints/unidac.pt
+UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+```
+
+HaMeR demo data (`hamer/_DATA/hamer_ckpts/` etc.) is downloaded automatically by `setup_envs.sh` via `fetch_demo_data.sh` (gdown + Google Drive; internet access required).
+
+## Hand Pipeline (Phase A / B)
+
+Sub-pipeline that extracts per-frame 3D hand pose and finger distances from GoPro Hero 11 Max Lens Mod fisheye footage.
+
+### Input requirements
+
+| Item | Value |
+|------|-------|
+| Video resolution | **2704 × 1520** (fisheye only) |
+| Frame rate | 29.97 fps |
+| Camera model | OPENCV_FISHEYE (equidistant, k1..k4 = 0) |
+| Focal length (reference width) | fl_x = 1820 px, fl_y = 1275 px (at 5312 px native width) |
+
+Non-fisheye resolutions (e.g. 1920×1080) are skipped automatically by `run_all_pipeline.sh`.
+
+### Phase A — depth precomputation (`scripts/precompute_depth.py`)
+
+Runs UniDAC (Preset A) to produce a per-frame ERP depth map.
+
+| Item | Value |
+|------|-------|
+| Environment | `conda activate unidac` |
+| Input | `data/video/new/<NAME>.MP4` |
+| Output `.npy` shape | `(512, 704)` float32 — ERP-patch euclid distance [m] |
+| Output path | `data/depth/<NAME>/frames/frame_NNNNNN.npy` |
+| Metadata | `data/depth/<NAME>/meta.json` |
+
+> UniDAC outputs **ray distance (euclid distance), not Z-depth**.  
+> Back-projection: `cam_t = depth × unit_ray`
+
+### Phase B — hand pose estimation (`scripts/run_hand_estimation.py`)
+
+Fuses HaMeR (MANO) with Phase A depth to produce metric hand poses.
+
+| Item | Value |
+|------|-------|
+| Environment | `hamer/.hamer/bin/python` + `CUDA_VISIBLE_DEVICES=N` |
+| Input video | `data/video/new/<NAME>.MP4` |
+| Input depth | `data/depth/<NAME>/` (Phase A output) |
+| Per-frame output | `data/hands/<NAME>/frames/frame_NNNNNN.pkl` — `list[HandEstimate]` |
+| Time-series output | `data/hands/<NAME>/signals.json` |
+| Metadata | `data/hands/<NAME>/meta.json` |
+
+### `HandEstimate` fields
+
+| Field | Shape / type | Description |
+|-------|-------------|-------------|
+| `is_right` | `bool` | Whether this is the right hand |
+| `cam_t` | `(3,)` float32 | Metric wrist position [m] in camera frame (x, y, z) |
+| `global_orient` | `(3, 3)` float32 | Wrist rotation matrix |
+| `hand_pose` | `(15, 3, 3)` float32 | Finger joint rotation matrices (15 joints) |
+| `betas` | `(10,)` float32 | MANO shape parameters |
+| `joints_3d` | `(21, 3)` float32 | All joint 3D positions [m] in camera frame |
+| `joints_2d` | `(21, 2)` float32 | All joint 2D projections (pinhole approximation) |
+| `bbox` | `(4,)` float32 | Detection bbox [x1, y1, x2, y2] in pixels |
+| `wrist_depth_m` | `float \| None` | UniDAC wrist depth [m]. `None` = depth unavailable |
+| `depth_interpolated` | `bool` | `True` = gap-filled by temporal interpolation |
+| `pinch_distance_m` | `float \| None` | Thumb tip – index tip distance [m]. Valid whenever a hand is detected |
+
+MANO joint indices: wrist=0, thumb_tip=4, index_tip=8 (standard 21-point skeleton).
+
+### `signals.json` schema
+
+```json
+{
+  "schema_version": 1,
+  "frame_000060": {
+    "right": {"value": 0.0811, "depth_ok": true},
+    "left": null
+  }
+}
+```
+
+- `value`: Gaussian-smoothed (σ=2 frames) `pinch_distance_m` [m]
+- `depth_ok`: whether `wrist_depth_m` is non-`None` (UniDAC depth correction applied)
+- Frames with no detected hand are omitted entirely
+- `value` is valid even when `depth_ok=false` (MANO metric scale)
+
+### Batch execution
+
+```bash
+# All fisheye videos, parallel on GPU 2 and 3
+bash scripts/run_all_pipeline.sh
+
+# Specific videos only
+bash scripts/run_all_pipeline.sh GX010175 GX010176
+
+# Skip Phase A (depth already computed)
+bash scripts/run_all_pipeline.sh --skip-phase-a
+
+# Override GPU indices
+bash scripts/run_all_pipeline.sh --gpus 0 1
+```
+
 ## Viewer
 
 ```bash
