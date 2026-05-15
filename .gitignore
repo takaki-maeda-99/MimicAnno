@@ -35,6 +35,13 @@ runs/*
 # Plan 2 viewer
 frontend/node_modules/
 frontend/dist/
+node_modules/
+
+# Local-only artifacts (not portable / large)
+.superpowers/
+_vlm_dumps_archive/
+models/
+unsloth_compiled_cache/
 
 # Large binaries (videos, model weights, datasets) — block by extension as
 # a safety net. Test fixtures under tests/ are explicitly re-allowed below.
