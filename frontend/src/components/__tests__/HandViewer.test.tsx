@@ -180,24 +180,36 @@ it("HandViewer owns currentTimeSec: onTimeChange updates frame display", async (
   await waitFor(() => screen.getByText(/frame 2 \/ 2/));
 });
 
-it("loaded state に back-link が存在し '/' を指す", async () => {
-  render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  const link = screen.getByText("← runs") as HTMLAnchorElement;
-  expect(link.getAttribute("href")).toBe("/");
-});
+describe("HandViewer layout improvements", () => {
+  it("back-link is '← runs' with href='/'", async () => {
+    render(<HandViewer episodeId="GX010085" />);
+    await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+    const link = screen.getByRole("link", { name: "← runs" });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute("href")).toBe("/");
+  });
 
-it("h1 タイトルが存在しない", async () => {
-  render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  expect(document.querySelector("h1")).toBeNull();
-});
+  it("h1 heading does not exist", async () => {
+    render(<HandViewer episodeId="GX010085" />);
+    await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+  });
 
-it("scrub-info にフレーム番号と時刻が表示される", async () => {
-  render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  const info = document.querySelector(".hand-scrub-info");
-  expect(info).not.toBeNull();
-  expect(info!.textContent).toMatch(/frame 0 \/ 2/);
-  expect(info!.textContent).toMatch(/00:00\.0/);
+  it(".hand-viewer-layout exists", async () => {
+    render(<HandViewer episodeId="GX010085" />);
+    await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+    expect(document.querySelector(".hand-viewer-layout")).not.toBeNull();
+  });
+
+  it("scrub-info shows frame number", async () => {
+    render(<HandViewer episodeId="GX010085" />);
+    await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+    expect(screen.getByText(/frame 0 \/ 2/)).toBeTruthy();
+  });
+
+  it("scrub-info shows time in MM:SS.s format", async () => {
+    render(<HandViewer episodeId="GX010085" />);
+    await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+    expect(screen.getByText(/00:00\.0/)).toBeTruthy();
+  });
 });
