@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useApiToggle } from "../lib/ApiToggleContext";
 import { assertIndexSchema, SUPPORTED_MAJORS, type IndexDoc } from "../lib/manifest";
 import type { HandIndexDoc } from "../lib/handsClient";
+import { fetchRunSets, type RunSetEntry } from "../lib/runsClient";
 
 type State =
   | { kind: "loading" }
@@ -13,20 +14,30 @@ type HandState =
   | { kind: "hidden" }
   | { kind: "ok"; doc: HandIndexDoc };
 
-export default function RunList() {
+type Props = { runSet?: string };
+
+export default function RunList({ runSet }: Props = {}) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [handState, setHandState] = useState<HandState>({ kind: "loading" });
+  const [runSets, setRunSets] = useState<RunSetEntry[]>([]);
   const { apiBase, apiEnabled } = useApiToggle();
-  // Preserve ?api=1 across navigation so clicking a run from the list
-  // stays in API mode (otherwise the viewer would silently fall back to
-  // static /runs/index.json which may not exist in dev environments).
   const apiSuffix = apiEnabled ? "&api=1" : "";
+
+  // Build ?run_set= query param for all api fetches.
+  const runSetQs =
+    runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
+
+  // In api mode, fetch available run-sets once for the switcher dropdown.
+  useEffect(() => {
+    if (!apiEnabled) return;
+    fetchRunSets().then(setRunSets).catch(() => setRunSets([]));
+  }, [apiEnabled]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${apiBase}index.json`);
+        const r = await fetch(`${apiBase}index.json${runSetQs}`);
         if (r.status === 404) {
           if (!cancelled) {
             setState({
@@ -55,7 +66,7 @@ export default function RunList() {
     return () => {
       cancelled = true;
     };
-  }, [apiBase]);
+  }, [apiBase, runSetQs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +88,11 @@ export default function RunList() {
     };
   }, []);
 
+  // run-set param for navigation links — preserves current run_set selection.
+  const runSetNav = runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
+
+  const showSwitcher = apiEnabled && runSets.length > 1;
+
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
   if (state.doc.runs.length === 0) {
@@ -88,6 +104,31 @@ export default function RunList() {
   return (
     <div className="run-list">
       <h1>runs</h1>
+      {showSwitcher && (
+        <div className="run-set-switcher">
+          <label htmlFor="run-set-select">run-set: </label>
+          <select
+            id="run-set-select"
+            value={runSet ?? "."}
+            onChange={(e) => {
+              const selected = e.target.value;
+              const next = new URLSearchParams(window.location.search);
+              if (selected === ".") {
+                next.delete("run_set");
+              } else {
+                next.set("run_set", selected);
+              }
+              window.location.search = next.toString();
+            }}
+          >
+            {runSets.map((rs) => (
+              <option key={rs.name} value={rs.name}>
+                {rs.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <table>
         <thead>
           <tr>
@@ -101,7 +142,7 @@ export default function RunList() {
           {sorted.map((e) => (
             <tr key={`${e.episode_id}__${e.run_hash}`}>
               <td>
-                <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}${apiSuffix}`}>
+                <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}${apiSuffix}${runSetNav}`}>
                   {e.episode_id}
                 </a>
               </td>
