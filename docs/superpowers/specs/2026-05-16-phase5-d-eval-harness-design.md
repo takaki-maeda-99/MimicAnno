@@ -1,10 +1,29 @@
 # MimicAnno Phase 5 D — Evaluation harness design
 
-Status: **draft, rev-2** (B r2/r3 already shipped on main → extend scope).
+Status: **draft, rev-3** (post-rev2 Opus review fixes — see Revision log).
 Author: brainstorming session 2026-05-15.
 Supersedes: nothing — new sub-plan.
 
 ## Revision log
+
+**rev 3 (2026-05-16, late+1h)** — applied Opus reviewer Blocker + Should-fix
+items on top of rev2:
+
+| Reviewer item | Severity | Resolution | Section |
+|---|---|---|---|
+| B1 (`manifest.edited_at = event.ts` claim contradicts code) | Blocker | Spec §3.1 pseudocode now writes `manifest.edited_at = _now_iso()` (real code). Drift documented as informational note in §4.5 — both timestamps are diagnostic, `event.ts` is canonical history time. | §3.1, §4.5 |
+| B2 (§3.1 pseudocode in-place mutation diverges from real code) | Blocker | Pseudocode fully rewritten with `replace()` over dataclasses, `derive_edit_run_hash(...)` helper name, `write_run_atomically(...)` instead of separate `write_annotation_atomic + write_manifest_atomic + update_index_atomic`. Plan T5 task description aligned. | §3.1 |
+| S1 (`pre_edit_overall_confidence` first-event scope inconsistent across §2.1 / §3.2 / §4.3) | Should-fix | Tightened to "FIRST phase EditEvent per `segment_id`" (scope by `segment_id` alone, restricted to `field == "phase"`). `build_event` short-circuits to `pec=None` when `field != "phase"`. | §2.1, §3.2, §4.3 |
+| S2 (`datetime.fromisoformat` rejects `Z` on Python 3.10) | Should-fix | `build_event` normalizes via `s.replace("Z", "+00:00")` unconditionally before parsing. Test #18 must include a `Z`-suffixed `prior_generated_at` to exercise the path. | §3.2; plan T2.5 |
+| S3 (`history_event.py` import cycle risk) | Should-fix | Plan T2.5 explicitly constrains imports to `mimicanno.schema` + stdlib. | plan T2.5 |
+| S4 (B r3 test count deferred to mid-implementation) | Should-fix | Verified now: `tests/server/test_routes_patch_reviewed.py` = **11 cases**. Plan T5.6 pinned. | plan §1, §6 #16, plan T5.6 |
+| S5 (`compute_label_agreement` filter scope ambiguous) | Should-fix | Filter applies to the event-walk path (`_first_phase_event_by_segment`), NOT to the metric function as a whole. Unedited segments contribute via on-disk fields directly, unaffected by filter. | §4.3 |
+| S6 (`boundary_repo` `from_value` table mismatch) | Should-fix | §1.1 row reworded to `<old right segment's start_frame: int>` matching plan T5.5. | §1.1 |
+| S7 (`HISTORY_AHEAD_OF_MANIFEST` only covers `apply_edit`) | Should-fix | Acknowledged that the crash window is a `write_run_atomically` property; #11 covers all 3 repos structurally via the shared helper. Note added to §4.5 and §5.1 #11 docstring requirement in plan T6.5. | §4.5, §5.1 #11; plan T6.5 |
+| S8 (smoke threshold 0.8 flakes) | Should-fix | Plan T13 threshold lowered to 0.6 + explicit operator instructions ("click select, wait, choose; don't tab through") added. | plan T13 |
+| N1 (test count inconsistency 27 vs 35) | NIT | Spec §6 #12 reworded to "18 server unit (#1-#18) + 3 integration + 12 CLI = 33". Plan §0 #12 mirrored. | §6 #12; plan §0 #12 |
+| N4 (vitest "change then blur" case missing) | NIT | Plan T11 vitest case 2: trigger change first, then blur — assert PATCH already fired with duration. | plan T11 |
+| N6 (CLI default-accept must be `v2.x` prefix, not `==v2.0`) | NIT | Plan T10 explicitly parses the prefix. | plan T10 |
 
 **rev 2 (2026-05-16, late)** — B r2 (boundary drag, `9c25b87`) and
 B r3 (reviewed toggle, `14eb192`) shipped on main AFTER rev1 was written.
@@ -130,7 +149,7 @@ Non-goals:
 | Existing surface | D's relationship |
 |---|---|
 | `mimicanno/server/edit_repo.py::apply_edit` (B r1) | **Extended in-place**: append one `EditEvent` with `field="phase"` via the shared helper (below) inside the existing write transaction, between the segment mutation and the `write annotation → manifest → index` ordering. No new lock. No new file. |
-| `mimicanno/server/boundary_repo.py::patch_boundary` (B r2, shipped `9c25b87`) | **Extended in-place** (rev2): append one `EditEvent` with `field="boundary"`, `from_value=old_boundary_frame: int`, `to_value=new_frame: int`. Same insertion point pattern as `apply_edit` — between segment mutation (`replace(left, ...)`) and the `replace(annotation, segments=..., run_hash=..., history=...)` construction. |
+| `mimicanno/server/boundary_repo.py::patch_boundary` (B r2, shipped `9c25b87`) | **Extended in-place** (rev2; rev3 wording fix): append one `EditEvent` with `field="boundary"`, `from_value=<old right segment's start_frame: int>` (captured BEFORE the `replace(right, start_frame=new_frame, ...)`), `to_value=new_frame: int`. Same insertion point pattern as `apply_edit` — between segment mutation and the `replace(annotation, segments=..., run_hash=..., history=...)` construction. |
 | `mimicanno/server/reviewed_repo.py::patch_reviewed` (B r3, shipped `14eb192`) | **Extended in-place** (rev2): append one `EditEvent` with `field="reviewed"`, `from_value=old_reviewed: bool`, `to_value=new_reviewed: bool`. Same pattern. |
 | `mimicanno/server/history_event.py` (new, rev2) | **New helper module** with `build_event(...)` and `_validate_client_duration(...)`. All three repos call this single function. Replaces rev1's `_build_event` inline in `edit_repo.py`. Pure function — takes `(annotation_history, manifest_generated_at, field, from_value, to_value, segment_id, reviewer_id, prev_run_hash, new_run_hash, client_edit_duration_ms, pre_edit_overall_confidence)` and returns an `EditEvent`. |
 | `mimicanno/server/write_txn.py` (shipped) | **Unchanged.** History append happens inside the caller (each `*_repo` mutates `annotation.history` before passing to `write_run_atomically`). `write_txn` itself is content-agnostic. |
@@ -202,17 +221,20 @@ class EditEvent:
     # and a `clipped=true` flag is recorded.
     clipped: bool               # true iff server_inter_event_ms was clipped
 
-    # Pre-edit provenance (S1 reviewer fix)
+    # Pre-edit provenance (S1 reviewer fix; rev3 tightened scope)
     pre_edit_overall_confidence: float | None
     # The `segment.overall_confidence` value as it stood JUST BEFORE this edit
-    # was applied. Set only on the FIRST EditEvent per (segment_id, field)
-    # pair within a run's history — subsequent events for the same segment
-    # carry None. Captured by `_build_event` (§3.2) from the old segment
-    # snapshot before mutation, so the eval CLI's `by_confidence_bucket`
-    # metric (§4.3) can bucket by exact pre-edit confidence instead of the
-    # post-edit recomputed value. Optional — None when the field semantics
-    # don't apply (e.g., non-phase edits, or for segments whose pre-edit
-    # confidence is itself None).
+    # was applied. **Rev3 (S1 fix): set ONLY on the FIRST phase EditEvent
+    # per segment_id** — i.e., scope is by `segment_id` alone, restricted to
+    # `field == "phase"` events. Subsequent phase events for the same segment
+    # carry None; all `field == "boundary"` and `field == "reviewed"` events
+    # carry None regardless of order. Rationale: confidence is a property of
+    # the segment's auto-label assignment, which is destroyed by the first
+    # phase edit (`label_source` becomes `"human_edit"`); after that, the
+    # original confidence is no longer derivable. Captured by `build_event`
+    # (§3.2) from the old segment snapshot before mutation, so the eval CLI's
+    # `by_confidence_bucket` metric (§4.3) can bucket by exact pre-edit
+    # confidence instead of the post-edit recomputed value.
 ```
 
 ### 2.2 Where it lives
@@ -243,60 +265,100 @@ Appended to `AnnotationResult.history`, which is a top-level list in `annotation
 
 The shared helper `mimicanno/server/history_event.py::build_event` (new, rev2) replaces rev1's inline `_build_event`. All three repos call it just before constructing the new `AnnotationResult` (via `replace(annotation, ..., history=annotation.history + [event])`). Insertion is between segment mutation and `write_run_atomically` — i.e., within the existing file lock, after `if_match` validation, before the tmp+rename write.
 
-Pseudocode for `apply_edit` (rev2 — additions marked with **D:**, rev1 inline `_build_event` replaced by helper call):
+Pseudocode for `apply_edit` (rev3 — aligned with actual `edit_repo.py` shape: `replace()` over dataclasses + reassignment, not in-place mutation. Additions marked with **D:**, rev1 inline `_build_event` replaced by helper call. **Note (B1 fix)**: `manifest.edited_at = _now_iso()` remains as in B r1 — it is a fresh wall-clock call distinct from `event.ts`. The micro-drift between them is acceptable; both timestamps are diagnostic and `event.ts` is the canonical history time. Documented in §4.5 as `EDITED_AT_DRIFT` informational note. Equivalent insertion pattern applies to `patch_boundary` and `patch_reviewed` — see §3.1.1 / §3.1.2 for delta from this template):
 
 ```python
 def apply_edit(*, runs_root, name, segment_id, new_phase, if_match,
                reviewer, labelset, client_edit_duration_ms=None):  # D: kwarg added
-    with file_lock(runs_root / "index.json.lock", timeout_sec=30):
-        manifest = read_manifest(...)
-        annotation = read_annotation(...)
+    run_dir = runs_root / name
+    with file_lock(runs_root / "index.json.lock", timeout_sec=LOCK_TIMEOUT_SEC):
+        if not run_dir.is_dir():
+            raise RunNotFound(name=name)
+        manifest = read_manifest(run_dir / "manifest.json")
+        annotation = read_annotation_result(run_dir / "annotation.json")
         if manifest.run_hash != if_match:
             raise EtagMismatch(...)
         if new_phase not in labelset:
             raise InvalidLabel(...)
-        segment = find_segment(annotation, segment_id)
-        if segment is None:
+
+        segments = list(annotation.segments)
+        idx = _find_segment_idx(segments, segment_id)
+        if idx is None:
             raise InvalidSegment(...)
+        old_seg = segments[idx]
 
-        # B r1 existing mutation
-        old_phase = segment.phase
-        old_overall_confidence = segment.overall_confidence   # D: capture for S1
-        segment.phase = new_phase
-        segment.label_source = "human_edit"
-        segment.reviewer_id = reviewer
-        segment.reviewed = True
-        if "edited" not in segment.smoothing_ops:
-            segment.smoothing_ops.append("edited")
-        segment.overall_confidence = _recompute_confidence(segment)
+        # B r1 existing mutation (rev3: replace pattern matching real code)
+        old_phase = old_seg.phase
+        old_overall_confidence = old_seg.overall_confidence   # D: capture for S1
+        new_seg = replace(
+            old_seg,
+            phase=new_phase,
+            label_source="human_edit",
+            reviewer_id=reviewer,
+            reviewed=True,
+            smoothing_ops=_dedup_consecutive(list(old_seg.smoothing_ops) + ["edited"]),
+            overall_confidence=_recompute_confidence(old_seg, new_phase),
+        )
+        segments[idx] = new_seg
 
-        new_run_hash = _derive_edit_hash(manifest.run_hash, segment_id,
-                                         new_phase, reviewer)
+        old_run_hash = manifest.run_hash
+        new_run_hash = derive_edit_run_hash(old_run_hash, segment_id, new_phase, reviewer)
 
-        # D: history append
-        event = _build_event(
+        # D (rev3): build event AFTER mutation/hash computation, BEFORE the
+        # final annotation/manifest replace. Pass annotation.history (pre-event).
+        event = build_event(
             segment_id=segment_id,
             field="phase",
             from_value=old_phase,
             to_value=new_phase,
             reviewer_id=reviewer,
-            prev_run_hash=manifest.run_hash,
+            prev_run_hash=old_run_hash,
             new_run_hash=new_run_hash,
             client_edit_duration_ms=client_edit_duration_ms,
             prior_history=annotation.history,
             prior_generated_at=manifest.generated_at,
             pre_edit_overall_confidence=old_overall_confidence,  # D: S1
         )
-        annotation.history.append(event)
 
-        manifest.run_hash = new_run_hash
-        manifest.edited_at = event.ts            # already in B r1, reused
+        new_annotation = replace(
+            annotation,
+            segments=segments,
+            run_hash=new_run_hash,
+            history=annotation.history + [event],   # D: append (immutable concat)
+        )
+        new_manifest = replace(
+            manifest,
+            run_hash=new_run_hash,
+            edited_at=_now_iso(),   # B r1 behavior; NOT event.ts (B1 reviewer note)
+        )
 
-        write_annotation_atomic(annotation)
-        write_manifest_atomic(manifest)
-        update_index_atomic(runs_root, name, manifest)
-        return manifest.to_dict()
+        write_run_atomically(run_dir, runs_root, new_annotation, new_manifest, ...)
+        return new_manifest.to_dict()
 ```
+
+### 3.1.1 `patch_boundary` delta (rev3, B r2 path)
+
+Same insertion pattern. Differences from §3.1:
+
+- Field: `field="boundary"`.
+- `from_value` / `to_value`: `from_value=old_right.start_frame: int` (the boundary value before move; captured BEFORE the `replace(right, start_frame=new_frame, ...)`) ; `to_value=new_frame: int`.
+- `segment_id`: the **right** segment's id (the segment whose `start_frame` was moved — matches B r2 `boundary_id` semantics).
+- `pre_edit_overall_confidence`: pass `None` (boundary edits don't affect a single segment's confidence in r1).
+- `client_edit_duration_ms`: pass `None` (frontend doesn't instrument boundary drag in r1; §3.5).
+- `prev_run_hash = old_run_hash` (manifest's before move); `new_run_hash = derive_boundary_run_hash(old_run_hash, boundary_id, new_frame, reviewer)`.
+
+The `replace(annotation, segments=..., history=annotation.history + [event], run_hash=new_run_hash)` and `write_run_atomically(...)` are identical to §3.1.
+
+### 3.1.2 `patch_reviewed` delta (rev3, B r3 path)
+
+Same insertion pattern. Differences from §3.1:
+
+- Field: `field="reviewed"`.
+- `from_value=old_seg.reviewed: bool` (captured before the `replace()`); `to_value=new_reviewed: bool`.
+- `segment_id=seg.segment_id`.
+- `pre_edit_overall_confidence=None`, `client_edit_duration_ms=None` (same rationale as §3.1.1).
+- `prev_run_hash = old_run_hash`; `new_run_hash = derive_reviewed_run_hash(...)`.
+- **Note**: `ReviewedNoChange` (400 no_change) raises **before** the mutation/event-build path, so no history event is appended on a no-op toggle (covered by §5.1 #16).
 
 ### 3.2 `build_event` (shared helper — `mimicanno/server/history_event.py`)
 
@@ -312,12 +374,19 @@ def build_event(*, segment_id, field, from_value, to_value, reviewer_id,
                 pre_edit_overall_confidence) -> EditEvent:
     ts = datetime.now(UTC).isoformat(timespec="microseconds")
 
-    # server-side inter-event ms
+    # server-side inter-event ms.
+    # S2 (rev3): manifest.generated_at uses the B r1/r2/r3 _now_iso() helper
+    # which writes a trailing "Z" suffix (not "+00:00"). Python 3.10's
+    # fromisoformat rejects "Z"; 3.11+ accepts it. We normalize unconditionally
+    # for compatibility — this is cheap and unambiguous.
+    def _parse_iso(s: str) -> datetime:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
     if prior_history:
-        prev_ts = datetime.fromisoformat(prior_history[-1].ts)
+        prev_ts = _parse_iso(prior_history[-1].ts)
     else:
-        prev_ts = datetime.fromisoformat(prior_generated_at)
-    delta_ms = (datetime.fromisoformat(ts) - prev_ts).total_seconds() * 1000
+        prev_ts = _parse_iso(prior_generated_at)
+    delta_ms = (_parse_iso(ts) - prev_ts).total_seconds() * 1000
 
     clipped = False
     SERVER_INTER_EVENT_CAP_MS = 3_600_000  # 1 hour
@@ -331,11 +400,16 @@ def build_event(*, segment_id, field, from_value, to_value, reviewer_id,
     # validated client duration
     cdur = _validate_client_duration(client_edit_duration_ms)
 
-    # S1: only the FIRST phase event per segment carries pre_edit_overall_confidence
-    is_first_phase_event_for_segment = not any(
-        e.segment_id == segment_id and e.field == field for e in prior_history
-    )
-    pec = pre_edit_overall_confidence if is_first_phase_event_for_segment else None
+    # S1 (rev3): pec set only for FIRST phase event per segment_id (scope by
+    # segment_id alone, restricted to field=="phase"). Non-phase events always
+    # have pec=None regardless of prior_history (caller passes None anyway).
+    if field != "phase":
+        pec = None
+    else:
+        is_first_phase_event_for_segment = not any(
+            e.segment_id == segment_id and e.field == "phase" for e in prior_history
+        )
+        pec = pre_edit_overall_confidence if is_first_phase_event_for_segment else None
 
     return EditEvent(
         event_id=uuid4().hex,
@@ -521,7 +595,7 @@ Markdown is a templated rendering of the same — top-level summary, two tables 
 
 **Field-scope rules (rev2):**
 - `human_edit_time` aggregates over **all** event fields (`phase`, `boundary`, `reviewed`). `server_inter_event_ms` lands for every event regardless of field. `client_edit_duration_ms` lands only for `phase` events in r1 (§3.5) — `client_coverage` will naturally drop in proportion to non-phase events. The aggregate report breaks coverage out into `client_coverage_by_field` (added in rev2 §4.2) so operators can see this.
-- `label_agreement` filters to `field == "phase"` events **only**. Boundary moves and reviewed toggles do not change the segment's `phase`, so they have no first-edit auto-label to compare against. Including them would silently dilute the agreement rate. Filter is applied before `confusion_matrix` / `by_source` / `by_confidence_bucket` / `by_phase` computation. The implementation must assert this filter at the top of `compute_label_agreement(...)`.
+- `label_agreement` (rev3, S5 clarified): the **event-walk path** filters to `field == "phase"` events only. The event-walk path is used solely to find the *first phase event per segment_id* (`event.from_value` for the row of `confusion_matrix` / source attribution for edited segments). For **unedited segments** there is no event walk — they contribute to `by_source`, `by_confidence_bucket`, and `by_phase` via on-disk `segment.label_source` / `segment.overall_confidence` / `segment.phase` directly. Therefore the filter is at the top of the event-derived helper (`_first_phase_event_by_segment(history) -> dict[segment_id, EditEvent]`), not at the top of `compute_label_agreement(...)` itself. Including boundary/reviewed events in the event-walk would silently dilute attribution by introducing non-phase rows. Test #6 (confusion matrix) covers this; rev2 plan T8 adds a dedicated test asserting that boundary/reviewed events on the same segment do **not** create rows in the matrix.
 
 **`human_edit_time.per_run.total_ms_client`** = sum of `client_edit_duration_ms` over events with that event's `clipped=false` and a non-null client duration. Events with null client duration contribute 0 and increment `missing_client_durations`.
 
@@ -561,7 +635,9 @@ Complexity: O(total_events + total_segments). Memory: O(largest run's annotation
 - **`schema_version` mismatch** (annotation.json) → hard error per run with `EVAL_SCHEMA_INCOMPATIBLE`, abort the run, continue with others. Aggregate report still emitted.
 - **`history[i].new_run_hash != history[i+1].prev_run_hash`** → hash chain broken; warn but don't abort (could be from a manual edit by a tool we don't know about). Mark the run with `HISTORY_CHAIN_BROKEN` warning.
 - **`history[]` non-empty but `manifest.edited_at` missing** → write transaction was buggy; warn `HISTORY_WITHOUT_MANIFEST_TS`, still process.
-- **`history[-1].new_run_hash != manifest.run_hash`** (B3 reviewer fix) → inter-file crash window observed: annotation.json + history landed, but the subsequent manifest.json write was interrupted before the new run_hash was persisted. Warn `HISTORY_AHEAD_OF_MANIFEST`, still process (use `history[-1].new_run_hash` for chain checks but trust `manifest.run_hash` as the canonical hash for ETag/PATCH). Recovery is best-effort: the next successful PATCH will rebuild a coherent state (it computes `new_run_hash` from `manifest.run_hash` regardless, and appends a fresh history entry whose `prev_run_hash` matches the stale manifest — the chain will look broken at that boundary, which is correct and observable).
+- **`history[-1].new_run_hash != manifest.run_hash`** (B3 reviewer fix; rev3 scope-clarified) → inter-file crash window observed: annotation.json + history landed, but the subsequent manifest.json write was interrupted before the new run_hash was persisted. Warn `HISTORY_AHEAD_OF_MANIFEST`, still process (use `history[-1].new_run_hash` for chain checks but trust `manifest.run_hash` as the canonical hash for ETag/PATCH). Recovery is best-effort: the next successful PATCH will rebuild a coherent state (it computes `new_run_hash` from `manifest.run_hash` regardless, and appends a fresh history entry whose `prev_run_hash` matches the stale manifest — the chain will look broken at that boundary, which is correct and observable). **Rev3 scope (S7 fix)**: the crash window is a property of `write_run_atomically` (the inter-file write helper consumed by all 3 repos), not of any specific repo. Therefore §5.1 #11 (`HISTORY_AHEAD_OF_MANIFEST`) only needs to exercise **one** repo path (`apply_edit`); coverage for `patch_boundary` and `patch_reviewed` is structural — they share the exact same `write_run_atomically` call site, and a regression in that function would fail #11. A note to this effect must appear in the §5.1 #11 test docstring; plan T6.5 mirrors this.
+
+- **`manifest.edited_at` drift from `history[-1].ts`** (rev3, B1 reviewer note) → `manifest.edited_at` is set via a fresh `_now_iso()` call after `build_event` runs, so there is a microsecond-or-greater drift between the two timestamps. This is **expected** and **not an error condition** — both are diagnostic. `history[-1].ts` is the canonical event time. No warning code emitted; documented here so a future debugger doesn't waste time chasing the drift.
 - **Event with `segment_id` not present in `annotation.segments`** → segment deleted post-edit (B r1 doesn't allow this, but a future release might). Skip with warning `EVENT_ORPHANED`.
 
 None of these are CLI exit-code-1 errors unless **zero** runs were processable.
@@ -643,7 +719,12 @@ Pure-Python tests against synthetic histories (no server, no disk except a fixtu
 9. ✅ `human_edit_time.per_run` and `aggregate` computed per §4.3 semantics.
 10. ✅ `label_agreement.confusion_matrix`, `by_source`, `by_confidence_bucket`, `by_phase` computed per §4.3.
 11. ✅ Pre-D runs (edited_at present, history empty) generate a `PRE_D_RUN` warning and are excluded from timing aggregates.
-12. ✅ All 27 new tests (12 server unit + 3 integration + 12 CLI) green. All existing PATCH-surface tests across the 5 B-r1 files (`test_edit_repo.py` 17, `test_routes_patch.py` 15, `test_routes_patch_cycle.py` 3, `test_patch_concurrent.py` 1, `test_edit_short_circuit.py` 2 = **38 cases total**) remain green without modification. Repo-wide test suite (1100+) green.
+12. ✅ All **33 new tests** (18 server unit `tests/server/test_edit_history.py` #1-#17 + helper `tests/server/test_history_event.py` #18 + 3 integration + 12 CLI) green. All existing PATCH-surface tests remain green **without modification**:
+    - B r1 (38): `test_edit_repo.py` 17, `test_routes_patch.py` 15, `test_routes_patch_cycle.py` 3, `test_patch_concurrent.py` 1, `test_edit_short_circuit.py` 2.
+    - B r2 (31): `test_routes_patch_boundary.py` 28, `test_boundary_integration.py` 2, `test_boundary_patch_concurrent.py` 1.
+    - B r3 (11): `test_routes_patch_reviewed.py` 11.
+    Total existing PATCH-surface: **80 cases**.
+    Repo-wide test suite (1100+) green.
 13. ✅ mypy --strict clean over `mimicanno/eval/` and changed lines in `mimicanno/server/edit_repo.py`.
 14. ✅ Frontend dropdown captures focus→change duration and forwards it in PATCH body. Vitest case covers the new code path.
 15. ✅ Manual smoke (§5.5) on `runs/so101_phase4_v5/` shows ≥0.8 client_coverage (over phase events) and a non-empty agreement table.
