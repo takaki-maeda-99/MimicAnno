@@ -161,6 +161,15 @@ def make_router(
                 message="body must contain {'reviewed': bool}",
             )
 
+        raw_ms_r = body.get("client_edit_duration_ms")
+        if raw_ms_r is not None:
+            if not isinstance(raw_ms_r, int) or isinstance(raw_ms_r, bool) or raw_ms_r < 0:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms must be non-negative int",
+                )
+        client_ms_r: int | None = raw_ms_r
+
         try:
             new_manifest = await asyncio.to_thread(
                 patch_reviewed,
@@ -170,6 +179,7 @@ def make_router(
                 reviewed=body["reviewed"],
                 if_match=if_match,
                 reviewer=reviewer,
+                client_edit_duration_ms=client_ms_r,
             )
         except RunNotFound:
             raise MimicAnnoHTTPError(
@@ -243,14 +253,16 @@ def make_router(
             )
 
         _REQUIRED_KEYS = {"verb", "object", "target", "failure_flags"}
+        _OPTIONAL_KEYS = {"client_edit_duration_ms"}
         if (
             not isinstance(body, dict)
-            or set(body.keys()) != _REQUIRED_KEYS
+            or not _REQUIRED_KEYS.issubset(body.keys())
+            or not body.keys() <= (_REQUIRED_KEYS | _OPTIONAL_KEYS)
         ):
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_body",
                 message=(
-                    "body must be exactly "
+                    "body must contain "
                     '{"verb": str|null, "object": str|null, "target": str|null, "failure_flags": list[str]}'
                 ),
             )
@@ -281,6 +293,15 @@ def make_router(
                 message="failure_flags must be list[str]",
             )
 
+        raw_ms_l = body.get("client_edit_duration_ms")
+        if raw_ms_l is not None:
+            if not isinstance(raw_ms_l, int) or isinstance(raw_ms_l, bool) or raw_ms_l < 0:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms must be non-negative int",
+                )
+        client_ms_l: int | None = raw_ms_l
+
         try:
             new_manifest = await asyncio.to_thread(
                 patch_labels,
@@ -293,6 +314,7 @@ def make_router(
                 failure_flags=failure_flags,
                 if_match=if_match,
                 reviewer=reviewer,
+                client_edit_duration_ms=client_ms_l,
             )
         except RunNotFound:
             raise MimicAnnoHTTPError(
@@ -372,15 +394,27 @@ def make_router(
                 status=400, code="invalid_body",
                 message=f"body must be valid JSON: {exc.msg}",
             )
+        _PHASE_ALLOWED_KEYS = {"phase", "client_edit_duration_ms"}
         if (
             not isinstance(body, dict)
-            or set(body.keys()) != {"phase"}
+            or "phase" not in body
             or not isinstance(body.get("phase"), str)
+            or not body.keys() <= _PHASE_ALLOWED_KEYS
         ):
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_body",
-                message="body must be exactly {'phase': '<label_id>'}",
+                message="body must contain {'phase': '<label_id>'}",
             )
+
+        # Extract optional client_edit_duration_ms.
+        raw_ms = body.get("client_edit_duration_ms")
+        if raw_ms is not None:
+            if not isinstance(raw_ms, int) or isinstance(raw_ms, bool) or raw_ms < 0:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms must be non-negative int",
+                )
+        client_ms: int | None = raw_ms
 
         # Step 4: edit_repo.apply_edit + EditError → HTTP mapping.
         try:
@@ -393,6 +427,7 @@ def make_router(
                 if_match=if_match,
                 reviewer=reviewer,
                 labelset=labelset.ls,
+                client_edit_duration_ms=client_ms,
             )
         except RunNotFound:
             raise MimicAnnoHTTPError(
@@ -464,15 +499,26 @@ def make_router(
                 status=400, code="invalid_body",
                 message=f"body must be valid JSON: {exc.msg}",
             )
+        _BOUNDARY_ALLOWED_KEYS = {"frame", "client_edit_duration_ms"}
         if (
             not isinstance(body, dict)
-            or set(body.keys()) != {"frame"}
+            or "frame" not in body
             or not isinstance(body.get("frame"), int)
+            or not body.keys() <= _BOUNDARY_ALLOWED_KEYS
         ):
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_body",
-                message="body must be exactly {'frame': <int>}",
+                message="body must contain {'frame': <int>}",
             )
+
+        raw_ms_b = body.get("client_edit_duration_ms")
+        if raw_ms_b is not None:
+            if not isinstance(raw_ms_b, int) or isinstance(raw_ms_b, bool) or raw_ms_b < 0:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms must be non-negative int",
+                )
+        client_ms_b: int | None = raw_ms_b
 
         try:
             new_manifest = await asyncio.to_thread(
@@ -483,6 +529,7 @@ def make_router(
                 new_frame=body["frame"],
                 if_match=if_match,
                 reviewer=reviewer,
+                client_edit_duration_ms=client_ms_b,
             )
         except RunNotFound:
             raise MimicAnnoHTTPError(

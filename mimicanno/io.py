@@ -23,6 +23,7 @@ from mimicanno.schema import (
     AnnotationResult,
     Artifact,
     BoundaryRef,
+    EditEvent,
     GeneratorInfo,
     InputRef,
     Manifest,
@@ -222,6 +223,8 @@ def read_annotation_result(path: Path) -> AnnotationResult:
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
     _validate("annotation", raw)
+    history_raw = raw.get("history", [])
+    history = [EditEvent.from_dict(e) for e in history_raw]
     return AnnotationResult(
         schema_version=str(raw["schema_version"]),
         episode_id=str(raw["episode_id"]),
@@ -245,4 +248,5 @@ def read_annotation_result(path: Path) -> AnnotationResult:
         boundaries_url=str(raw["boundaries_url"]),
         signals_url=str(raw["signals_url"]),
         notes=raw.get("notes"),
+        history=history,
     )

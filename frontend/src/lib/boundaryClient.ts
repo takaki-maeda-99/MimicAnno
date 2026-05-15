@@ -62,6 +62,7 @@ export async function patchBoundaryFrame(args: {
   ifMatchRunHash: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  clientEditDurationMs?: number | null;
 }): Promise<BoundaryPatchResult> {
   const {
     apiBase,
@@ -71,6 +72,7 @@ export async function patchBoundaryFrame(args: {
     ifMatchRunHash,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    clientEditDurationMs,
   } = args;
 
   const url = `${apiBase}${encodeURIComponent(runName)}/boundaries/${encodeURIComponent(boundaryId)}`;
@@ -81,6 +83,11 @@ export async function patchBoundaryFrame(args: {
     else signal.addEventListener("abort", () => timeoutCtl.abort(), { once: true });
   }
 
+  const bodyObj: Record<string, unknown> = { frame: newFrame };
+  if (clientEditDurationMs != null) {
+    bodyObj.client_edit_duration_ms = clientEditDurationMs;
+  }
+
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -89,7 +96,7 @@ export async function patchBoundaryFrame(args: {
         "Content-Type": "application/json",
         "If-Match": `"${ifMatchRunHash}"`,
       },
-      body: JSON.stringify({ frame: newFrame }),
+      body: JSON.stringify(bodyObj),
       signal: timeoutCtl.signal,
     });
   } finally {

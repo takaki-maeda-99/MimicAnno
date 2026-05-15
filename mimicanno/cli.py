@@ -559,6 +559,51 @@ def serve_cmd(
     uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
 
 
+@app.command("eval")
+def eval_cmd(
+    runs_root: Path = typer.Argument(
+        Path("runs"),
+        help="Directory containing run sub-directories with annotation.json.",
+    ),
+    run: Optional[str] = typer.Option(
+        None, "--run",
+        help="Filter to a single run (by dir name).",
+    ),
+    fmt: str = typer.Option(
+        "markdown", "--format",
+        help="Output format: markdown (default) or json.",
+    ),
+) -> None:
+    """Print per-run and aggregate annotation metrics."""
+    from mimicanno.io import read_annotation_result
+    from mimicanno.eval.metrics import compute_metrics, aggregate
+    from mimicanno.eval.render import render_markdown, render_json
+
+    run_dirs = sorted(runs_root.iterdir()) if runs_root.is_dir() else []
+    metrics_list = []
+    for run_dir in run_dirs:
+        if not run_dir.is_dir():
+            continue
+        if run and run_dir.name != run:
+            continue
+        ann_path = run_dir / "annotation.json"
+        if not ann_path.exists():
+            continue
+        try:
+            ann = read_annotation_result(ann_path)
+            metrics_list.append(compute_metrics(ann, run_dir.name))
+        except Exception as e:
+            sys.stderr.write(f"warning: skipping {run_dir.name}: {e}\n")
+
+    agg = aggregate(metrics_list)
+    if fmt == "json":
+        sys.stdout.write(render_json(metrics_list, agg))
+    else:
+        sys.stdout.write(render_markdown(metrics_list, agg))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
 def main() -> None:
     app()
 

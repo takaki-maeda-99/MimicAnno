@@ -27,6 +27,7 @@ from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
 from mimicanno.server.edit_repo import EtagMismatch, InvalidSegment, RunNotFound
+from mimicanno.server.event_builder import build_edit_event
 from mimicanno.server.write_txn import write_run_atomically
 
 
@@ -82,6 +83,7 @@ def patch_reviewed(
     reviewed: bool,
     if_match: str,
     reviewer: str | None,
+    client_edit_duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Toggle the reviewed flag on a single segment (spec §2, §3).
 
@@ -132,7 +134,14 @@ def patch_reviewed(
             old_run_hash, segment_id, reviewed, reviewer
         )
 
-        new_annotation = replace(annotation, segments=segments, run_hash=new_run_hash)
+        event = build_edit_event(
+            edit_type="reviewed",
+            segment_id=segment_id,
+            client_edit_duration_ms=client_edit_duration_ms,
+            reviewer=reviewer,
+        )
+        new_history = [*annotation.history, event]
+        new_annotation = replace(annotation, segments=segments, run_hash=new_run_hash, history=new_history)
         new_manifest = replace(manifest, run_hash=new_run_hash, edited_at=_now_iso())
 
         suffix_len = len(name) - len(manifest.episode_id) - len(CANONICAL_SEPARATOR)

@@ -69,6 +69,7 @@ export async function patchSegmentPhase(args: {
   runSet?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  clientEditDurationMs?: number | null;
 }): Promise<PatchResult> {
   const {
     apiBase,
@@ -79,6 +80,7 @@ export async function patchSegmentPhase(args: {
     runSet,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    clientEditDurationMs,
   } = args;
 
   const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
@@ -91,6 +93,11 @@ export async function patchSegmentPhase(args: {
     else signal.addEventListener("abort", () => timeoutCtl.abort(), { once: true });
   }
 
+  const bodyObj: Record<string, unknown> = { phase: newPhase };
+  if (clientEditDurationMs != null) {
+    bodyObj.client_edit_duration_ms = clientEditDurationMs;
+  }
+
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -99,7 +106,7 @@ export async function patchSegmentPhase(args: {
         "Content-Type": "application/json",
         "If-Match": `"${ifMatchRunHash}"`,
       },
-      body: JSON.stringify({ phase: newPhase }),
+      body: JSON.stringify(bodyObj),
       signal: timeoutCtl.signal,
     });
   } finally {

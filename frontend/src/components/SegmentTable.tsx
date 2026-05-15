@@ -44,6 +44,7 @@ export interface SegmentTableProps {
     segmentId: string,
     labels: LabelsEditPayload,
   ) => Promise<LabelsPatchResult>;
+  onEditFocus?: () => void;
   editInFlight: boolean;
   staleRun: boolean;
   toast?: SegmentTableToast;
@@ -61,6 +62,7 @@ export default function SegmentTable(props: SegmentTableProps) {
     onPhaseEdit,
     onReviewedToggle,
     onLabelsEdit,
+    onEditFocus,
     editInFlight,
     staleRun,
     toast,
@@ -126,6 +128,7 @@ export default function SegmentTable(props: SegmentTableProps) {
               onPhaseEdit={onPhaseEdit}
               onReviewedToggle={onReviewedToggle}
               onLabelsEdit={onLabelsEdit}
+              onEditFocus={onEditFocus}
             />
           ))}
         </tbody>
@@ -143,6 +146,7 @@ function SegmentRow({
   onPhaseEdit,
   onReviewedToggle,
   onLabelsEdit,
+  onEditFocus,
 }: {
   idx: number;
   segment: SubtaskSegment;
@@ -162,6 +166,7 @@ function SegmentRow({
     segmentId: string,
     labels: LabelsEditPayload,
   ) => Promise<LabelsPatchResult>;
+  onEditFocus?: () => void;
 }) {
   // Controlled <select>: local optimistic value, reset on parent's segment
   // change (after server re-fetches). Rollback = setLocalPhase(oldPhase)
@@ -289,6 +294,7 @@ function SegmentRow({
           <select
             value={localPhase}
             onChange={onChange}
+            onFocus={onEditFocus}
             disabled={disabled}
             aria-label={`phase for ${segment.segment_id}`}
           >
@@ -310,6 +316,7 @@ function SegmentRow({
             checked={localReviewed}
             disabled={disabled}
             aria-label={`reviewed for ${segment.segment_id}`}
+            onFocus={onEditFocus}
             onChange={onReviewedChange}
           />
         ) : (
@@ -324,6 +331,7 @@ function SegmentRow({
             value={localVerb}
             disabled={disabled}
             aria-label={`verb for ${segment.segment_id}`}
+            onFocus={onEditFocus}
             onChange={(e) => setLocalVerb(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -338,6 +346,7 @@ function SegmentRow({
             value={localObject}
             disabled={disabled}
             aria-label={`object for ${segment.segment_id}`}
+            onFocus={onEditFocus}
             onChange={(e) => setLocalObject(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -352,6 +361,7 @@ function SegmentRow({
             value={localTarget}
             disabled={disabled}
             aria-label={`target for ${segment.segment_id}`}
+            onFocus={onEditFocus}
             onChange={(e) => setLocalTarget(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -366,6 +376,7 @@ function SegmentRow({
             value={localFlags}
             disabled={disabled}
             aria-label={`flags for ${segment.segment_id}`}
+            onFocus={onEditFocus}
             onChange={(e) => setLocalFlags(e.target.value)}
             onBlur={handleLabelBlur}
           />

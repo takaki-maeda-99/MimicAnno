@@ -83,6 +83,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     };
   }, [apiBase, apiEnabled]);
   const abortRef = useRef<AbortController | null>(null);
+  const editStartRef = useRef<number | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [widthPx, setWidthPx] = useState(0);
   const obsRef = useRef<ResizeObserver | null>(null);
@@ -130,6 +131,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
       };
     }
     const data = state.data;
+    const durationMs =
+      editStartRef.current !== null
+        ? Math.round(Date.now() - editStartRef.current)
+        : null;
+    editStartRef.current = null;
     setEditInFlight(true);
     setToast(undefined);
     let result: PatchResult;
@@ -142,6 +148,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         newPhase,
         ifMatchRunHash: data.manifest.run_hash,
         runSet,
+        clientEditDurationMs: durationMs,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -326,6 +333,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
+    const reviewedDurationMs =
+      editStartRef.current !== null
+        ? Math.round(Date.now() - editStartRef.current)
+        : null;
+    editStartRef.current = null;
     setReviewedPatchInFlight(true);
     setToast(undefined);
     let result;
@@ -337,6 +349,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         segmentId,
         reviewed: newReviewed,
         ifMatchRunHash: data.manifest.run_hash,
+        clientEditDurationMs: reviewedDurationMs,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -390,6 +403,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
+    const labelsDurationMs =
+      editStartRef.current !== null
+        ? Math.round(Date.now() - editStartRef.current)
+        : null;
+    editStartRef.current = null;
     setLabelsPatchInFlight(true);
     setToast(undefined);
     let result;
@@ -404,6 +422,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         target: labels.target,
         failure_flags: labels.failure_flags,
         ifMatchRunHash: data.manifest.run_hash,
+        clientEditDurationMs: labelsDurationMs,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -654,6 +673,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           onPhaseEdit={onPhaseEdit}
           onReviewedToggle={onReviewedToggle}
           onLabelsEdit={onLabelsEdit}
+          onEditFocus={() => { editStartRef.current = Date.now(); }}
           editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           staleRun={staleRun}
           toast={toast}

@@ -63,6 +63,20 @@
     },
     "boundaries_url": {"type": "string"},
     "signals_url": {"type": "string"},
-    "notes": {"type": ["string", "null"]}
+    "notes": {"type": ["string", "null"]},
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["edit_type", "segment_id", "edited_at"],
+        "properties": {
+          "edit_type": {"type": "string"},
+          "segment_id": {"type": "string"},
+          "edited_at": {"type": "string"},
+          "client_edit_duration_ms": {"type": "integer"},
+          "reviewer": {"type": ["string", "null"]}
+        }
+      }
+    }
   }
 }
