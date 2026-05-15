@@ -668,21 +668,23 @@ class SAM3Runtime:
             except ValueError:
                 pass
 
-    def close(self) -> None:
-        """Release runtime resources. Idempotent — safe to call repeatedly.
+    def _close_all_sessions(self) -> None:
+        """Close every open session, leave the predictor + closed flag intact.
 
-        Closes every still-open session, then runs ``gc.collect()`` and
-        ``torch.cuda.empty_cache()`` *once* (not per-session). Per-session
-        empty_cache would churn the allocator and disturb other models
-        sharing the GPU (e.g. the Phase 2 VLM); spec §3.3 + spec review #14.
+        バッチ実行で同一ランタイムを複数エピソードに渡って使い回す経路
+        (``AnnotateRequest.preloaded_sam3_runtime``) で呼ばれる。
+        セッション解放だけ行い、``_predictor`` と ``_closed`` には触らない
+        ので、次のエピソードでそのまま使い回せる。
+
+        さらに ``gc.collect()`` + ``torch.cuda.empty_cache()`` をここで
+        呼ぶ。これは review C4 対応: PyTorch の CUDA caching allocator が
+        セッション解放後にも論理的に確保したままにする領域を、エピソード
+        間でリリースして VRAM 累積を抑えるため。``close()`` 本体と同じ
+        最終処理 (per-session ではなく per-episode) を踏襲しているので、
+        他 GPU 上のモデル (例: VLM) を churn する心配は無い。
         """
-        if self._closed:
-            return
-        self._closed = True
-
         for sid in list(self._open_sessions):
             self._close_session(sid)
-
         try:
             import torch
 
@@ -690,7 +692,20 @@ class SAM3Runtime:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception as exc:  # pragma: no cover - defensive
-            _LOG.warning("SAM3Runtime.close GPU cleanup failed: %r", exc)
+            _LOG.warning("SAM3Runtime._close_all_sessions cleanup failed: %r", exc)
+
+    def close(self) -> None:
+        """Release runtime resources. Idempotent — safe to call repeatedly.
+
+        Closes every still-open session via ``_close_all_sessions()``
+        (which also runs gc.collect + torch.cuda.empty_cache), then drops
+        the predictor reference. spec §3.3 + spec review #14.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        self._close_all_sessions()  # gc.collect + empty_cache はこの中
 
         # Drop the predictor reference last; sam3's predictor doesn't expose
         # an explicit shutdown for the single-GPU path, so GC owns the rest.
