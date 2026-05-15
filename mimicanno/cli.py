@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # pyproject requires Python >= 3.11 (we use datetime.UTC and dict|None unions
 # in expression context). Failing here gives a friendly message instead of an
@@ -523,6 +524,10 @@ def serve_cmd(
         False, "--reload",
         help="Pass uvicorn reload=True (dev only).",
     ),
+    hands_root: Optional[Path] = typer.Option(
+        None, "--hands-root",
+        help="hand pipeline output root (data/hands/). Enables /api/hands/ routes.",
+    ),
 ) -> None:
     """Start the Phase 5 A read-only HTTP server.
 
@@ -545,7 +550,10 @@ def serve_cmd(
     # normalisation `(reviewer or "")`).
     reviewer = (os.environ.get("MIMICANNO_REVIEWER") or "").strip() or None
     fastapi_app = create_app(
-        runs_root=runs_root, cors_origins=origins, reviewer=reviewer,
+        runs_root=runs_root,
+        cors_origins=origins,
+        reviewer=reviewer,
+        hands_root=hands_root,
     )
     uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
 

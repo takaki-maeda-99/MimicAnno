@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "frame_000000": {
+    "right": {
+      "pinch_m": 0.034,
+      "cam_t": [0.12, -0.05, 0.63],
+      "euler_deg": {"yaw": 45.6, "pitch": -8.1, "roll": 12.3},
+      "depth_ok": true
+    },
+    "left": null
+  },
+  "frame_000001": {
+    "right": null,
+    "left": null
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "video_source": "tests/server/fixtures/hands/GX010085/video.mp4",
+  "video_fps": 30.0,
+  "video_width": 16,
+  "video_height": 16,
+  "video_total_frames": 3,
+  "frames_with_hands": 2,
+  "frames_left_hand": 1,
+  "frames_right_hand": 2,
+  "pass1_complete": true
+}
