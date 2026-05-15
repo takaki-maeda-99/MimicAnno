@@ -549,13 +549,13 @@ def _unsloth_load_model_and_processor(
                    "float32": torch.float32}[dtype]
     model, _ = FastLanguageModel.from_pretrained(
         model_name=model_id,
-        max_seq_length=4096,
+        max_seq_length=2048,
         load_in_4bit=True,
         dtype=torch_dtype,
+        device_map="cuda:0",  # CUDA_VISIBLE_DEVICES で絞った1枚に収める
     )
     FastLanguageModel.for_inference(model)
-    # Use the base model's processor (tokenizer/image processor).
-    processor = AutoProcessor.from_pretrained(base_model)
+    processor = AutoProcessor.from_pretrained(model_id)
     return model, processor
 
 
