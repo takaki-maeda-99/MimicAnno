@@ -1,11 +1,62 @@
 # Phase 5 D — Evaluation harness — implementation plan
 
-Date: 2026-05-15 (revised 2026-05-16 → rev3 2026-05-16 late+1h)
-Status: draft, rev-3
-Spec: [`../specs/2026-05-16-phase5-d-eval-harness-design.md`](../specs/2026-05-16-phase5-d-eval-harness-design.md) (rev3)
+Date: 2026-05-15 (revised 2026-05-16 → rev4 2026-05-16 late+2h, SHIPPED)
+Status: **SHIPPED as rev-4 (D r1)** — see spec rev4 for the implementation-led
+re-scoping. rev2/rev3 task table below is **retained for reference** but
+superseded by what actually shipped in commits `4fdd553` (impl) + `caff5cf` (tests).
+Spec: [`../specs/2026-05-16-phase5-d-eval-harness-design.md`](../specs/2026-05-16-phase5-d-eval-harness-design.md) (rev4)
 Branch: `feat/phase5-d-eval-harness` (rebased onto `main` @ `29f0032`)
 
 ## Revision log
+
+**rev 4 (2026-05-16, late+2h, SHIPPED)** — rev2/rev3 が rich 12-field
+`EditEvent` 設計だったところ、別セッションが並行で **rev1 minimal 5-field**
+版を 95% 実装して uncommitted で保存していたことが発覚。Opus 独立レビュー
+で実装品質は APPROVED、縮小方針も SOUND と判定 → rev1 をベースに 5-field
+版で SHIPPED。
+
+実装サマリ (`4fdd553` + `caff5cf`):
+
+| 項目 | 状態 |
+|---|---|
+| `EditEvent` 5-field dataclass + conditional emit + JSON schema | ✅ shipped |
+| 4 PATCH paths (`edit_repo` / `boundary_repo` / `reviewed_repo` / `labels_repo`) の history append | ✅ shipped (atomicity = `write_run_atomically`) |
+| `mimicanno/server/event_builder.py::build_edit_event(...)` 共通ヘルパー | ✅ shipped (`history_event.py` には rename しない) |
+| `mimicanno/eval/{metrics,render}.py` + `mimicanno eval` CLI | ✅ shipped |
+| Frontend client_edit_duration_ms 計測 (`Date.now()` ベース) | ✅ shipped — 4 endpoints すべて |
+| Schema bump (annotation `0.2.0 → 0.3.0`) | ✅ shipped (`schema_versions.py:19`) |
+| Tests: server history emit (6) + eval unit (9) + CLI integration (2) + phase duration validation (4) | ✅ shipped (30 cases total) |
+| Smoke (SO101 v5 手動確認) | 🟡 **次工程** |
+| Notes (`2026-05-16-phase5-d-results.md`) | ✅ shipped (subagent が生成) |
+
+### rev2/rev3 と rev4 の主な差異
+
+| 項目 | rev3 設計 | rev4 reality |
+|---|---|---|
+| EditEvent fields | 12 | 5 |
+| `field` / `edit_type` 命名 | `field` | `edit_type` (実装で先行命名) |
+| Helper file | `history_event.py` (新規) | `event_builder.py` (既存名のまま) |
+| `client_edit_duration_ms` 受け入れ endpoint | phase のみ | **4 endpoints すべて** |
+| `label_agreement` 計算 | confusion matrix (from_value/to_value 必須) | `label_source=="human_edit"` の segment 割合近似 |
+| Frontend timing | `performance.now` | `Date.now()` |
+| 新 helper unit test (#18) | 必須 | `event_builder` には独立 test 無し (4 PATCH 経路の history emit test がカバー) |
+
+### D r2 候補 (spec §rev4 移行表参照)
+
+1. `EditEvent` rich 化 (event_id / from_value / hash chain / pre_edit_confidence)
+2. confusion matrix ベースの真の `label_agreement` (現在は misnomer、`human_touched_fraction` に rename 予定)
+3. `HISTORY_AHEAD_OF_MANIFEST` / `HISTORY_CHAIN_BROKEN` 警告
+4. `mimicanno eval --schema-version` 厳格化
+5. `by_source` / `by_confidence_bucket` / `by_phase` breakdown
+6. Frontend `performance.now` 移行 (低優先)
+
+### 残タスク (rev4 で実施)
+
+- [ ] **T-rev4-smoke**: `runs/so101_phase4_v5/` で `mimicanno serve` → UI で phase/boundary/reviewed/labels 各 1 編集 → `uv run mimicanno eval runs/` → markdown 出力確認、`client_coverage > 0`, `total_edits == 4`, `label_agreement > 0`
+- [ ] **T-rev4-merge**: `feat/phase5-d-eval-harness` を main に merge (push 後)
+- [ ] **T-rev4-memory**: `MEMORY.md` 更新 (`project_phase5_status.md` の D 行を SHIPPED 化、新規 `project_phase5_d_shipped.md` を作成)
+
+---
 
 **rev 3 (2026-05-16, late+1h)** — Opus reviewer の Blocker + Should-fix
 を反映:

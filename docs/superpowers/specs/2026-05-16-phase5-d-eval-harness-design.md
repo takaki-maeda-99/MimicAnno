@@ -1,10 +1,59 @@
 # MimicAnno Phase 5 D — Evaluation harness design
 
-Status: **draft, rev-3** (post-rev2 Opus review fixes — see Revision log).
-Author: brainstorming session 2026-05-15.
+Status: **SHIPPED as rev-4 (D r1)** — implementation deviated from rev2/rev3 rich design; rev4 is post-hoc documentation of what actually shipped (rev1's minimal 5-field `EditEvent`, all 4 PATCH endpoints accept `client_edit_duration_ms`).
+Author: brainstorming session 2026-05-15. Rev4: 2026-05-16 late+2h.
 Supersedes: nothing — new sub-plan.
 
 ## Revision log
+
+**rev 4 (2026-05-16, late+2h, SHIPPED)** — Discovered during D-implementation
+attempt that an earlier autonomy session (parallel to B r4 wip) had already
+written ~95% of the D r1 implementation in the uncommitted state of the
+`phase5d` worktree, using rev1's **minimal 5-field `EditEvent`** rather than
+rev2/rev3's rich 12-field design. Independent Opus review of the existing
+implementation: **APPROVED**, and rev4 scope = **SOUND** (label_agreement
+approximated by `label_source == "human_edit"` fraction is adequate for
+D r1). Rev2/rev3 sections below describing the rich field set (`event_id`,
+`ts`, `field`, `from_value`/`to_value`, `prev_run_hash`/`new_run_hash`,
+`server_inter_event_ms`/`clipped`, `pre_edit_overall_confidence`) are
+**retained for reference** but are **D r2 candidates**, not D r1 contract.
+
+### What rev4 actually ships
+
+| Surface | r1 reality | rev2/rev3 design (deferred to D r2) |
+|---|---|---|
+| `EditEvent` | 5 fields: `edit_type`, `segment_id`, `edited_at`, `client_edit_duration_ms`, `reviewer` | 12 fields incl. `event_id`, `from_value`/`to_value`, hash chain, server fallback |
+| `_VALID_EDIT_TYPES` | `{"relabel", "boundary", "reviewed", "labels"}` (B r1/r2/r3/r4 all covered) | Same set + `"object"`/`"verb"`/`"target"` reserved |
+| Helper | `mimicanno/server/event_builder.py::build_edit_event` | rev2 proposed `history_event.py::build_event` (rename rejected — name `event_builder` already shipped) |
+| `client_edit_duration_ms` accepted on | **All 4 PATCH endpoints** (phase / boundary / reviewed / labels) | rev2/rev3 incorrectly stated phase-only — actual implementation accepts on all 4 |
+| Frontend timing | `Date.now()` + `editStartRef` (`RunViewer.tsx` + `SegmentTable.tsx`); applied to **all 4 PATCH paths** | rev3 specified `performance.now` for phase only — both diverged |
+| `mimicanno eval` CLI | Position arg `runs_root`, flags `--format {markdown,json,both}` `--run` `--out` | Same |
+| Metrics: `human_edit_time` | sum of `client_edit_duration_ms` over events | Same |
+| Metrics: `client_coverage` | timed events / total edits | rev3 added `client_coverage_by_field` (deferred to D r2) |
+| Metrics: `label_agreement` | `len([s for s in segments if s.label_source == "human_edit"]) / total_segments` — i.e., "fraction of segments touched by a human edit" | rev3 designed confusion matrix + by_source/by_confidence/by_phase — all require `from_value`/`to_value` not present in shipped EditEvent. **Renamed to `human_touched_fraction` in D r2 for clarity** (current `label_agreement` is a misnomer — it measures touch, not agreement) |
+| Tests | 30 cases total: 6 server-side history emit + 9 eval unit + 2 CLI integration + 4 phase_duration validation + 4 existing repo tests cover boundary/reviewed/labels round-trip | rev3 specified 33 (18 server unit + 3 integration + 12 CLI) — superseded |
+| Schema bump | annotation `0.2.0 → 0.3.0` (`schema_versions.py:19` already shipped) | Same intent, different version literal |
+| Tests for `HISTORY_AHEAD_OF_MANIFEST`, `HISTORY_CHAIN_BROKEN`, `EVAL_SCHEMA_INCOMPATIBLE` | **Not implemented** (warning codes don't exist in rev4) | D r2 candidate |
+| `pre_edit_overall_confidence` first-event semantics | **Not implemented** (field absent) | D r2 |
+| `server_inter_event_ms` server-side fallback | **Not implemented** (field absent; client always sends duration) | D r2 |
+
+### D r2 candidate items (carried forward from rev2/rev3)
+
+1. **`EditEvent` rich extension** — add `event_id` (uuid4), `from_value`/`to_value` for confusion matrix, `prev_run_hash`/`new_run_hash` for chain audit, `server_inter_event_ms`/`clipped` for fallback timing, `pre_edit_overall_confidence` for exact bucketing.
+2. **Confusion matrix `label_agreement`** — requires `from_value`/`to_value` (D r2 #1 prerequisite).
+3. **`HISTORY_AHEAD_OF_MANIFEST` recovery + warning** — exercise crash window in `write_run_atomically`.
+4. **`HISTORY_CHAIN_BROKEN` audit** — verify `history[i].new_run_hash == history[i+1].prev_run_hash` (D r2 #1 prerequisite).
+5. **`mimicanno eval --schema-version` enforcement** — currently CLI accepts any version; D r2 should reject mismatches.
+6. **`by_source` / `by_confidence_bucket` / `by_phase`** — all require rich EditEvent.
+7. **Metric rename** — `label_agreement` → `human_touched_fraction` (rev2 rich design's `label_agreement` is conceptually different from rev1/r1's; document the migration).
+8. **Frontend `performance.now`** — replace `Date.now()` for sub-ms precision. Low priority (UI race already dominates).
+
+### Lessons learned (for the autonomy log)
+
+- The **brainstorming → spec → plan → impl** workflow doesn't gracefully handle the case where impl has *already* happened in a parallel session and is sitting uncommitted. Two Opus review rounds were spent designing rev2/rev3 against a phantom greenfield. Mitigation for future: when picking up a worktree, **always check `git status` before reading prior specs** to detect uncommitted work in flight.
+- Once divergence was detected, **letting the implementation drive the spec** (rev4) was faster than re-implementing the rich design (which would have been ~2 days of work for marginal D r1 value).
+
+---
 
 **rev 3 (2026-05-16, late+1h)** — applied Opus reviewer Blocker + Should-fix
 items on top of rev2:
