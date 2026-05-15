@@ -20,6 +20,12 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response
 
+from mimicanno.server.boundary_lookup import (
+    BoundaryIsTimelineEdge,
+    BoundaryNotFound,
+    InvalidFrame,
+)
+from mimicanno.server.boundary_repo import patch_boundary
 from mimicanno.server.edit_repo import (
     EtagMismatch,
     InvalidLabel,
@@ -195,6 +201,95 @@ def make_router(
             )
 
         # Step 5: 200 + new ETag.
+        new_run_hash = new_manifest["run_hash"]
+        return Response(
+            content=json.dumps(new_manifest).encode("utf-8"),
+            media_type="application/json",
+            headers={
+                "ETag": f'"{new_run_hash}"',
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    @router.api_route(
+        "/api/runs/{name}/boundaries/{boundary_id}",
+        methods=["PATCH"],
+    )
+    async def patch_boundary_route(
+        name: str,
+        boundary_id: str,
+        request: Request,
+    ) -> Response:
+        ct = (
+            request.headers.get("content-type", "")
+            .split(";")[0]
+            .strip()
+            .lower()
+        )
+        if ct != "application/json":
+            raise MimicAnnoHTTPError(
+                status=415, code="unsupported_media",
+                message="Content-Type must be application/json",
+            )
+
+        if_match = request.headers.get("if-match", "")
+        if not if_match:
+            raise MimicAnnoHTTPError(
+                status=428, code="etag_required",
+                message="If-Match header is required",
+            )
+        if len(if_match) >= 2 and if_match[0] == '"' and if_match[-1] == '"':
+            if_match = if_match[1:-1]
+
+        raw_body = await request.body()
+        try:
+            body = json.loads(raw_body) if raw_body else None
+        except json.JSONDecodeError as exc:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message=f"body must be valid JSON: {exc.msg}",
+            )
+        if (
+            not isinstance(body, dict)
+            or set(body.keys()) != {"frame"}
+            or not isinstance(body.get("frame"), int)
+        ):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message="body must be exactly {'frame': <int>}",
+            )
+
+        try:
+            new_manifest = await asyncio.to_thread(
+                patch_boundary,
+                runs_root=runs_root,
+                name=name,
+                boundary_id=boundary_id,
+                new_frame=body["frame"],
+                if_match=if_match,
+                reviewer=reviewer,
+            )
+        except RunNotFound:
+            raise MimicAnnoHTTPError(
+                status=404, code="run_not_found",
+                message=f"run not found: {name!r}",
+            )
+        except EtagMismatch:
+            raise MimicAnnoHTTPError(
+                status=412, code="etag_mismatch",
+                message="If-Match does not equal current manifest.run_hash",
+            )
+        except (BoundaryNotFound, BoundaryIsTimelineEdge):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_boundary",
+                message=f"boundary_id {boundary_id!r} is not a valid inner boundary",
+            )
+        except InvalidFrame as exc:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_frame",
+                message=exc.reason,
+            )
+
         new_run_hash = new_manifest["run_hash"]
         return Response(
             content=json.dumps(new_manifest).encode("utf-8"),
