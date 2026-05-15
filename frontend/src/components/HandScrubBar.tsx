@@ -1,3 +1,5 @@
+import type { MouseEvent } from "react";
+
 type Props = {
   widthPx: number;
   totalFrames: number;
@@ -10,7 +12,7 @@ export default function HandScrubBar({ widthPx, totalFrames, currentFrame, onSee
 
   const x = (currentFrame / totalFrames) * widthPx;
 
-  function handleClick(e: React.MouseEvent<SVGSVGElement>) {
+  function handleClick(e: MouseEvent<SVGSVGElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const frame = Math.min(
