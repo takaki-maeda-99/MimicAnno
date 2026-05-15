@@ -123,6 +123,64 @@ async function callPatch() {
   });
 }
 
+describe("patchSegmentPhase — runSet query param (S-RS)", () => {
+  it("appends ?run_set= when runSet is provided", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(manifestStub(NEW_HASH)), {
+        status: 200,
+        headers: { "ETag": `"${NEW_HASH}"`, "Content-Type": "application/json" },
+      }),
+    );
+    await patchSegmentPhase({
+      apiBase: "/api/runs/",
+      runName: "ep0__abc",
+      segmentId: "seg-001",
+      newPhase: "grasp_object",
+      ifMatchRunHash: OK_HASH,
+      runSet: "so101_phase4_v5",
+    });
+    const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
+    expect(url).toBe("/api/runs/ep0__abc/segments/seg-001?run_set=so101_phase4_v5");
+  });
+
+  it("does not append ?run_set= when runSet is '.'", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(manifestStub(NEW_HASH)), {
+        status: 200,
+        headers: { "ETag": `"${NEW_HASH}"`, "Content-Type": "application/json" },
+      }),
+    );
+    await patchSegmentPhase({
+      apiBase: "/api/runs/",
+      runName: "ep0__abc",
+      segmentId: "seg-001",
+      newPhase: "grasp_object",
+      ifMatchRunHash: OK_HASH,
+      runSet: ".",
+    });
+    const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
+    expect(url).toBe("/api/runs/ep0__abc/segments/seg-001");
+  });
+
+  it("does not append ?run_set= when runSet is undefined", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(manifestStub(NEW_HASH)), {
+        status: 200,
+        headers: { "ETag": `"${NEW_HASH}"`, "Content-Type": "application/json" },
+      }),
+    );
+    await patchSegmentPhase({
+      apiBase: "/api/runs/",
+      runName: "ep0__abc",
+      segmentId: "seg-001",
+      newPhase: "grasp_object",
+      ifMatchRunHash: OK_HASH,
+    });
+    const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
+    expect(url).toBe("/api/runs/ep0__abc/segments/seg-001");
+  });
+});
+
 describe("patchSegmentPhase — 412 etag_mismatch", () => {
   it("maps to kind=conflict with error code preserved", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(

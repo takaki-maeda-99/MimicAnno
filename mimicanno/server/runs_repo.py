@@ -112,6 +112,22 @@ class RunsRepository:
         ) from last_exc
 
 
+def list_run_sets(parent: Path) -> list[dict[str, str]]:
+    """Return run-set entries under ``parent``.
+
+    Legacy mode (index.json directly under parent): returns ``[{"name": ".",
+    "label": "(root)"}]``.  Multi mode: returns one entry per subdirectory
+    that contains an index.json, sorted alphabetically.  Empty dir: ``[]``.
+    """
+    if (parent / "index.json").exists():
+        return [{"name": ".", "label": "(root)"}]
+    result: list[dict[str, str]] = []
+    for d in sorted(parent.iterdir()):
+        if d.is_dir() and (d / "index.json").exists():
+            result.append({"name": d.name, "label": d.name})
+    return result
+
+
 def _is_under(path: Path, root: Path) -> bool:
     """``Path.is_relative_to`` wrapper that always works under symlinks."""
     try:

@@ -66,6 +66,7 @@ export async function patchSegmentPhase(args: {
   segmentId: string;
   newPhase: string;
   ifMatchRunHash: string;
+  runSet?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<PatchResult> {
@@ -75,11 +76,13 @@ export async function patchSegmentPhase(args: {
     segmentId,
     newPhase,
     ifMatchRunHash,
+    runSet,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = args;
 
-  const url = `${apiBase}${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}`;
+  const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
+  const url = `${apiBase}${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}${runSetQs}`;
   const timeoutCtl = new AbortController();
   const timer = setTimeout(() => timeoutCtl.abort(), timeoutMs);
   // Compose user signal + timeout into a single signal.

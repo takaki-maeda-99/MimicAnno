@@ -1,5 +1,6 @@
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import RunList from "../RunList";
 import { ApiToggleProvider } from "../../lib/ApiToggleContext";
 
@@ -35,10 +36,18 @@ function jsonResp(data: unknown, status = 200): Response {
   });
 }
 
+const RUN_SETS_MULTI = [
+  { name: "so101_phase4_v5", label: "so101_phase4_v5" },
+  { name: "piper_phase4_v5", label: "piper_phase4_v5" },
+];
+
+const RUN_SETS_LEGACY = [{ name: ".", label: "(root)" }];
+
 beforeEach(() => {
   vi.spyOn(window, "fetch").mockImplementation(
     vi.fn(async (url: string) => {
       if (url.includes("/api/hands/index.json")) return jsonResp(HAND_INDEX);
+      if (url === "/api/run-sets") return jsonResp(RUN_SETS_LEGACY);
       return jsonResp(INDEX_DOC);
     }) as typeof fetch,
   );
@@ -82,4 +91,41 @@ it("signals_ready=false shows signals未生成 label", async () => {
   const links = screen.getAllByRole("link");
   const handLinks = links.filter((l) => l.getAttribute("href")?.includes("hand=GX010086"));
   expect(handLinks).toHaveLength(0);
+});
+
+// ----- S-RS: run-set dropdown -----
+
+it("shows run-set dropdown when multiple run-sets are available", async () => {
+  vi.spyOn(window, "fetch").mockImplementation(
+    vi.fn(async (url: string) => {
+      if (url.includes("/api/hands/index.json")) return jsonResp(HAND_INDEX);
+      if (url === "/api/run-sets") return jsonResp(RUN_SETS_MULTI);
+      return jsonResp(INDEX_DOC);
+    }) as typeof fetch,
+  );
+  renderWithProvider();
+  await waitFor(() => screen.getByRole("combobox", { name: /run.set/i }));
+  const select = screen.getByRole("combobox", { name: /run.set/i });
+  const options = select.querySelectorAll("option");
+  expect(options).toHaveLength(2);
+  expect(options[0].value).toBe("so101_phase4_v5");
+  expect(options[1].value).toBe("piper_phase4_v5");
+});
+
+it("does not show run-set dropdown in legacy mode (single entry)", async () => {
+  // beforeEach mock returns RUN_SETS_LEGACY (1 entry with name=".")
+  renderWithProvider();
+  await waitFor(() => screen.getByText("ep0"));
+  expect(screen.queryByRole("combobox", { name: /run.set/i })).toBeNull();
+});
+
+it("does not show run-set dropdown when apiEnabled=false", async () => {
+  render(
+    <ApiToggleProvider apiEnabled={false}>
+      <RunList />
+    </ApiToggleProvider>,
+  );
+  // In static mode: no /api/run-sets call, no dropdown.
+  await waitFor(() => screen.getByText("ep0"));
+  expect(screen.queryByRole("combobox", { name: /run.set/i })).toBeNull();
 });

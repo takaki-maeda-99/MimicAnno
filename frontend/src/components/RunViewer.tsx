@@ -48,11 +48,13 @@ type State =
   | { kind: "no-match"; episodeId: string; runHashShort: string | undefined }
   | { kind: "loaded"; data: Loaded };
 
-type Props = { episodeId: string; runHashShort: string | undefined };
+type Props = { episodeId: string; runHashShort: string | undefined; runSet?: string };
 
-export default function RunViewer({ episodeId, runHashShort }: Props) {
+export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const { apiBase, apiEnabled } = useApiToggle();
+  // S-RS: append ?run_set= to all artifact fetches when a run-set is selected.
+  const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
   const [labelset, setLabelset] = useState<LabelSetDoc | null>(null);
   const [editInFlight, setEditInFlight] = useState(false);
   const [staleRun, setStaleRun] = useState(false);
@@ -132,6 +134,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
         segmentId,
         newPhase,
         ifMatchRunHash: data.manifest.run_hash,
+        runSet,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -166,7 +169,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          );
+          ) + runSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -251,7 +254,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
 
     (async () => {
       try {
-        const r = await fetch(`${apiBase}index.json`, { signal: controller.signal });
+        const r = await fetch(`${apiBase}index.json${runSetQs}`, { signal: controller.signal });
         if (!r.ok) {
           setState({ kind: "error", message: `failed to load index.json: HTTP ${r.status}` });
           return;
@@ -269,7 +272,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           new URL(`${apiBase}index.json`, window.location.origin).toString(),
           entry.manifest_url,
         );
-        const manifestResp = await fetchRetry(manifestUrl, { signal: controller.signal });
+        const manifestResp = await fetchRetry(manifestUrl + runSetQs, { signal: controller.signal });
         const manifest = (await manifestResp.json()) as Manifest;
 
         assertConsumerCapability(manifest, SUPPORTED_MAJORS);
@@ -300,7 +303,7 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           role: "annotation" | "boundaries" | "signals",
         ) => {
           try {
-            const url = resolveUrl(manifestUrl, artifactUrl(manifest, role));
+            const url = resolveUrl(manifestUrl, artifactUrl(manifest, role)) + runSetQs;
             const r = await fetch(url, { signal: controller.signal });
             if (!r.ok) {
               updateSlot(role, { kind: "error", message: `failed to load ${role}: HTTP ${r.status}` });
@@ -338,10 +341,15 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
     })();
 
     return () => controller.abort();
-  }, [episodeId, runHashShort, apiBase]);
+  }, [episodeId, runHashShort, apiBase, runSetQs]);
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
+  // Build back-link preserving api mode and run_set selection.
+  const runSetSuffix =
+    runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
+  const backHref = apiEnabled ? `/?api=1${runSetSuffix}` : "/";
+
   if (state.kind === "no-match") {
     const { episodeId: e, runHashShort: h } = state;
     return (
@@ -350,19 +358,18 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
           ? `no run for episode_id=${e} hash=${h}`
           : `no run for episode_id=${e}`}
         {" "}
-        <a href={apiEnabled ? "/?api=1" : "/"}>all runs</a>
+        <a href={backHref}>all runs</a>
       </div>
     );
   }
   const { selection, manifest } = state.data;
-  const backHref = apiEnabled ? "/?api=1" : "/";
   return (
     <div className="run-viewer">
       <div className="back-link">
         <a href={backHref}>← runs</a>
       </div>
       {selection.kind === "multiple" && (
-        <ChooserBanner selection={selection} episodeId={episodeId} />
+        <ChooserBanner selection={selection} episodeId={episodeId} runSet={runSet} />
       )}
       {manifest.pipeline_status.degraded_from_phase !== null && (
         <div className="pipeline-status-banner">
@@ -425,12 +432,16 @@ export default function RunViewer({ episodeId, runHashShort }: Props) {
 function ChooserBanner({
   selection,
   episodeId,
+  runSet,
 }: {
   selection: Extract<RunSelection, { kind: "multiple" }>;
   episodeId: string;
+  runSet?: string;
 }) {
   const { apiEnabled } = useApiToggle();
   const apiSuffix = apiEnabled ? "&api=1" : "";
+  const runSetSuffix =
+    runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
   const all = [selection.chosen, ...selection.alternatives];
   return (
     <div className="chooser-banner">
@@ -440,7 +451,7 @@ function ChooserBanner({
         defaultValue={selection.chosen.run_hash_short}
         onChange={(e) => {
           window.location.search =
-            `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}${apiSuffix}`;
+            `?run=${encodeURIComponent(episodeId)}&hash=${e.target.value}${apiSuffix}${runSetSuffix}`;
         }}
       >
         {all.map((entry) => (
