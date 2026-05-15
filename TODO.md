@@ -82,6 +82,7 @@
 | **S-HV** | `MimicAnno-hand-viewer` | `feat/hand-viewer` | T5 smoke + regen (T1-T4 は main 済) |
 | **S-B2** | `MimicAnno-phase5b-r2` | `feat/phase5-b-r2-boundary-drag` | spec → plan → impl (境界ドラッグ) |
 | **S-D** | `MimicAnno-phase5d` | `feat/phase5-d-eval-harness` | spec → plan → impl (eval harness、Phase 5 A read-only API を消費し B2 と並列可) |
+| **S-RS** | (未作成) | `feat/run-set-switcher` | UI ドロップダウンで runs/ 直下のサブディレクトリを切り替え (軽量、半日程度) |
 
 ### 各 worktree でやること
 
@@ -104,6 +105,13 @@
 - [x] **D-plan**: `docs/superpowers/plans/2026-05-16-phase5-d-eval-harness-plan.md` 完成・push済
 - [ ] **D-impl-backend**: eval CLI/サーバー側 (B2 と並列可)
 - [ ] **D-impl-frontend**: 結果表示 UI (B2 マージ後)
+
+#### S-RS (run-set switcher) — 軽量、B2/D と独立
+- [ ] **RS-impl**: `GET /api/run-sets` エンドポイント追加 (app.py ~10行)
+- [ ] **RS-impl**: `/api/runs/` に `?run_set=` クエリパラメータ対応 (routes.py ~20行)
+- [ ] **RS-impl**: `--runs-root` に親ディレクトリを渡した時にサブディレクトリを自動検出 (cli.py ~10行)
+- [ ] **RS-impl**: `RunList.tsx` 上部にドロップダウン追加、選択を URL `?run_set=` に反映 (~30行)
+- [ ] **RS-smoke**: `runs/` を親にしてサーバー起動 → ドロップダウンで so101/piper/gem4 を切り替えて episode が変わることを確認
 
 ### マージ順 (master plan §3)
 1. S-HV (smoke 完了次第、最短マージ)
