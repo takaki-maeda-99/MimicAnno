@@ -1,12 +1,42 @@
 # Phase 5 D — Evaluation harness — implementation plan
 
-Date: 2026-05-15 (revised 2026-05-16)
-Status: draft, post-review-revision-1
-Spec: [`../specs/2026-05-16-phase5-d-eval-harness-design.md`](../specs/2026-05-16-phase5-d-eval-harness-design.md)
-Branch: `feat/phase5-d-eval-harness` (current branch — already cut from
-`main` @ `2ab7f7b`).
+Date: 2026-05-15 (revised 2026-05-16 → rev2 2026-05-16 late)
+Status: draft, rev-2
+Spec: [`../specs/2026-05-16-phase5-d-eval-harness-design.md`](../specs/2026-05-16-phase5-d-eval-harness-design.md) (rev2)
+Branch: `feat/phase5-d-eval-harness` (rebased onto `main` @ `29f0032`)
 
 ## Revision log
+
+**rev 2 (2026-05-16, late)** — B r2 (boundary drag, `9c25b87`) と B r3
+(reviewed toggle, `14eb192`) が main にマージ済みのため、`EditEvent`
+emit 対象を 3 つの write path に拡張する rev2 spec に追随。
+
+主な差分:
+
+- **ヘルパー抽出**: rev1 の `edit_repo.py::_build_event` を新規モジュール
+  `mimicanno/server/history_event.py::build_event` に移動。3 つの repo
+  (`edit_repo` / `boundary_repo` / `reviewed_repo`) から共通利用。新規
+  タスク **T2.5** (helper 抽出 + 単独 unit test #18) を T4 の前段に挿入。
+- **B r2 patch_boundary 拡張**: 新規タスク **T5.5** で
+  `boundary_repo.patch_boundary` に history append + tests #13, #14
+  (boundary emit / 412 不変)。
+- **B r3 patch_reviewed 拡張**: 新規タスク **T5.6** で
+  `reviewed_repo.patch_reviewed` に history append + tests #15, #16
+  (reviewed emit / 400 no_change 不変)。
+- **混在 chain test**: 新規タスク **T6.7** で phase → boundary → reviewed
+  の 3-PATCH chain test #17。
+- **`label_agreement` field filter**: T8 の `compute_label_agreement(...)`
+  に `event.field == "phase"` の事前フィルタを必須化。boundary / reviewed
+  events は除外する旨を docstring と test #6 (confusion matrix) で
+  明示。
+- **`client_coverage_by_field`**: T8/T9 の集計に field ごとの
+  `client_coverage` を追加 (phase: 約 1.0、boundary/reviewed: 0.0)。
+- **既存テスト無修正 green の対象拡大**: B r1 の 38 ケースに加え、B r2
+  (`tests/server/test_routes_patch_boundary.py` 28 + integration 2 +
+  concurrent 1 = 31 ケース) と B r3 (`tests/server/test_routes_patch_reviewed.py` の
+  全ケース、件数は実装時に確認) を **無修正 green** ガードに追加。
+- **タスク数**: 16 → **20** (T2.5, T5.5, T5.6, T6.7 追加)。見積もり
+  +0.5 日 (合計 2–2.5 日)。
 
 **rev 1 (2026-05-16)** — reviewer Blocker + Should-fix を反映した差分のみ:
 
@@ -20,15 +50,20 @@ Branch: `feat/phase5-d-eval-harness` (current branch — already cut from
 
 ---
 
-依存先: **Phase 5 B r1 (SHIPPED, `9f1dd06`)**。本計画は B の write 経路
-(`mimicanno/server/edit_repo.py::apply_edit`) を拡張する。B r2+ (境界
-ドラッグ等) には依存しない (forward-compatible)。
+依存先: **Phase 5 B r1 (SHIPPED `9f1dd06`)**、**B r2 (SHIPPED `9c25b87`)**、
+**B r3 (SHIPPED `14eb192`)**。本計画は 3 つの write 経路:
+- `mimicanno/server/edit_repo.py::apply_edit` (B r1)
+- `mimicanno/server/boundary_repo.py::patch_boundary` (B r2)
+- `mimicanno/server/reviewed_repo.py::patch_reviewed` (B r3)
+
+をそれぞれ拡張する。B r4+ (object/verb edit 等) には依存しない (forward-compatible
+— rev2 helper の `field` 引数は拡張可能)。
 
 ---
 
 ## 0. ゴール
 
-spec §6 の exit criteria 15 項目全達成:
+spec §6 の exit criteria 18 項目全達成 (rev2):
 
 1. `EditEvent` schema + `AnnotationResult.history` + `annotation.schema.json` v2.0 bump
 2. `apply_edit` が PATCH ごとに 1 event 追加 (atomicity 保持)
@@ -44,7 +79,10 @@ spec §6 の exit criteria 15 項目全達成:
 12. 全 27 新規テスト (12 server unit + 3 integration + 12 CLI) green。**B r1 既存 PATCH-surface 38 ケース** (下記 §4 検証表に列挙の 5 ファイル) を無修正で全 green、repo 全体 1100+ ケース green
 13. mypy --strict clean (`mimicanno/eval/`, 変更行のみ `edit_repo.py`)
 14. frontend dropdown 計測 + vitest 追加
-15. SO101 v5 手動 smoke で client_coverage ≥ 0.8
+15. SO101 v5 手動 smoke で client_coverage (phase events) ≥ 0.8
+16. **(rev2)** `boundary_repo.patch_boundary` / `reviewed_repo.patch_reviewed` も EditEvent emit (tests #13-#16)
+17. **(rev2)** Mixed-field chain (phase → boundary → reviewed) で 3 events + hash chain intact (test #17)
+18. **(rev2)** `mimicanno/server/history_event.py::build_event` が pure function、全 3 repo から呼ばれる (test #18)
 
 ---
 
@@ -52,15 +90,21 @@ spec §6 の exit criteria 15 項目全達成:
 
 - **TDD**: 各 task 「失敗するテスト → 実装 → green」。
 - **1 task = 1 commit (PR-able)**。
-- **B r1 の挙動を絶対に壊さない**:
-  - **既存 PATCH-surface 5 ファイル (合計 38 ケース) を一字も変更しない**:
+- **B r1/r2/r3 の挙動を絶対に壊さない** (rev2 で対象拡大):
+  - **B r1 既存 PATCH-surface 5 ファイル (合計 38 ケース) を一字も変更しない**:
     - `tests/server/test_edit_repo.py` (17)
     - `tests/server/test_routes_patch.py` (15)
     - `tests/server/test_routes_patch_cycle.py` (3)
     - `tests/server/test_patch_concurrent.py` (1)
     - `tests/server/test_edit_short_circuit.py` (2)
-  - これら 5 ファイルは T5/T6/T12 の gate で **無変更 green** を都度確認
-  - PATCH レスポンス body / ETag は完全互換 (history は annotation.json 側のみ)
+  - **(rev2) B r2 既存 PATCH-surface を一字も変更しない**:
+    - `tests/server/test_routes_patch_boundary.py` (28)
+    - `tests/server/test_boundary_integration.py` (2)
+    - `tests/server/test_boundary_patch_concurrent.py` (1)
+  - **(rev2) B r3 既存 PATCH-surface を一字も変更しない**:
+    - `tests/server/test_routes_patch_reviewed.py` (件数は T5.6 着手前に `git ls-files | xargs wc -l` で実数確認)
+  - 全 gate (T5 / T5.5 / T5.6 / T12) で **無変更 green** を都度確認
+  - 3 PATCH エンドポイントのレスポンス body / ETag は完全互換 (history は annotation.json 側のみ)
   - un-edited annotation.json が byte-identical (一文字違ったら fail)
 - **`uv run`** 経由で検証 (`uv run pytest`, `uv run mimicanno eval ...`)。
 - **branch 衛生** (memory `feedback_handoff_conflict_check`): 開始時に
@@ -77,21 +121,25 @@ spec §6 の exit criteria 15 項目全達成:
 | T1 | `EditEvent` dataclass + JSON serializer 追加 + unit test (round-trip) | `mimicanno/schema.py`, test | - | schema |
 | T2 | `AnnotationResult.history: list[EditEvent]` field 追加 + `to_dict()` の **conditional emit (空なら key 省略)** + 既存 fixture の byte-identical regression test | `mimicanno/schema.py`, test | T1 | schema |
 | T3 | `annotation.schema.json` 更新 (`history` optional, `schema_version` → `"2.0"`) + `read_annotation` loader 拡張 + **B2 reviewer fix**: T3 着手前に `runs/so101_phase4_v5/` の現行 `schema_version` literal を読み出し pin する regression test を追加。その後に書き手 (`AnnotationResult.schema_version` default in `mimicanno/schema.py`) を一箇所だけ bump。loader-side enforce は r1 対象外と明記 (`mimicanno eval --schema-version` 側でのみ refuse) | `mimicanno/jsonschemas/annotation.schema.json`, `mimicanno/io.py`, `mimicanno/schema.py`, test | T2 | schema |
-| T4 | `mimicanno/server/edit_repo.py::_build_event` private helper 新設 (server-only、history 関連ロジックを集約。**S1**: `pre_edit_overall_confidence` kwarg + 「同一 segment_id × field の prior event 有無で first 判定」ロジック含む) + 単独 unit test (時刻 monkeypatch, prev_history 0/N 件, clipping, client validation 全分岐, **S1 first/subsequent 判定**) | `mimicanno/server/edit_repo.py`, `tests/server/test_edit_history.py` (新規) | T3 | server |
-| T5 | `apply_edit(...)` 拡張: kwargs `client_edit_duration_ms=None` 追加 + **S1**: mutate 前に `old_overall_confidence = segment.overall_confidence` 退避 + `_build_event` へ thread + `annotation.history.append(event)` を **write_annotation の直前** に配置 (atomicity 維持) + **B r1 既存 PATCH-surface 5 ファイル (38 ケース) 無修正 green を CI 実行ログで確認** | `mimicanno/server/edit_repo.py`, test | T4 | server |
-| T6 | PATCH route body validator 拡張: `client_edit_duration_ms: float \| None` を許可 (型違反は 400、value 範囲違反 = NaN / inf / 負 / >1h は **silently drop** = `_build_event` 内で None 化、spec §3.3) + spec §5.1 #1–#10 全ケース実装 (TDD)。**S5 reviewer fix**: 400 vs drop の境界をテストコメントで明示 | `mimicanno/server/routes.py`, `tests/server/test_edit_history.py` | T5 | server |
+| T2.5 | **(rev2)** `mimicanno/server/history_event.py` 新規モジュール: `build_event(...)` pure function を抽出 (rev1 の T4 inline helper を昇格) + `_validate_client_duration(...)` + spec §5.1 #18 unit test (時刻 monkeypatch、prev_history 0/N 件、clipping、client validation 全分岐、`pre_edit_overall_confidence` first-event 判定) | `mimicanno/server/history_event.py`, `tests/server/test_history_event.py` (新規) | T3 | server |
+| T4 | `edit_repo.apply_edit` が `history_event.build_event` を呼んで `EditEvent(field="phase", ...)` を作るよう書き換え + `pre_edit_overall_confidence` 経路は T2.5 helper で完結 (rev2 で T4 は単なる caller refactor) | `mimicanno/server/edit_repo.py` | T2.5 | server |
+| T5 | `apply_edit(...)` 拡張: kwargs `client_edit_duration_ms=None` 追加 + **S1**: mutate 前に `old_overall_confidence = segment.overall_confidence` 退避 + `build_event` へ thread + `annotation = replace(annotation, history=annotation.history + [event], ...)` を **write_run_atomically の直前** に配置 (atomicity 維持) + **B r1 既存 PATCH-surface 5 ファイル (38 ケース) 無修正 green を CI 実行ログで確認** | `mimicanno/server/edit_repo.py`, test | T4 | server |
+| T5.5 | **(rev2) `boundary_repo.patch_boundary` 拡張**: mutate 後の `segments` 構築前後に `event = build_event(field="boundary", from_value=<old start_frame: int>, to_value=<new_frame: int>, segment_id=<right segment id>, client_edit_duration_ms=None, pre_edit_overall_confidence=None, ...)` を生成 → `new_annotation = replace(annotation, segments=..., history=annotation.history + [event], run_hash=new_run_hash)` で書き込み + spec §5.1 #13, #14 実装 (TDD) + **B r2 既存テスト 31 ケース無修正 green 確認** | `mimicanno/server/boundary_repo.py`, `tests/server/test_edit_history.py` (追記) | T5 | server |
+| T5.6 | **(rev2) `reviewed_repo.patch_reviewed` 拡張**: 同様に `build_event(field="reviewed", from_value=<old bool>, to_value=<new bool>, ...)` を append + spec §5.1 #15, #16 実装 + **B r3 既存テスト 無修正 green 確認** | `mimicanno/server/reviewed_repo.py`, `tests/server/test_edit_history.py` (追記) | T5.5 | server |
+| T6 | PATCH route body validator 拡張 (phase endpoint のみ): `client_edit_duration_ms: float \| None` を許可 (型違反は 400、value 範囲違反 = NaN / inf / 負 / >1h は **silently drop** = `build_event` 内で None 化、spec §3.3) + spec §5.1 #1–#10 全ケース実装 (TDD)。**S5 reviewer fix**: 400 vs drop の境界をテストコメントで明示。**注**: boundary/reviewed endpoint の body schema は変更しない (rev2 §3.4) | `mimicanno/server/routes.py`, `tests/server/test_edit_history.py` | T5.6 | server |
 | T6.5 | **B3 reviewer fix**: spec §5.1 #11 `HISTORY_AHEAD_OF_MANIFEST` テスト + #12 `412 で history 不変` テストを追加。#11 は `write_manifest_json` monkeypatch で annotation 後 manifest 前にクラッシュさせ on-disk 状態を作り、CLI が warning を返す経路を assert。#12 は B r1 `test_apply_edit_stale_etag_raises_and_disk_untouched` に依存しない独立 assertion | `tests/server/test_edit_history.py` | T6 | server |
-| T7 | server integration test 3 件 (spec §5.2): real disk PATCH → CLI 呼び出し / **`mimicanno annotate` で history が消える** (S4 reviewer fix: 旧 plan の "force-reuse" は存在しない呼称、`mimicanno annotate` の overwrite 経路を直接呼ぶ) / hash-chain 破壊で warning | `tests/server/test_edit_history_integration.py` | T6.5 | integration |
-| T8 | `mimicanno/eval/` package 骨組み + `metrics.py` の pure 関数群 (collect events, confusion matrix, by_source, by_confidence_bucket, by_phase, human_edit_time aggregates) + 12 unit test (spec §5.3、TDD) | `mimicanno/eval/__init__.py`, `mimicanno/eval/metrics.py`, `tests/eval/test_metrics.py` (新規) | T3 | eval |
-| T9 | `mimicanno/eval/render.py` (Markdown renderer) + snapshot fixture (`tests/eval/fixtures/expected_report.md`) | `mimicanno/eval/render.py`, fixture | T8 | eval |
+| T6.7 | **(rev2) 混在 chain test #17**: 同じ run に対し phase → boundary → reviewed の順に 3 PATCH → `annotation.history` の長さ 3、fields = `["phase", "boundary", "reviewed"]`、`history[i].new_run_hash == history[i+1].prev_run_hash` で hash chain intact | `tests/server/test_edit_history.py` | T6.5 | server |
+| T7 | server integration test 3 件 (spec §5.2): real disk PATCH (rev2 で 1 phase + 1 boundary + 1 reviewed の mix に更新) → CLI 呼び出しで `total_edits == 3`, `client_coverage_by_field` 確認 / **`mimicanno annotate` で history が消える** (S4 reviewer fix) / hash-chain 破壊で warning | `tests/server/test_edit_history_integration.py` | T6.7 | integration |
+| T8 | `mimicanno/eval/` package 骨組み + `metrics.py` の pure 関数群 (collect events, confusion matrix, by_source, by_confidence_bucket, by_phase, human_edit_time aggregates) + **(rev2)** `compute_label_agreement(...)` で `field == "phase"` 事前フィルタ必須 + `client_coverage_by_field` 集計追加 + 12 unit test (spec §5.3、TDD、うち 1 ケースは boundary/reviewed event が label_agreement に混入しないことを assert) | `mimicanno/eval/__init__.py`, `mimicanno/eval/metrics.py`, `tests/eval/test_metrics.py` (新規) | T3 | eval |
+| T9 | `mimicanno/eval/render.py` (Markdown renderer) + snapshot fixture (`tests/eval/fixtures/expected_report.md`) + **(rev2)** Markdown に `client_coverage_by_field` テーブル (phase / boundary / reviewed の coverage を per-row) を追加 | `mimicanno/eval/render.py`, fixture | T8 | eval |
 | T10 | `mimicanno/eval/cli.py` (arg parse + orchestration) + `mimicanno/cli.py` に `eval` subcommand 追加 + smoke unit test (programmatic invocation, captured stdout) | `mimicanno/eval/cli.py`, `mimicanno/cli.py`, test | T9 | cli |
 | T11 | frontend: phase `<select>` に `focusin`/`change` 計測 hook + PATCH body へ `client_edit_duration_ms` 載せ + 既存 vitest 3 ケースを壊さずに 1 ケース追加 (`performance.now` mock) | `frontend/src/`, vitest | T6 | frontend |
 | T12 | mypy --strict (`mimicanno/eval`, `mimicanno/server/edit_repo.py` の touch 行) + 全 regression confirm (1100+ tests) | テスト結果 | T11 | gate |
-| T13 | 手動 smoke: `runs/so101_phase4_v5/` で `mimicanno serve` → UI 5 edits → `uv run mimicanno eval runs/` → client_coverage ≥ 0.8 確認 + Markdown 100 char wrap 検査 | smoke notes | T12 | gate |
+| T13 | 手動 smoke: `runs/so101_phase4_v5/` で `mimicanno serve` → UI 経由で **phase 5 edits + boundary 1 drag + reviewed 1 toggle** (合計 7 events) → `uv run mimicanno eval runs/` → `total_edits == 7`、`client_coverage_by_field.phase ≥ 0.8`、`client_coverage_by_field.boundary == 0.0`、`client_coverage_by_field.reviewed == 0.0`、Markdown 100 char wrap 検査 | smoke notes | T12 | gate |
 | T14 | docs: top-level `README.md` `## Eval` section + `mimicanno/server/README.md` の history 追記 + `mimicanno/eval/README.md` 新設 | docs | T13 | docs |
 | T15 | notes `2026-05-15-phase5-d-eval-results.md` + memory 更新 (`project_phase5_status.md`、新 `project_phase5_d_shipped.md`) | notes, memory | T14 | docs |
 
-合計: 16 tasks (T6.5 追加)、見積もり 1.5–2 日 (TDD で密度高め、frontend は軽量)。
+合計: **20 tasks** (rev2 で T2.5 / T5.5 / T5.6 / T6.7 追加)、見積もり **2–2.5 日** (TDD で密度高め、frontend は軽量)。
 
 ---
 
@@ -336,8 +384,11 @@ Pass 条件:
 | layer | コマンド | 期待 |
 |---|---|---|
 | schema | `uv run pytest tests/io/ tests/test_schema.py -v` | 全 green、byte-identity test 含む |
-| server unit | `uv run pytest tests/server/test_edit_history.py -v` | 10 cases green |
-| server regression | `uv run pytest tests/server/test_routes_patch.py -v` | B r1 既存 18 cases 全 green (PATCH レスポンス互換性) |
+| server helper | `uv run pytest tests/server/test_history_event.py -v` | 1 case green (#18) |
+| server unit | `uv run pytest tests/server/test_edit_history.py -v` | rev2 で 17 cases green (#1-#17) |
+| server regression (B r1) | `uv run pytest tests/server/test_edit_repo.py tests/server/test_routes_patch.py tests/server/test_routes_patch_cycle.py tests/server/test_patch_concurrent.py tests/server/test_edit_short_circuit.py -v` | 38 cases 全 green |
+| server regression (B r2) | `uv run pytest tests/server/test_routes_patch_boundary.py tests/server/test_boundary_integration.py tests/server/test_boundary_patch_concurrent.py -v` | 31 cases 全 green |
+| server regression (B r3) | `uv run pytest tests/server/test_routes_patch_reviewed.py -v` | 全 green (件数は T5.6 時に確認) |
 | integration | `uv run pytest tests/server/test_edit_history_integration.py -v` | 3 cases green |
 | eval unit | `uv run pytest tests/eval/ -v` | 12 cases green |
 | frontend | `cd frontend && pnpm vitest` | 既存 3 + 新 1 = 4 cases green |

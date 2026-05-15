@@ -1,10 +1,40 @@
 # MimicAnno Phase 5 D — Evaluation harness design
 
-Status: **draft, post-review-revision-1** (Blocker fixes applied 2026-05-16).
+Status: **draft, rev-2** (B r2/r3 already shipped on main → extend scope).
 Author: brainstorming session 2026-05-15.
 Supersedes: nothing — new sub-plan.
 
 ## Revision log
+
+**rev 2 (2026-05-16, late)** — B r2 (boundary drag, `9c25b87`) and
+B r3 (reviewed toggle, `14eb192`) shipped on main AFTER rev1 was written.
+Rev2 extends the EditEvent emit surface from the single `edit_repo.apply_edit`
+to **all three PATCH write paths** so that history is captured uniformly
+regardless of which UI surface produced the edit. Without this extension,
+boundary drags and reviewed toggles would invisibly mutate `manifest.run_hash`
++ `manifest.edited_at` but contribute nothing to `annotation.history[]`,
+breaking hash-chain integrity (§4.5 `HISTORY_CHAIN_BROKEN`) on any sequence
+that mixes phase / boundary / reviewed PATCHes.
+
+Changes vs rev1:
+
+| Item | rev1 | rev2 |
+|---|---|---|
+| Emit surface | `edit_repo.apply_edit` only | `edit_repo.apply_edit` + `boundary_repo.patch_boundary` + `reviewed_repo.patch_reviewed` |
+| Helper | inline `_build_event` in `edit_repo.py` | Shared helper `mimicanno/server/history_event.py::build_event` consumed by all three repos; takes `(field, from_value, to_value, segment_id, ...)` and is field-agnostic |
+| `EditEvent.field` actually emitted in r1 | `"phase"` only | `"phase"` / `"boundary"` / `"reviewed"` all live |
+| `from_value` / `to_value` type per field | `str | None` (phase) | `str | None` (phase), `int | None` (boundary new_frame), `bool | None` (reviewed) — explicit per-field rules in §2.1 |
+| Frontend timing | phase `<select>` focus→change | Same — boundary drag / reviewed toggle timing is **NOT** instrumented in r1 (server-side `server_inter_event_ms` still lands). Client coverage for non-phase events will be 0 by design. Deferred to D r2. |
+| `label_agreement` corpus | All `history[]` events | Only `field == "phase"` events (explicit filter in metric definition) |
+| `human_edit_time` corpus | All `history[]` events | Same — field-agnostic, sums any duration. boundary/reviewed contribute `server_inter_event_ms` only (client coverage drops; tracked separately in aggregate) |
+| `pre_edit_overall_confidence` | First phase event per segment | Same — only set when `field == "phase"`; always `None` for boundary/reviewed events |
+| New tests | 27 cases | 27 + 8 = **35 cases** (boundary emit ×2, reviewed emit ×2, mixed chain ×2, client_coverage breakdown ×1, helper unit ×1) |
+| Exit criteria | 15 items | 15 + 3 = **18 items** (§6 #16 / #17 / #18) |
+
+Open question deliberately deferred to D r2: should `label_agreement` also
+emit a `boundary_agreement_rate` (% of auto boundaries kept vs. dragged)?
+For r1 the answer is no — boundary semantics differ from phase (continuous
+position vs. discrete label), so the metric is non-trivial. Tracked in §7.
 
 **rev 1 (2026-05-16)** — applied reviewer Blocker + S1 fixes from the
 2026-05-15 spec-document-reviewer pass. Changes:
@@ -99,12 +129,16 @@ Non-goals:
 
 | Existing surface | D's relationship |
 |---|---|
-| `mimicanno/server/edit_repo.py::apply_edit` (B r1) | **Extended in-place**: append one `EditEvent` to `annotation.history[]` inside the existing write transaction, between the segment mutation and the `write annotation → manifest → index` ordering. No new lock. No new file. |
+| `mimicanno/server/edit_repo.py::apply_edit` (B r1) | **Extended in-place**: append one `EditEvent` with `field="phase"` via the shared helper (below) inside the existing write transaction, between the segment mutation and the `write annotation → manifest → index` ordering. No new lock. No new file. |
+| `mimicanno/server/boundary_repo.py::patch_boundary` (B r2, shipped `9c25b87`) | **Extended in-place** (rev2): append one `EditEvent` with `field="boundary"`, `from_value=old_boundary_frame: int`, `to_value=new_frame: int`. Same insertion point pattern as `apply_edit` — between segment mutation (`replace(left, ...)`) and the `replace(annotation, segments=..., run_hash=..., history=...)` construction. |
+| `mimicanno/server/reviewed_repo.py::patch_reviewed` (B r3, shipped `14eb192`) | **Extended in-place** (rev2): append one `EditEvent` with `field="reviewed"`, `from_value=old_reviewed: bool`, `to_value=new_reviewed: bool`. Same pattern. |
+| `mimicanno/server/history_event.py` (new, rev2) | **New helper module** with `build_event(...)` and `_validate_client_duration(...)`. All three repos call this single function. Replaces rev1's `_build_event` inline in `edit_repo.py`. Pure function — takes `(annotation_history, manifest_generated_at, field, from_value, to_value, segment_id, reviewer_id, prev_run_hash, new_run_hash, client_edit_duration_ms, pre_edit_overall_confidence)` and returns an `EditEvent`. |
+| `mimicanno/server/write_txn.py` (shipped) | **Unchanged.** History append happens inside the caller (each `*_repo` mutates `annotation.history` before passing to `write_run_atomically`). `write_txn` itself is content-agnostic. |
 | `mimicanno/schema.py::AnnotationResult` | **Schema bump**: add `history: list[EditEvent] = field(default_factory=list)` field, conditionally emitted from `to_dict()` (omit when empty to preserve on-disk byte identity for un-edited runs). |
-| `mimicanno/jsonschemas/annotation.schema.json` | **Additive**: declare `history` optional, item schema defined. `schema_version` bumps to next minor (B r1 didn't bump — D does). |
+| `mimicanno/jsonschemas/annotation.schema.json` | **Additive**: declare `history` optional, item schema defined with `field` as one-of `["phase", "boundary", "reviewed"]` (forward-extension to `["object", "verb", "target"]` is a value-set change without schema bump). `schema_version` bumps to next minor (B r1/r2/r3 didn't bump — D does). |
 | `mimicanno/cli.py` | **New subcommand**: `mimicanno eval` (~30 LOC of arg parsing + dispatch). |
 | `mimicanno/eval/` (new sub-package) | **All eval logic** lives here, fully separable from `server/`, `exports/`, `pipeline.py`. |
-| Frontend (`?api=1` edit dropdown) | **Additive**: track focus-in/focus-out timestamps on the phase `<select>`, send `client_edit_duration_ms` in PATCH body. Server-validated (clamp + fallback). |
+| Frontend (`?api=1` edit dropdown) | **Additive**: track focus-in/focus-out timestamps on the phase `<select>`, send `client_edit_duration_ms` in PATCH body. Server-validated (clamp + fallback). Boundary drag (B r2) and reviewed toggle (B r3) do **NOT** capture client durations in r1 — server-side `server_inter_event_ms` is the only timing source for those events. |
 
 Hard constraints inherited from parent spec / B:
 
@@ -137,9 +171,18 @@ class EditEvent:
     # What
     segment_id: str             # subject of the edit
     field: Literal["phase", "boundary", "reviewed", "object", "verb", "target"]
-    # B r1 only emits field="phase". Future B releases extend.
-    from_value: str | int | bool | None    # type depends on field; phase → str, boundary → int frame
+    # D r1 (rev2) emits "phase" (B r1), "boundary" (B r2), "reviewed" (B r3).
+    # Future fields ("object", "verb", "target") are reserved without schema bump.
+    from_value: str | int | bool | None
     to_value:   str | int | bool | None
+    # Per-field type table:
+    #   field="phase"    → str | None         (the old/new phase label; None during early-stage segments)
+    #   field="boundary" → int | None         (the old/new start_frame; None never in practice)
+    #   field="reviewed" → bool               (the old/new reviewed flag)
+    #   field="object"   → str | None         (reserved; future B r4)
+    # Loader does not coerce — writer must produce the correct python type.
+    # For field="boundary", `segment_id` is the right segment's id (segment whose
+    # start_frame was moved), matching B r2's `patch_boundary` `boundary_id` semantics.
 
     # Who
     reviewer_id: str | None     # from MIMICANNO_REVIEWER at PATCH time
@@ -192,9 +235,15 @@ Appended to `AnnotationResult.history`, which is a top-level list in `annotation
 
 ### 3.1 Where the change lands
 
-Single function: `mimicanno/server/edit_repo.py::apply_edit`.
+**Three functions** (rev2), all calling a single shared helper:
 
-Pseudocode (additions marked with **D:**):
+- `mimicanno/server/edit_repo.py::apply_edit` (B r1) — emits `field="phase"`
+- `mimicanno/server/boundary_repo.py::patch_boundary` (B r2) — emits `field="boundary"`
+- `mimicanno/server/reviewed_repo.py::patch_reviewed` (B r3) — emits `field="reviewed"`
+
+The shared helper `mimicanno/server/history_event.py::build_event` (new, rev2) replaces rev1's inline `_build_event`. All three repos call it just before constructing the new `AnnotationResult` (via `replace(annotation, ..., history=annotation.history + [event])`). Insertion is between segment mutation and `write_run_atomically` — i.e., within the existing file lock, after `if_match` validation, before the tmp+rename write.
+
+Pseudocode for `apply_edit` (rev2 — additions marked with **D:**, rev1 inline `_build_event` replaced by helper call):
 
 ```python
 def apply_edit(*, runs_root, name, segment_id, new_phase, if_match,
@@ -249,13 +298,18 @@ def apply_edit(*, runs_root, name, segment_id, new_phase, if_match,
         return manifest.to_dict()
 ```
 
-### 3.2 `_build_event` (server side)
+### 3.2 `build_event` (shared helper — `mimicanno/server/history_event.py`)
+
+Rev2: extracted from `edit_repo.py` to `history_event.py` so all three repos
+import it. Signature is **field-agnostic** — caller supplies `field`,
+`from_value`, `to_value`, and (for `field="phase"` only) `pre_edit_overall_confidence`.
+Callers from `boundary_repo` / `reviewed_repo` pass `pre_edit_overall_confidence=None`.
 
 ```python
-def _build_event(*, segment_id, field, from_value, to_value, reviewer_id,
-                 prev_run_hash, new_run_hash, client_edit_duration_ms,
-                 prior_history, prior_generated_at,
-                 pre_edit_overall_confidence) -> EditEvent:
+def build_event(*, segment_id, field, from_value, to_value, reviewer_id,
+                prev_run_hash, new_run_hash, client_edit_duration_ms,
+                prior_history, prior_generated_at,
+                pre_edit_overall_confidence) -> EditEvent:
     ts = datetime.now(UTC).isoformat(timespec="microseconds")
 
     # server-side inter-event ms
@@ -321,16 +375,22 @@ We **silently drop** invalid client durations rather than 400-ing. Rationale: cl
 
 ### 3.4 PATCH body schema extension
 
-B r1 body:
-```json
-{ "phase": "<labelset member>" }
-```
-D body:
-```json
-{ "phase": "<labelset member>", "client_edit_duration_ms": 4523.7 }
-```
+Only the **phase** PATCH endpoint accepts `client_edit_duration_ms` in r1
+(rev2 unchanged from rev1 here). B r2 boundary drag and B r3 reviewed
+toggle bodies are **not** extended — those events get `client_edit_duration_ms=None`
+on the server side. Their `server_inter_event_ms` still lands.
 
-`client_edit_duration_ms` is optional. Body validation accepts (a) `phase` only, (b) `phase` + `client_edit_duration_ms`. Other keys → 400 `invalid_body` (B r1 invariant preserved).
+Endpoint | Body (rev2) | `client_edit_duration_ms` accepted?
+---|---|---
+`PATCH /api/runs/{name}/segments/{seg_id}/phase` (B r1) | `{ "phase": "...", "client_edit_duration_ms"?: float }` | yes
+`PATCH /api/runs/{name}/boundaries/{bnd_id}` (B r2) | `{ "new_frame": int }` (unchanged) | no
+`PATCH /api/runs/{name}/segments/{seg_id}/reviewed` (B r3) | `{ "reviewed": bool }` (unchanged) | no
+
+`client_edit_duration_ms` on the phase endpoint is optional. Body validation
+accepts (a) `phase` only, (b) `phase` + `client_edit_duration_ms`. Other keys
+→ 400 `invalid_body` (B r1 invariant preserved). Boundary/reviewed body
+schemas reject any extra keys including `client_edit_duration_ms` (current
+behavior is preserved — extending those is a D r2 task).
 
 ### 3.5 Front-end timing instrumentation
 
@@ -340,6 +400,15 @@ Add a hook to the phase `<select>` in the viewer detail component:
 - `focusout` without change: discard `t0`.
 
 This is "time the dropdown was open until choice was committed." Coarse, but actionable. Refinements (mouse-down to mouse-up, dwell on options, retries) are out of scope for D r1.
+
+**Boundary drag / reviewed toggle (rev2): no client timing in r1.** The
+boundary drag UI in `BoundaryDragLayer.tsx` could capture pointer-down to
+pointer-up duration, and the reviewed toggle could capture click event
+time, but neither is implemented in D r1. Reason: scope control — phase
+edits dominate review time in practice (per smoke estimates), and r2 can
+add boundary/reviewed timing without changing the server contract (the
+helper is already field-agnostic). r1 server-side `server_inter_event_ms`
+covers gross timing for those events.
 
 ### 3.6 Error model
 
@@ -413,7 +482,12 @@ JSON shape (canonical structure):
       "p95_ms_per_edit_client": 11020.0,
       "missing_client_durations": 12,
       "clipped_events": 2,
-      "client_coverage": 0.93
+      "client_coverage": 0.93,
+      "client_coverage_by_field": {
+        "phase": 0.97,
+        "boundary": 0.0,
+        "reviewed": 0.0
+      }
     }
   },
   "label_agreement": {
@@ -444,6 +518,10 @@ JSON shape (canonical structure):
 Markdown is a templated rendering of the same — top-level summary, two tables (per-run human_edit_time + by-source agreement), and a section per warning. Lines wrap at 100 chars.
 
 ### 4.3 Metric definitions (precise)
+
+**Field-scope rules (rev2):**
+- `human_edit_time` aggregates over **all** event fields (`phase`, `boundary`, `reviewed`). `server_inter_event_ms` lands for every event regardless of field. `client_edit_duration_ms` lands only for `phase` events in r1 (§3.5) — `client_coverage` will naturally drop in proportion to non-phase events. The aggregate report breaks coverage out into `client_coverage_by_field` (added in rev2 §4.2) so operators can see this.
+- `label_agreement` filters to `field == "phase"` events **only**. Boundary moves and reviewed toggles do not change the segment's `phase`, so they have no first-edit auto-label to compare against. Including them would silently dilute the agreement rate. Filter is applied before `confusion_matrix` / `by_source` / `by_confidence_bucket` / `by_phase` computation. The implementation must assert this filter at the top of `compute_label_agreement(...)`.
 
 **`human_edit_time.per_run.total_ms_client`** = sum of `client_edit_duration_ms` over events with that event's `clipped=false` and a non-null client duration. Events with null client duration contribute 0 and increment `missing_client_durations`.
 
@@ -507,10 +585,16 @@ None of these are CLI exit-code-1 errors unless **zero** runs were processable.
 10. Conditional emit: a fresh `annotate` run produces `annotation.json` with **no** `history` key on disk (byte-identical to pre-D). Asserted by `"history"` not in JSON keys.
 11. **`HISTORY_AHEAD_OF_MANIFEST` recovery** (B3 reviewer fix): monkeypatch `write_manifest_json` to raise after `write_annotation_atomic` completes → assert annotation.json has new history entry but manifest still carries old `run_hash`. Then call `mimicanno eval` on the run dir → assert warning `HISTORY_AHEAD_OF_MANIFEST` emitted, report still generated.
 12. **412 must not grow history** (S6 reviewer fix): PATCH with stale `If-Match` → 412 → reload `annotation.json` → assert `len(history)` unchanged from before the PATCH. Independent of the byte-identity assertion in B r1 `test_apply_edit_stale_etag_raises_and_disk_untouched`, so survives any B r2 formatting churn.
+13. **(rev2)** `patch_boundary` history emit: PATCH `/boundaries/{id}` succeeds → annotation.json `history[-1]` has `field="boundary"`, `from_value=<old start_frame>`, `to_value=<new_frame>`, `segment_id=<right segment id>`, `client_edit_duration_ms is None`, `pre_edit_overall_confidence is None`.
+14. **(rev2)** `patch_boundary` 412 must not grow history: stale `If-Match` → 412 → `len(annotation.history)` unchanged.
+15. **(rev2)** `patch_reviewed` history emit: PATCH `/segments/{id}/reviewed` succeeds → `history[-1]` has `field="reviewed"`, `from_value=<old bool>`, `to_value=<new bool>`, `client_edit_duration_ms is None`, `pre_edit_overall_confidence is None`.
+16. **(rev2)** `patch_reviewed` `ReviewedNoChange` (400 no_change) must not grow history: PATCH with same reviewed value → 400 → `len(annotation.history)` unchanged.
+17. **(rev2)** **Mixed-field chain** in single test: phase PATCH → boundary PATCH → reviewed PATCH → `len(history) == 3`, fields = `["phase", "boundary", "reviewed"]`, hash chain intact (`history[i].new_run_hash == history[i+1].prev_run_hash`).
+18. **(rev2)** **`build_event` unit test** (`tests/server/test_history_event.py`): pure-function call → all branches of `_validate_client_duration` + `pre_edit_overall_confidence` first-event detection + clipping. Decouples helper logic from any specific repo.
 
 ### 5.2 Server integration (`tests/server/test_edit_history_integration.py`) — 3 cases
 
-1. Real `tmp_runs_root_loadable` (from B r1) → 3 PATCHes → eval CLI invoked programmatically → JSON report has expected event counts, total durations, by-source breakdown.
+1. Real `tmp_runs_root_loadable` (from B r1) → 3 PATCHes (1 phase + 1 boundary + 1 reviewed) → eval CLI invoked programmatically → JSON report has `total_edits == 3`, `client_coverage_by_field` shows ~1.0 for phase and 0.0 for boundary/reviewed, `label_agreement.confusion_matrix` reflects only the phase edit (boundary/reviewed filtered).
 2. PATCH-then-`mimicanno annotate --force` → `annotation.json` rewritten without history, eval CLI reports `runs_with_history -= 1`.
 3. Hash-chain integrity: tamper with `annotation.history[1].prev_run_hash` to break the chain → `mimicanno eval` emits `HISTORY_CHAIN_BROKEN` warning but does not abort.
 
@@ -562,7 +646,10 @@ Pure-Python tests against synthetic histories (no server, no disk except a fixtu
 12. ✅ All 27 new tests (12 server unit + 3 integration + 12 CLI) green. All existing PATCH-surface tests across the 5 B-r1 files (`test_edit_repo.py` 17, `test_routes_patch.py` 15, `test_routes_patch_cycle.py` 3, `test_patch_concurrent.py` 1, `test_edit_short_circuit.py` 2 = **38 cases total**) remain green without modification. Repo-wide test suite (1100+) green.
 13. ✅ mypy --strict clean over `mimicanno/eval/` and changed lines in `mimicanno/server/edit_repo.py`.
 14. ✅ Frontend dropdown captures focus→change duration and forwards it in PATCH body. Vitest case covers the new code path.
-15. ✅ Manual smoke (§5.5) on `runs/so101_phase4_v5/` shows ≥0.8 client_coverage and a non-empty agreement table.
+15. ✅ Manual smoke (§5.5) on `runs/so101_phase4_v5/` shows ≥0.8 client_coverage (over phase events) and a non-empty agreement table.
+16. ✅ **(rev2)** `boundary_repo.patch_boundary` and `reviewed_repo.patch_reviewed` each append an `EditEvent` with the correct `field` value. Server unit tests #13–#16 green.
+17. ✅ **(rev2)** Mixed-field PATCH chain produces 3 events with intact hash chain (server unit test #17).
+18. ✅ **(rev2)** `mimicanno/server/history_event.py::build_event` exists as a pure function consumed by all 3 repos; covered by 1 unit test (#18).
 
 ---
 
@@ -579,16 +666,20 @@ Pure-Python tests against synthetic histories (no server, no disk except a fixtu
 
 ---
 
-## 8. Implementation order (informs the plan)
+## 8. Implementation order (informs the plan — rev2)
 
-1. Schema: `EditEvent` dataclass, `AnnotationResult.history`, JSON schema bump, conditional emit, loader.
-2. `edit_repo.apply_edit` extension + 10 server unit tests (TDD).
-3. PATCH body validator extension + body schema (single-line addition to `routes.py`).
-4. `mimicanno/eval/` package: `metrics.py` (pure functions), `render.py` (markdown), `cli.py` (arg parsing → orchestration).
-5. CLI subcommand wiring in `mimicanno/cli.py`.
-6. 12 CLI unit tests + 3 integration tests (TDD).
-7. Frontend dropdown timing capture + vitest update.
-8. mypy strict pass.
-9. Manual smoke on `runs/so101_phase4_v5/`.
-10. README extension (`mimicanno/server/README.md` + top-level `README.md` `## Eval` section).
-11. notes `2026-05-15-phase5-d-eval-results.md` + memory update.
+1. **Schema**: `EditEvent` dataclass, `AnnotationResult.history`, JSON schema bump, conditional emit, loader. Schema-version literal regression test BEFORE bump.
+2. **Helper**: `mimicanno/server/history_event.py::build_event` (extracted from rev1's inline `_build_event`) + unit test (server unit #18).
+3. **`edit_repo.apply_edit` extension** + server unit tests #1–#12.
+4. **PATCH body validator extension** (phase endpoint only) + body schema (single-line addition to `routes.py`).
+5. **(rev2) `boundary_repo.patch_boundary` extension** + server unit tests #13, #14.
+6. **(rev2) `reviewed_repo.patch_reviewed` extension** + server unit tests #15, #16.
+7. **(rev2) Mixed-field chain test** (#17) + integration test #1 updated to mix 3 fields.
+8. `mimicanno/eval/` package: `metrics.py` (pure functions with `field=="phase"` filter for label_agreement), `render.py` (markdown with `client_coverage_by_field`), `cli.py` (arg parsing → orchestration).
+9. CLI subcommand wiring in `mimicanno/cli.py`.
+10. 12 CLI unit tests + 3 integration tests (TDD).
+11. Frontend dropdown timing capture + vitest update.
+12. mypy strict pass.
+13. Manual smoke on `runs/so101_phase4_v5/` — exercise phase + boundary + reviewed PATCHes through the UI.
+14. README extension (`mimicanno/server/README.md` + top-level `README.md` `## Eval` section).
+15. notes `2026-05-16-phase5-d-eval-results.md` + memory update.
