@@ -43,6 +43,13 @@ _vlm_dumps_archive/
 models/
 unsloth_compiled_cache/
 
+# Working docs (specs/plans/notes + per-session logs) — kept local, not pushed.
+# docs/design.md and root README/CLAUDE/TODO are intentionally tracked.
+docs/superpowers/
+docs/brushup-progress.md
+docs/cleanup-2026-05-15.md
+docs/phase1-real-data-verification.md
+
 # Large binaries (videos, model weights, datasets) — block by extension as
 # a safety net. Test fixtures under tests/ are explicitly re-allowed below.
 *.mp4
