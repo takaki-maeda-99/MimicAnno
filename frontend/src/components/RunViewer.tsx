@@ -23,8 +23,9 @@ import {
 } from "../lib/editClient";
 import { patchBoundaryFrame } from "../lib/boundaryClient";
 import { patchReviewed } from "../lib/reviewedClient";
+import { patchLabels } from "../lib/labelsClient";
 import { loadLabelset, type LabelSetDoc } from "../lib/labelsetClient";
-import SegmentTable, { type SegmentTableToast } from "./SegmentTable";
+import SegmentTable, { type SegmentTableToast, type LabelsEditPayload } from "./SegmentTable";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import TimelineRuler from "./TimelineRuler";
@@ -62,6 +63,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   const [editInFlight, setEditInFlight] = useState(false);
   const [boundaryPatchInFlight, setBoundaryPatchInFlight] = useState(false);
   const [reviewedPatchInFlight, setReviewedPatchInFlight] = useState(false);
+  const [labelsPatchInFlight, setLabelsPatchInFlight] = useState(false);
   const [staleRun, setStaleRun] = useState(false);
   const [toast, setToast] = useState<SegmentTableToast | undefined>(undefined);
 
@@ -382,6 +384,85 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     return result!;
   };
 
+  const onLabelsEdit = async (
+    segmentId: string,
+    labels: LabelsEditPayload,
+  ) => {
+    if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
+    const data = state.data;
+    setLabelsPatchInFlight(true);
+    setToast(undefined);
+    let result;
+    try {
+      const runName = runNameFromManifestUrl(data.manifestUrl);
+      result = await patchLabels({
+        apiBase,
+        runName,
+        segmentId,
+        verb: labels.verb,
+        object: labels.object,
+        target: labels.target,
+        failure_flags: labels.failure_flags,
+        ifMatchRunHash: data.manifest.run_hash,
+      });
+      if (result.kind === "ok") {
+        const newManifest = { ...data.manifest, run_hash: result.runHash };
+        setState((prev) =>
+          prev.kind === "loaded"
+            ? { kind: "loaded", data: { ...prev.data, manifest: newManifest } }
+            : prev,
+        );
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has("hash")) {
+            const PREFIX = "sha256:";
+            const SHORT_LEN = 12;
+            const stripped = result.runHash.startsWith(PREFIX)
+              ? result.runHash.slice(PREFIX.length)
+              : result.runHash;
+            url.searchParams.set("hash", stripped.slice(0, SHORT_LEN));
+            window.history.replaceState(null, "", url.toString());
+          }
+        }
+        try {
+          const annUrl = resolveUrl(
+            data.manifestUrl,
+            artifactUrl(newManifest, "annotation"),
+          ) + runSetQs;
+          const r = await fetchRetry(annUrl);
+          if (r.ok) {
+            const ann = (await r.json()) as AnnotationResult;
+            setState((prev) =>
+              prev.kind === "loaded"
+                ? { kind: "loaded", data: { ...prev.data, annotation: { kind: "ok", data: ann } } }
+                : prev,
+            );
+          } else {
+            setToast({ level: "sync_warning", message: "saved, but local view may be stale (refetch failed)" });
+          }
+        } catch {
+          setToast({ level: "sync_warning", message: "saved, but local view may be stale (refetch failed)" });
+        }
+      } else if (result.kind === "conflict") {
+        setStaleRun(true);
+        setToast({ level: "conflict", message: `${result.errorCode}: ${result.serverMessage}` });
+      } else if (result.kind === "no_change") {
+        // no-op: server said already that value — no toast needed, let rollback happen
+      } else if (result.kind === "invalid") {
+        setToast({ level: "invalid", message: `${result.errorCode}: ${result.serverMessage}` });
+      } else {
+        const prefix = result.errorCode !== null ? result.errorCode : `HTTP ${result.httpStatus}`;
+        setToast({ level: "error", message: `${prefix}: ${result.message}` });
+      }
+    } catch (e) {
+      result = { kind: "error" as const, httpStatus: 0, errorCode: null, message: e instanceof Error ? e.message : String(e) };
+      setToast({ level: "error", message: result.message });
+    } finally {
+      setLabelsPatchInFlight(false);
+    }
+    return result!;
+  };
+
   const setVideoError = (message: string) => {
     setState((prev) =>
       prev.kind === "loaded" ? { kind: "loaded", data: { ...prev.data, videoError: message } } : prev,
@@ -561,7 +642,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           widthPx={widthPx}
           segments={state.data.annotation.data.segments}
           fps={state.data.manifest.fps}
-          pendingPatch={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight}
+          pendingPatch={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           onDragCommit={onBoundaryDragCommit}
         />
       )}
@@ -572,7 +653,8 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           labelset={labelset}
           onPhaseEdit={onPhaseEdit}
           onReviewedToggle={onReviewedToggle}
-          editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight}
+          onLabelsEdit={onLabelsEdit}
+          editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           staleRun={staleRun}
           toast={toast}
         />

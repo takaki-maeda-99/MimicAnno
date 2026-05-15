@@ -35,6 +35,7 @@ from mimicanno.server.edit_repo import (
 )
 from mimicanno.server.errors import MimicAnnoHTTPError
 from mimicanno.server.labelset import LabelSetCache
+from mimicanno.server.labels_repo import LabelsNoChange, patch_labels
 from mimicanno.server.reviewed_repo import ReviewedNoChange, patch_reviewed
 from mimicanno.server.runs_repo import RunsRepository, list_run_sets
 
@@ -186,6 +187,129 @@ def make_router(
                 message=f"segment_id {segment_id!r} not found in annotation",
             )
         except ReviewedNoChange as exc:
+            raise MimicAnnoHTTPError(
+                status=400, code="no_change",
+                message=str(exc),
+            )
+
+        new_run_hash = new_manifest["run_hash"]
+        return Response(
+            content=json.dumps(new_manifest).encode("utf-8"),
+            media_type="application/json",
+            headers={
+                "ETag": f'"{new_run_hash}"',
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    @router.api_route(
+        "/api/runs/{name}/segments/{segment_id}/labels",
+        methods=["PATCH"],
+    )
+    async def patch_labels_route(
+        name: str,
+        segment_id: str,
+        request: Request,
+        effective_root: Path = Depends(get_effective_root),
+    ) -> Response:
+        ct = (
+            request.headers.get("content-type", "")
+            .split(";")[0]
+            .strip()
+            .lower()
+        )
+        if ct != "application/json":
+            raise MimicAnnoHTTPError(
+                status=415, code="unsupported_media",
+                message="Content-Type must be application/json",
+            )
+
+        if_match = request.headers.get("if-match", "")
+        if not if_match:
+            raise MimicAnnoHTTPError(
+                status=428, code="etag_required",
+                message="If-Match header is required",
+            )
+        if len(if_match) >= 2 and if_match[0] == '"' and if_match[-1] == '"':
+            if_match = if_match[1:-1]
+
+        raw_body = await request.body()
+        try:
+            body = json.loads(raw_body) if raw_body else None
+        except json.JSONDecodeError as exc:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message=f"body must be valid JSON: {exc.msg}",
+            )
+
+        _REQUIRED_KEYS = {"verb", "object", "target", "failure_flags"}
+        if (
+            not isinstance(body, dict)
+            or set(body.keys()) != _REQUIRED_KEYS
+        ):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message=(
+                    "body must be exactly "
+                    '{"verb": str|null, "object": str|null, "target": str|null, "failure_flags": list[str]}'
+                ),
+            )
+        verb = body["verb"]
+        object_ = body["object"]
+        target = body["target"]
+        failure_flags = body["failure_flags"]
+        if verb is not None and not isinstance(verb, str):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message="verb must be str or null",
+            )
+        if object_ is not None and not isinstance(object_, str):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message="object must be str or null",
+            )
+        if target is not None and not isinstance(target, str):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message="target must be str or null",
+            )
+        if not isinstance(failure_flags, list) or not all(
+            isinstance(f, str) for f in failure_flags
+        ):
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_body",
+                message="failure_flags must be list[str]",
+            )
+
+        try:
+            new_manifest = await asyncio.to_thread(
+                patch_labels,
+                runs_root=effective_root,
+                name=name,
+                segment_id=segment_id,
+                verb=verb,
+                object_=object_,
+                target=target,
+                failure_flags=failure_flags,
+                if_match=if_match,
+                reviewer=reviewer,
+            )
+        except RunNotFound:
+            raise MimicAnnoHTTPError(
+                status=404, code="run_not_found",
+                message=f"run not found: {name!r}",
+            )
+        except EtagMismatch:
+            raise MimicAnnoHTTPError(
+                status=412, code="etag_mismatch",
+                message="If-Match does not equal current manifest.run_hash",
+            )
+        except InvalidSegment:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_segment",
+                message=f"segment_id {segment_id!r} not found in annotation",
+            )
+        except LabelsNoChange as exc:
             raise MimicAnnoHTTPError(
                 status=400, code="no_change",
                 message=str(exc),

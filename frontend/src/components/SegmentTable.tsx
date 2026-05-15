@@ -1,21 +1,30 @@
 /**
  * Phase 5 B r1 T13.6-T13.9 — segment list with optional phase dropdown.
  * Phase 5 B r3 — reviewed column becomes a checkbox when editable.
+ * Phase 5 B r4 — verb/object/target/failure_flags columns editable on blur.
  *
  * Read-only in static (?api unset) mode; editable when apiEnabled=true and
  * a labelset is loaded. Edit flow is driven by the parent (RunViewer):
  * parent owns optimistic state, this component only emits onPhaseEdit /
- * onReviewedToggle and reflects pending/disabled state via props.
+ * onReviewedToggle / onLabelsEdit and reflects pending/disabled state via props.
  */
 import { useState, useEffect } from "react";
 import type { SubtaskSegment } from "../lib/manifest";
 import type { LabelSetDoc } from "../lib/labelsetClient";
 import type { PatchResult } from "../lib/editClient";
 import type { ReviewedPatchResult } from "../lib/reviewedClient";
+import type { LabelsPatchResult } from "../lib/labelsClient";
 
 export interface SegmentTableToast {
   level: "conflict" | "invalid" | "error" | "sync_warning";
   message: string;
+}
+
+export interface LabelsEditPayload {
+  verb: string | null;
+  object: string | null;
+  target: string | null;
+  failure_flags: string[];
 }
 
 export interface SegmentTableProps {
@@ -31,6 +40,10 @@ export interface SegmentTableProps {
     segmentId: string,
     newReviewed: boolean,
   ) => Promise<ReviewedPatchResult>;
+  onLabelsEdit: (
+    segmentId: string,
+    labels: LabelsEditPayload,
+  ) => Promise<LabelsPatchResult>;
   editInFlight: boolean;
   staleRun: boolean;
   toast?: SegmentTableToast;
@@ -47,6 +60,7 @@ export default function SegmentTable(props: SegmentTableProps) {
     labelset,
     onPhaseEdit,
     onReviewedToggle,
+    onLabelsEdit,
     editInFlight,
     staleRun,
     toast,
@@ -94,6 +108,10 @@ export default function SegmentTable(props: SegmentTableProps) {
             <th>conf</th>
             <th>reviewed</th>
             <th>source</th>
+            <th>verb</th>
+            <th>object</th>
+            <th>target</th>
+            <th>flags</th>
           </tr>
         </thead>
         <tbody>
@@ -107,6 +125,7 @@ export default function SegmentTable(props: SegmentTableProps) {
               disabled={disabled}
               onPhaseEdit={onPhaseEdit}
               onReviewedToggle={onReviewedToggle}
+              onLabelsEdit={onLabelsEdit}
             />
           ))}
         </tbody>
@@ -123,6 +142,7 @@ function SegmentRow({
   disabled,
   onPhaseEdit,
   onReviewedToggle,
+  onLabelsEdit,
 }: {
   idx: number;
   segment: SubtaskSegment;
@@ -138,6 +158,10 @@ function SegmentRow({
     segmentId: string,
     newReviewed: boolean,
   ) => Promise<ReviewedPatchResult>;
+  onLabelsEdit: (
+    segmentId: string,
+    labels: LabelsEditPayload,
+  ) => Promise<LabelsPatchResult>;
 }) {
   // Controlled <select>: local optimistic value, reset on parent's segment
   // change (after server re-fetches). Rollback = setLocalPhase(oldPhase)
@@ -153,6 +177,26 @@ function SegmentRow({
   useEffect(() => {
     setLocalReviewed(segment.reviewed);
   }, [segment.reviewed]);
+
+  // Optimistic label fields: local text state, sync from props, blur-commit.
+  const [localVerb, setLocalVerb] = useState(segment.verb ?? "");
+  const [localObject, setLocalObject] = useState(segment.object ?? "");
+  const [localTarget, setLocalTarget] = useState(segment.target ?? "");
+  const [localFlags, setLocalFlags] = useState(
+    segment.failure_flags.join(", "),
+  );
+  useEffect(() => {
+    setLocalVerb(segment.verb ?? "");
+  }, [segment.verb]);
+  useEffect(() => {
+    setLocalObject(segment.object ?? "");
+  }, [segment.object]);
+  useEffect(() => {
+    setLocalTarget(segment.target ?? "");
+  }, [segment.target]);
+  useEffect(() => {
+    setLocalFlags(segment.failure_flags.join(", "));
+  }, [segment.failure_flags]);
 
   const onChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newPhase = e.target.value;
@@ -180,6 +224,56 @@ function SegmentRow({
       }
     } catch {
       setLocalReviewed(!newReviewed);
+    }
+  };
+
+  // Build the labels payload from current local state.
+  const buildLabelsPayload = (
+    verb: string,
+    object_: string,
+    target: string,
+    flags: string,
+  ): LabelsEditPayload => ({
+    verb: verb.trim() || null,
+    object: object_.trim() || null,
+    target: target.trim() || null,
+    failure_flags: flags.split(",").map((s) => s.trim()).filter(Boolean),
+  });
+
+  // Compare payload to current segment props to detect no-op on blur.
+  const labelsChanged = (payload: LabelsEditPayload): boolean => {
+    const currentFlags = list(segment.failure_flags);
+    const newFlags = list(payload.failure_flags);
+    return (
+      payload.verb !== (segment.verb ?? null) ||
+      payload.object !== (segment.object ?? null) ||
+      payload.target !== (segment.target ?? null) ||
+      JSON.stringify(currentFlags.slice().sort()) !==
+        JSON.stringify(newFlags.slice().sort()) ||
+      currentFlags.length !== newFlags.length
+    );
+  };
+
+  // Helper to avoid importing a list utility for simple array comparison.
+  function list<T>(arr: T[]): T[] { return arr; }
+
+  const handleLabelBlur = async () => {
+    const payload = buildLabelsPayload(localVerb, localObject, localTarget, localFlags);
+    if (!labelsChanged(payload)) return;
+    try {
+      const r = await onLabelsEdit(segment.segment_id, payload);
+      if (r.kind !== "ok") {
+        // Rollback to segment prop values.
+        setLocalVerb(segment.verb ?? "");
+        setLocalObject(segment.object ?? "");
+        setLocalTarget(segment.target ?? "");
+        setLocalFlags(segment.failure_flags.join(", "));
+      }
+    } catch {
+      setLocalVerb(segment.verb ?? "");
+      setLocalObject(segment.object ?? "");
+      setLocalTarget(segment.target ?? "");
+      setLocalFlags(segment.failure_flags.join(", "));
     }
   };
 
@@ -223,6 +317,62 @@ function SegmentRow({
         )}
       </td>
       <td>{segment.label_source}</td>
+      <td>
+        {editable ? (
+          <input
+            type="text"
+            value={localVerb}
+            disabled={disabled}
+            aria-label={`verb for ${segment.segment_id}`}
+            onChange={(e) => setLocalVerb(e.target.value)}
+            onBlur={handleLabelBlur}
+          />
+        ) : (
+          <span>{segment.verb ?? "–"}</span>
+        )}
+      </td>
+      <td>
+        {editable ? (
+          <input
+            type="text"
+            value={localObject}
+            disabled={disabled}
+            aria-label={`object for ${segment.segment_id}`}
+            onChange={(e) => setLocalObject(e.target.value)}
+            onBlur={handleLabelBlur}
+          />
+        ) : (
+          <span>{segment.object ?? "–"}</span>
+        )}
+      </td>
+      <td>
+        {editable ? (
+          <input
+            type="text"
+            value={localTarget}
+            disabled={disabled}
+            aria-label={`target for ${segment.segment_id}`}
+            onChange={(e) => setLocalTarget(e.target.value)}
+            onBlur={handleLabelBlur}
+          />
+        ) : (
+          <span>{segment.target ?? "–"}</span>
+        )}
+      </td>
+      <td>
+        {editable ? (
+          <input
+            type="text"
+            value={localFlags}
+            disabled={disabled}
+            aria-label={`flags for ${segment.segment_id}`}
+            onChange={(e) => setLocalFlags(e.target.value)}
+            onBlur={handleLabelBlur}
+          />
+        ) : (
+          <span>{segment.failure_flags.length > 0 ? segment.failure_flags.join(", ") : "–"}</span>
+        )}
+      </td>
     </tr>
   );
 }
