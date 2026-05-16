@@ -70,7 +70,8 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - Gemma weights: HF cache symlink 済 ([[project_gemma4b_planner_smoke]])
 - 互いに干渉しないよう `nvidia-smi` で GPU 占有状況を先に確認
 
-### G1. batch_annotate 実機 smoke (最優先)
+### G1. batch_annotate 実機 smoke ⚠️ 別セッション作業中・本セッションからは触らない
+- **状態 (2026-05-16 確認)**: 別セッションが実機検証を進めている。未 push の 4 コミット (`79bdbcd`/`ce678b4`/`0e45447`/`3b6899e`) はそちらの成果物。本セッションからは push / 改変しない。
 - 対象スクリプト: `scripts/batch_annotate.py` および `scripts/batch_annotate_4B.py` (両方 `BATCH_RUNS_ROOT` 対応)
 - 対象コミット (ローカル main、未 push):
   - `3b6899e feat(batch_annotate): share SAM3 runtime + BATCH_RUNS_ROOT override`
@@ -83,7 +84,8 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - [ ] `BATCH_RUNS_ROOT=/tmp/foo` 上書きで run がそこに落ちること
 - [ ] 着手前に別セッション handoff note と branch 状態を確認
 
-### G2. Phase 5 D — SO101 v5 手動 smoke (T13)
+### G2. Phase 5 D — SO101 v5 手動 smoke (T13) ⚠️ 別セッション作業中・本セッションからは触らない
+- **状態 (2026-05-16 22:00 確認)**: `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree で別セッションが smoke 実行中。`mimicanno serve` (PID 1460990) + `vite` (PID 1460389) 稼働中、`/tmp/mimicanno-d-smoke.log` / `/tmp/vite-d-smoke.log` 出力中。frontend 3 ファイルに未コミット変更あり。merge / push / phase5d worktree への書き込みは本セッションから一切行わない。
 - **状態の補足**: D r1 実装は `feat/phase5-d-eval-harness` ブランチに ship 済 (`4fdd553`, `caff5cf`, `6b65ae6`) だが **main 未 merge**。`mimicanno eval` CLI も main には未だ存在しない。
 - [ ] 前提: `feat/phase5-d-eval-harness` を main に merge (S-D 実装と合流) → `mimicanno eval` が CLI に現れることを `mimicanno --help` で確認
 - [ ] 新規 run を annotate → `mimicanno serve` 起動 → frontend で relabel/boundary/reviewed/labels 4 種を編集
@@ -127,11 +129,12 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 
 ---
 
-### 実行順 (推奨, review 後)
+### 実行順 (推奨, 2026-05-16 22:00 セッション状況反映)
 
-1. **G1** (batch_annotate) — 未 push コミット検証。G3 に吸収できる場合は G3 内で実施
-2. **G3** (end-to-end sanity, rubric付き) — autonomy 窓を閉じる本命
-3. **G2** (S-D smoke) — その前に `feat/phase5-d-eval-harness` を main に merge
-4. **G6 / G7 / G8** — pipeline 構成要素ごとの regression。G3 が通っていれば暗黙的にカバーされる部分もあるが、明示確認が必要なものは個別実施
-5. **G4** (gem4) — 別 PR
+- ~~G1~~ / ~~G2~~ — **別セッション作業中・本セッションでは着手不可**
+- 本セッションで進められるのは下記:
+
+1. **G3** (end-to-end sanity, rubric付き) — autonomy 窓を閉じる本命。ただし GPU 競合に注意 (G1 が別セッションで走っている可能性あり、着手前に `nvidia-smi`)
+2. **G6 / G7 / G8** — pipeline 構成要素ごとの regression。G3 が通っていれば暗黙的にカバーされる部分もあるが、明示確認が必要なものは個別実施
+3. **G4** (gem4) — 別 PR
 
