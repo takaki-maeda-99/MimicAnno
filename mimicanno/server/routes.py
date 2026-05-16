@@ -471,6 +471,7 @@ def make_router(
         name: str,
         boundary_id: str,
         request: Request,
+        effective_root: Path = Depends(get_effective_root),
     ) -> Response:
         ct = (
             request.headers.get("content-type", "")
@@ -525,7 +526,7 @@ def make_router(
         try:
             new_manifest = await asyncio.to_thread(
                 patch_boundary,
-                runs_root=runs_root,
+                runs_root=effective_root,
                 name=name,
                 boundary_id=boundary_id,
                 new_frame=body["frame"],
