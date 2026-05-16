@@ -295,7 +295,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          );
+          ) + runSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -364,7 +364,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          );
+          ) + runSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
