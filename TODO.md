@@ -4,6 +4,36 @@
 
 ---
 
+## 🚧 進行中 (本セッション)
+
+**D r2 frontend timing 3件 — brainstorming 段階** (2026-05-16, Opus 4.7 session, Web UI 担当)
+
+スコープ: D r2 全体のうち **frontend timing regression のみ** を切り出して先行修正。backend 側 D r2 (PATCH-route schema_version 等) は別セッション/別 spec。
+
+対象修正 (autonomy exit summary §"D r2 候補" frontend 3件):
+1. **editStartRef cross-input 誤計測** → edit-type 単位 (phase / reviewed / labels) に分離 (Map 化)
+2. **focusout 時 t0 discard 未実装** → blur で t0 を null に戻す (labels は handleLabelBlur 内で同期 read+delete)
+3. **clock-skew clamp 未実装** → `Date.now()` → `performance.now()` (monotonic) に切替
+
+**触るファイル (被り判定用)**:
+- `frontend/src/components/RunViewer.tsx` — editStartRef を Map 化、performance.now() 切替 (line 86, 134-138, 337-341, 408-412, 679 周辺)
+- `frontend/src/components/SegmentTable.tsx` — onEditFocus(kind) signature 変更、6 入力に kind/onBlur 追加、handleLabelBlur 同期 read+delete (line 200-390)
+- `frontend/src/components/__tests__/SegmentTable.test.tsx` — 新規 6 test (T1-T6)
+- `frontend/src/components/__tests__/RunViewer.integration.test.tsx` — e2e smoke 1 ケース追加
+
+**触らないファイル**:
+- 4 client (`editClient.ts` / `labelsClient.ts` / `reviewedClient.ts` / `boundaryClient.ts`) — PATCH body 契約不変
+- backend 全般 (D r2 backend は別 spec/別セッション)
+- boundary drag 関連 (D r1 と同じく untimed のまま)
+
+次ステップ: spec を `docs/superpowers/specs/2026-05-16-phase5-d-r2-frontend-timing-design.md` に起こす → user review → writing-plans → executing-plans (TDD)。
+
+**コンフリクト確認 (2026-05-16 時点)**:
+- main `4217738` clean
+- 別 worktree `.claude/worktrees/agent-a3a7bb0b1c161da1e` は run-set switcher の stale orphan (PR #9 済)、active な D r2 frontend 作業は他に無し
+
+---
+
 ## 残タスク (一覧)
 
 | 優先 | ID | 内容 | 状態・備考 |
@@ -127,19 +157,16 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - annotate 部分のみ GPU、eval/edit 自体は CPU
 - **G2: DONE** — 詳細は `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md`
 
-### G3. autonomy exit 用 end-to-end 実データ sanity check ⏳ **本セッション (2026-05-16 後半) 再着手中**
-- **🔧 状態 (2026-05-16 後半, 本セッション再開)**: 前セッション (22:45) の env blocker (`.venv` torch 2.11.0+cu130 vs driver 12.6) の解消を進めるため再着手。着手前に `nvidia-smi` で GPU 占有確認 + G1/G4 別セッションの稼働状況と env 共有方針を確認する。**他セッション (G1 batch_annotate / G4 gem4 smoke) と `.venv` を共有しているため、torch 差し替えは事前に handoff note + branch 状態を読んでから判断する** ([[feedback_handoff_conflict_check]])。
-- **過去状態 (2026-05-16 22:45)**: GPU=6 (48GB free) で 3 ep やり直しを試行 → 全 ep exit 3 FAIL。原因: `.venv` の torch が `2.11.0+cu130` に更新されており、システムドライバ 560.35.05 / CUDA 12.6 と非互換 (`torch.cuda.is_available()=False`、"NVIDIA driver too old, found 12060"). **G4 (別セッション) が報告している env 問題と同根** (TODO G4 既知 env 問題② を参照)。`runs/g3_smoke_20260516_2238/` は空、ログ `/misc/dl00/gayagaya/MimicAnno/logs/g3_smoke_20260516_2238/episode_00000{0,1,2}_gpu6.log`。.venv は G1/G4 と共有のため独断で書き換えず、他セッションの env 調査結果待ち、だった。
-- **過去の中断 (2026-05-16 22:28, 持ち越し参考)**: plan (`docs/superpowers/plans/2026-05-16-g3-autonomy-exit-smoke-plan.md`) 完成 + レビュー反映済。3 ep を background で開始 → 数分後ユーザー指示で停止。停止時点で ep0 + ep1 は annotate 完走 (`runs/g3_smoke_20260516_2226/episode_000000__e35061106394/`, `episode_000001__293f2420a2e4/`)、ep2 未着手。stale `index.json.lock` あり。
-- 目的: CLAUDE.md autonomy 窓の抜け条件「実データラベリング妥当性確認」
-- **note**: G1 の VRAM/teardown 検証点をここに織り込めば G1 を吸収できる可能性あり。判断は G1 着手時に。
-- [ ] SO101 から 3〜5 ep を選び Gemma 4B planner + SAM3 + Phase 4 smoother v5 + 永続化を通しで実行
-- [ ] 妥当性 rubric (全部満たすこと):
-  - [ ] 各 ep で `unknown` phase が **< 20%**
-  - [ ] phase 遷移が ep 内で**単調** (大きな往復が無い、または task 構造上説明可能)
-  - [ ] SAM3 mask が overhead cam で各 frame に **1 個以上** 存在
-- [ ] `_vlm_dumps/*.jsonl` が SFT 用に書き出されていること ([[project_gemma_ft_pipeline]])
-- [ ] 「shipped したもの・怪しかったもの・残課題」を書面でハンドオフ
+### G3. autonomy exit 用 end-to-end 実データ sanity check ✅ **完了 (2026-05-16 23:00, 本セッション)**
+- **結果 doc**: `docs/superpowers/notes/2026-05-16-g3-autonomy-exit-smoke-results.md`
+- **Run**: `runs/g3_smoke_20260516_2252/` (GPU=2、3 ep 全完走 5.5 min)
+- **Rubric**: ep0 全 PASS / ep1 R2 degenerate (Gemma 全セグ `approach_object`) / ep2 R3 FAIL (Gemma `white tape roll` 幻覚 → SAM3 0 検出 → tracks.json 欠損)。両 failure とも planner-side label 品質で pipeline bug ではなく、`_vlm_dumps` 13 segments が SFT 用に揃った ([[project_gemma_ft_pipeline]] 想定通り)。
+- **autonomy exit 評価**: (2) 実データ妥当性 PASS、(3) 書面ハンドオフ PASS。(1) Phase 5 sub-project は A/B/C/D main 済、E 未着手 → E を必須とするか **ユーザー判断待ち**。
+- **env 補足**: 前セッション blocker (`.venv` torch 2.11.0+cu130 vs driver 12.6 の `cuda_available=False`) は本セッション開始時に自然回復していた。原因特定はせず実行優先。
+- [x] SO101 から 3 ep を Gemma 4B planner + SAM3 + Phase 4 smoother v5 + 永続化を通しで実行
+- [x] 妥当性 rubric 検証 (`/tmp/g3_verify.py` scratch)
+- [x] `_vlm_dumps/*.jsonl` SFT 書き出し確認
+- [x] 「shipped・怪しかった・残課題」を書面でハンドオフ
 
 ### G4. gem4 新ロボット 1 ep 通し  ⚠️ **本セッション作業中 (2026-05-16 後半・GPU7)・他セッションからは触らない**
 - **状態 (2026-05-16, このセッション 後半)**: GPU7 (46GB free) を確保し `batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 7 --start 0 --end 0` を `.venv/bin/python` 経由で実行中。BATCH_RUNS_ROOT=/tmp/g4_smoke_pick_up_bottle、ログ `/tmp/g4_smoke_logs/pick_up_bottle.log`。
