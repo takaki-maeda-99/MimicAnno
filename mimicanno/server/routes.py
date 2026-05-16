@@ -151,14 +151,16 @@ def make_router(
                 status=400, code="invalid_body",
                 message=f"body must be valid JSON: {exc.msg}",
             )
+        _REVIEWED_ALLOWED_KEYS = {"reviewed", "client_edit_duration_ms"}
         if (
             not isinstance(body, dict)
             or "reviewed" not in body
             or not isinstance(body.get("reviewed"), bool)
+            or not body.keys() <= _REVIEWED_ALLOWED_KEYS
         ):
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_body",
-                message="body must contain {'reviewed': bool}",
+                message="body must contain {'reviewed': bool} with optional 'client_edit_duration_ms'",
             )
 
         raw_ms_r = body.get("client_edit_duration_ms")

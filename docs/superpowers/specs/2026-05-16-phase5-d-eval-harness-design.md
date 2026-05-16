@@ -27,7 +27,7 @@ D r1). Rev2/rev3 sections below describing the rich field set (`event_id`,
 | Helper | `mimicanno/server/event_builder.py::build_edit_event` | rev2 proposed `history_event.py::build_event` (rename rejected — name `event_builder` already shipped) |
 | `client_edit_duration_ms` accepted on | **All 4 PATCH endpoints** (phase / boundary / reviewed / labels) | rev2/rev3 incorrectly stated phase-only — actual implementation accepts on all 4 |
 | Frontend timing | `Date.now()` + `editStartRef` (`RunViewer.tsx` + `SegmentTable.tsx`); applied to **all 4 PATCH paths** | rev3 specified `performance.now` for phase only — both diverged |
-| `mimicanno eval` CLI | Position arg `runs_root`, flags `--format {markdown,json,both}` `--run` `--out` | Same |
+| `mimicanno eval` CLI | Position arg `runs_root`, flags `--format {markdown,json}` `--run` | r1: stdout only; `--out` / `--format both` deferred to D r2 |
 | Metrics: `human_edit_time` | sum of `client_edit_duration_ms` over events | Same |
 | Metrics: `client_coverage` | timed events / total edits | rev3 added `client_coverage_by_field` (deferred to D r2) |
 | Metrics: `label_agreement` | `len([s for s in segments if s.label_source == "human_edit"]) / total_segments` — i.e., "fraction of segments touched by a human edit" | rev3 designed confusion matrix + by_source/by_confidence/by_phase — all require `from_value`/`to_value` not present in shipped EditEvent. **Renamed to `human_touched_fraction` in D r2 for clarity** (current `label_agreement` is a misnomer — it measures touch, not agreement) |
@@ -548,8 +548,7 @@ mimicanno eval [RUNS_PATH ...]
                [--reviewer <id>]
                [--phase-filter <phase>]
                [--source-filter <label_source>]
-               [--format json|markdown|both]
-               [--out <path>]
+               [--format json|markdown]
                [--include-clipped]
                [--schema-version <v>]
 ```
@@ -557,8 +556,7 @@ mimicanno eval [RUNS_PATH ...]
 - `RUNS_PATH ...`: one or more (a) `runs/` roots — recurses one level to find canonical-name dirs; or (b) explicit `runs/<canonical_name>/` dirs. At least one required.
 - `--reviewer`: filter events by `reviewer_id` (exact match). Default: all.
 - `--phase-filter`, `--source-filter`: restrict the corpus before computing metrics.
-- `--format`: default `markdown` to stdout when no `--out`; default `both` (writing `.json` and `.md` side-by-side) when `--out` is given.
-- `--out`: prefix for output files. With `--format both`, writes `<out>.json` and `<out>.md`. With single format, writes `<out>.<ext>` literally.
+- `--format`: default `markdown` to stdout. `json` writes JSON to stdout. **Deferred to D r2**: `--out PATH` (write to file) and `--format both` (side-by-side `.json` + `.md`); pipe redirect (`> file.md`) works in the meantime.
 - `--include-clipped`: include events with `clipped=true` in `human_edit_time`. Default false (clipped events count toward agreement but not timing).
 - `--schema-version`: pin acceptable `schema_version` prefix. Default: any v2.x. Refuses v1.x (B r1) with a clear message — "edited before D shipped, no history available, re-edit to populate".
 

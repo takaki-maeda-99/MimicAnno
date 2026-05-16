@@ -83,3 +83,27 @@ def test_patch_reviewed_without_duration_emits_history(
     ev = ann.history[0]
     assert ev.edit_type == "reviewed"
     assert ev.client_edit_duration_ms is None
+
+
+def test_patch_reviewed_unknown_key_400(
+    runs_root_with_loadable: Path,
+) -> None:
+    """PATCH /reviewed with an unknown key (e.g. duration typo) → 400 invalid_body.
+
+    Parity with phase/boundary/labels routes — typos must not silently drop.
+    """
+    root = runs_root_with_loadable
+    name = _REAL_SO101_RUN.name
+    rh = read_manifest(root / name / "manifest.json").run_hash
+
+    client = _client(root)
+    resp = client.patch(
+        f"/api/runs/{name}/segments/{_SEG_ID}/reviewed",
+        headers={"Content-Type": "application/json", "If-Match": rh},
+        content=json.dumps({
+            "reviewed": True,
+            "client_edit_duration_seconds": 5000,  # typo — should be _ms
+        }),
+    )
+    assert resp.status_code == 400, f"got {resp.status_code}: {resp.text}"
+    assert resp.json()["error"] == "invalid_body"
