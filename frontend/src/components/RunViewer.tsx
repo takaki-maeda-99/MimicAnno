@@ -270,6 +270,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         boundaryId,
         newFrame,
         ifMatchRunHash: data.manifest.run_hash,
+        runSet,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -349,6 +350,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         segmentId,
         reviewed: newReviewed,
         ifMatchRunHash: data.manifest.run_hash,
+        runSet,
         clientEditDurationMs: reviewedDurationMs,
       });
       if (result.kind === "ok") {
@@ -422,6 +424,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         target: labels.target,
         failure_flags: labels.failure_flags,
         ifMatchRunHash: data.manifest.run_hash,
+        runSet,
         clientEditDurationMs: labelsDurationMs,
       });
       if (result.kind === "ok") {
@@ -622,7 +625,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         {state.data.videoError !== null
           ? <div className="error">{state.data.videoError}</div>
           : <VideoPlayer
-              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video"))}
+              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video")) + runSetQs}
               currentTimeSec={currentTimeSec}
               onTimeChange={setCurrentTimeSec}
               onError={setVideoError}

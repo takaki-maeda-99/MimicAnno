@@ -49,7 +49,7 @@ export async function patchLabels(args: {
 
   const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
   const url =
-    `${apiBase}/api/runs/${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/labels${runSetQs}`;
+    `${apiBase}${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/labels${runSetQs}`;
 
   const bodyObj: Record<string, unknown> = { verb, object: object_, target, failure_flags };
   if (clientEditDurationMs != null) {

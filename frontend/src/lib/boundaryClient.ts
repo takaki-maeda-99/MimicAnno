@@ -60,6 +60,7 @@ export async function patchBoundaryFrame(args: {
   boundaryId: string;
   newFrame: number;
   ifMatchRunHash: string;
+  runSet?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
   clientEditDurationMs?: number | null;
@@ -70,12 +71,14 @@ export async function patchBoundaryFrame(args: {
     boundaryId,
     newFrame,
     ifMatchRunHash,
+    runSet,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     clientEditDurationMs,
   } = args;
 
-  const url = `${apiBase}${encodeURIComponent(runName)}/boundaries/${encodeURIComponent(boundaryId)}`;
+  const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
+  const url = `${apiBase}${encodeURIComponent(runName)}/boundaries/${encodeURIComponent(boundaryId)}${runSetQs}`;
   const timeoutCtl = new AbortController();
   const timer = setTimeout(() => timeoutCtl.abort(), timeoutMs);
   if (signal) {
