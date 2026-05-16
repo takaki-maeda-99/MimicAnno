@@ -326,4 +326,94 @@ describe("D r2 timing — kind-keyed edit ref", () => {
 
     perfSpy.mockRestore();
   });
+
+  it("T2: phase t0 is cleared on blur without commit", async () => {
+    let perfNow = 0;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNow);
+
+    const onPhaseEdit = vi
+      .fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>()
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never });
+
+    const segments = [makeSegment("seg-001", "idle")];
+    render(
+      <SegmentTable
+        segments={segments}
+        apiEnabled={true}
+        labelset={fakeLabelset}
+        onPhaseEdit={onPhaseEdit}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        editInFlight={false}
+        staleRun={false}
+      />,
+    );
+
+    const select = screen.getByLabelText("phase for seg-001") as HTMLSelectElement;
+    perfNow = 100;
+    await act(async () => { fireEvent.focus(select); });
+    await act(async () => { fireEvent.blur(select); });
+    // No second focus — commit fires programmatically below.
+    perfNow = 400;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "grasp_object" } });
+    });
+
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
+    // Without onBlur fix: duration = 300 (400-100). With fix: slot cleared → null.
+    expect(onPhaseEdit.mock.calls[0][3]).toBe(null);
+
+    perfSpy.mockRestore();
+  });
+
+  it("T3: phase t0 is cleared on commit then re-focus", async () => {
+    let perfNow = 0;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNow);
+
+    const onPhaseEdit = vi
+      .fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>()
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never });
+
+    const segments = [makeSegment("seg-001", "idle")];
+    render(
+      <SegmentTable
+        segments={segments}
+        apiEnabled={true}
+        labelset={fakeLabelset}
+        onPhaseEdit={onPhaseEdit}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        editInFlight={false}
+        staleRun={false}
+      />,
+    );
+
+    const select = screen.getByLabelText("phase for seg-001") as HTMLSelectElement;
+
+    perfNow = 100;
+    await act(async () => { fireEvent.focus(select); });
+    perfNow = 200;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "grasp_object" } });
+    });
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
+    expect(onPhaseEdit.mock.calls[0][3]).toBe(100); // 200 - 100
+
+    // Second cycle — parent doesn't update segment.phase in this standalone
+    // mount; commit a different value to trigger onChange again.
+    perfNow = 500;
+    await act(async () => { fireEvent.focus(select); });
+    perfNow = 550;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "release_object" } });
+    });
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(2));
+    expect(onPhaseEdit.mock.calls[1][3]).toBe(50); // 550 - 500, NOT 450 (stale)
+
+    perfSpy.mockRestore();
+  });
 });

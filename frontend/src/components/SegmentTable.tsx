@@ -86,6 +86,11 @@ export default function SegmentTable(props: SegmentTableProps) {
     editStartRef.current.delete(kind);
     return t0 !== undefined ? Math.round(performance.now() - t0) : null;
   };
+  // discardEdit clears the slot on focusout without commit, so a re-focus
+  // (or a programmatic commit-without-focus) doesn't see a stale t0.
+  const discardEdit = (kind: EditKind) => {
+    editStartRef.current.delete(kind);
+  };
   return (
     <div className="segment-table">
       {toast && (
@@ -146,6 +151,7 @@ export default function SegmentTable(props: SegmentTableProps) {
               onLabelsEdit={onLabelsEdit}
               startEdit={startEdit}
               consumeEdit={consumeEdit}
+              discardEdit={discardEdit}
             />
           ))}
         </tbody>
@@ -165,6 +171,7 @@ function SegmentRow({
   onLabelsEdit,
   startEdit,
   consumeEdit,
+  discardEdit,
 }: {
   idx: number;
   segment: SubtaskSegment;
@@ -176,6 +183,7 @@ function SegmentRow({
   onLabelsEdit: SegmentTableProps["onLabelsEdit"];
   startEdit: (kind: EditKind) => void;
   consumeEdit: (kind: EditKind) => number | null;
+  discardEdit: (kind: EditKind) => void;
 }) {
   // Controlled <select>: local optimistic value, reset on parent's segment
   // change (after server re-fetches). Rollback = setLocalPhase(oldPhase)
@@ -313,6 +321,7 @@ function SegmentRow({
             value={localPhase}
             onChange={onChange}
             onFocus={() => startEdit("phase")}
+            onBlur={() => discardEdit("phase")}
             disabled={disabled}
             aria-label={`phase for ${segment.segment_id}`}
           >
@@ -335,6 +344,7 @@ function SegmentRow({
             disabled={disabled}
             aria-label={`reviewed for ${segment.segment_id}`}
             onFocus={() => startEdit("reviewed")}
+            onBlur={() => discardEdit("reviewed")}
             onChange={onReviewedChange}
           />
         ) : (
