@@ -1,0 +1,169 @@
+{
+  "artifacts": [
+    {
+      "content_type": "application/json",
+      "role": "annotation",
+      "url": "annotation.json"
+    },
+    {
+      "content_type": "application/json",
+      "role": "boundaries",
+      "url": "boundaries.json"
+    },
+    {
+      "content_type": "application/json",
+      "role": "signals",
+      "url": "signals.json"
+    },
+    {
+      "content_type": "application/json",
+      "role": "tracks",
+      "url": "tracks.json"
+    }
+  ],
+  "canonical_name": "episode_000000__e35061106394",
+  "compat": {
+    "annotation": 0,
+    "boundaries": 0,
+    "manifest": 0,
+    "signals": 0
+  },
+  "config_hash": "sha256:00c8107fdea9686f0ec1cf948ea5afb97d4527d922f75980d1fbc3800a755b42",
+  "duration_sec": 10.066667,
+  "episode_id": "episode_000000",
+  "fps": 15.0,
+  "generated_at": "2026-05-12T12:58:29.479282Z",
+  "generator": {
+    "cli_version": "0.1.0",
+    "name": "mimicanno",
+    "pipeline_phase": 4
+  },
+  "input_hash": "sha256:dc8780f2f78704f445956382527f99a335b503a3cd825983940ad826c1384bf1",
+  "inputs": {
+    "parquet": {
+      "path": "/misc/dl00/gayagaya/MimicAnno/data/SO101/data/chunk-000/episode_000000.parquet",
+      "sha256": "sha256:2cd8587b73d45f068a1611878b6555b80befe4d48739dd2f768bbf8804900918"
+    },
+    "video": {
+      "path": "/misc/dl00/gayagaya/MimicAnno/data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4",
+      "sha256": "sha256:039abcbfa60218704599a59b7d78a46033022837b782c1f4ecf8aab426e82ef5"
+    }
+  },
+  "model_versions": {
+    "sam3": "facebook/sam3",
+    "sam3_checkpoint": "sha256:9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e",
+    "vlm": "/home/gayagaya/gemma_project/models/gemma-4-E4B-it:03449c82135c62749026e737a5d393f4fab212ee"
+  },
+  "pipeline_params": {
+    "boundary": {
+      "disabled_sources": [
+        "action_norm_change",
+        "gripper_object_distance_threshold_crossing"
+      ],
+      "merge_window_sec": 0.1,
+      "score_threshold": 0.3,
+      "thresholds": {
+        "gripper_delta": 0.3,
+        "velocity_valley": 0.05
+      },
+      "weights": {
+        "acceleration": 0.15,
+        "action": 0.1,
+        "gripper": 0.5,
+        "gripper_object_distance_threshold_crossing": 0.0,
+        "object_motion_start_stop": 0.0,
+        "velocity": 0.25
+      },
+      "zero_crossing": {
+        "enabled": true,
+        "hysteresis": 0.12,
+        "merge_window_sec": 0.0,
+        "ref": "midpoint",
+        "signal": "gripper",
+        "span_eps": 0.05,
+        "weight": 0.5
+      }
+    },
+    "smoother": {
+      "forbidden_transitions": [
+        [
+          "grasp_object",
+          "approach_object"
+        ],
+        [
+          "release_object",
+          "grasp_object"
+        ],
+        [
+          "lift_object",
+          "idle"
+        ]
+      ],
+      "lambda_forbidden": 0.5,
+      "merge_same_label_preserve_sources": [
+        "gripper_zero_crossing"
+      ],
+      "min_segment_duration_sec": 0.3,
+      "viterbi_enabled": true
+    },
+    "tracking": {
+      "gripper_object_distance_threshold": 0.05,
+      "image_aspect_ratio_default": 1.7777777777777777,
+      "max_gap_frames": null,
+      "min_track_score": 0.3,
+      "object_motion_min_sec": 0.1,
+      "object_motion_threshold": 0.02,
+      "planner_max_retries": 3,
+      "reacquisition_iou_threshold": 0.3,
+      "sam3_model_id": "facebook/sam3",
+      "sam3_offload": true,
+      "track_stride_frames": null,
+      "visibility_threshold": 0.5
+    },
+    "vlm": {
+      "clip_features": {
+        "dwell_speed_threshold_mps": 0.01,
+        "gripper_open_threshold": 0.5
+      },
+      "device": "cuda",
+      "dtype": "bfloat16",
+      "image_size_px": 224,
+      "keyframe_strategy": "uniform",
+      "keyframes_per_segment": 4,
+      "mask_overlay": {
+        "alpha": 0.4,
+        "enabled": true,
+        "palette": "builtin_10"
+      },
+      "max_output_tokens": 256,
+      "max_retries": 3,
+      "model_id": "/home/gayagaya/gemma_project/models/gemma-4-E4B-it",
+      "resolved_checkpoint": "03449c82135c62749026e737a5d393f4fab212ee",
+      "runtime_failure_threshold": 3,
+      "temperature": 0.0,
+      "timeout_sec": 30.0
+    }
+  },
+  "pipeline_status": {
+    "degrade_reason": null,
+    "degraded_from_phase": null,
+    "object_state_available": true,
+    "object_state_segment_coverage": 1.0
+  },
+  "run_hash": "sha256:e350611063945b4e1bce196aec7cd05162af51ff7ad6a82f854af9d081f0fb7d",
+  "schema_version": "0.1.0",
+  "smoothing_summary": {
+    "final_segment_count": 5,
+    "initial_segment_count": 5,
+    "merge_same_label_collapses": 0,
+    "merge_same_label_rounds": 0,
+    "merge_short_absorbs": 0,
+    "viterbi_relabels": 0,
+    "viterbi_skipped": false
+  },
+  "task": {
+    "text": "Put the tape into the bottle",
+    "version": null
+  },
+  "time_base": "video_pts_seconds"
+}
