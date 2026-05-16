@@ -95,12 +95,16 @@ describe("SegmentTable — labels text input blur interaction", () => {
     });
 
     expect(onLabelsEdit).toHaveBeenCalledTimes(1);
-    expect(onLabelsEdit).toHaveBeenCalledWith("seg-a", {
-      verb: "pick",
-      object: null,
-      target: null,
-      failure_flags: [],
-    });
+    expect(onLabelsEdit).toHaveBeenCalledWith(
+      "seg-a",
+      {
+        verb: "pick",
+        object: null,
+        target: null,
+        failure_flags: [],
+      },
+      null,
+    );
   });
 
   // -------------------------------------------------------------------------

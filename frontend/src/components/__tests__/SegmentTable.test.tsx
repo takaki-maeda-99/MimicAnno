@@ -1,6 +1,6 @@
 /** Phase 5 B r1 T13.6-T13.9: SegmentTable component. */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import SegmentTable, { type SegmentTableProps } from "../SegmentTable";
 import type { SubtaskSegment } from "../../lib/manifest";
 import type { LabelSetDoc } from "../../lib/labelsetClient";
@@ -112,7 +112,14 @@ describe("SegmentTable — PATCH happy flow (T13.8)", () => {
     fireEvent.change(sel, { target: { value: "grasp_object" } });
 
     await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
-    expect(onPhaseEdit).toHaveBeenCalledWith("seg-001", "grasp_object", "idle");
+    // 4th arg is clientEditDurationMs (number | null) — null here because
+    // no onFocus fired before the fireEvent.change in this test.
+    expect(onPhaseEdit).toHaveBeenCalledWith(
+      "seg-001",
+      "grasp_object",
+      "idle",
+      null,
+    );
     // No toast on success.
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -215,71 +222,108 @@ const fakeLabelset: LabelSetDoc = {
   labels: [
     { id: "idle", requires_object: false },
     { id: "grasp_object", requires_object: true },
+    { id: "release_object", requires_object: true },
   ],
   labels_yaml_sha256: "sha256:" + "c".repeat(64),
 };
 
-describe("D r2 timing — performance.now() migration", () => {
-  it("T5: duration remains non-negative under wall-clock skew", async () => {
-    // After the migration, the edit-focus path must call performance.now()
-    // (monotonic) rather than Date.now() (wall-clock, can move backward under
-    // NTP slew).  We verify this by:
-    //   1. Spying on performance.now to confirm it is called from onEditFocus.
-    //   2. Spying on Date.now and asserting it is NOT called from our component
-    //      code; we use fireEvent (not userEvent) so the test infrastructure
-    //      itself does not pollute the Date.now spy.
-    const dateSpy = vi.spyOn(Date, "now");
+describe("D r2 timing — kind-keyed edit ref", () => {
+  it("T1: phase t0 is not contaminated by later verb focus", async () => {
+    // Counter-bumped mockImplementation (see RunViewer T5 lesson): React/jsdom
+    // internally call performance.now() many times during render. mockReturnValueOnce
+    // chains get consumed by those incidental calls, so we drive the value
+    // manually between user actions.
+    let perfNow = 0;
     const perfSpy = vi
       .spyOn(performance, "now")
-      .mockReturnValueOnce(1000)   // onEditFocus → t0
-      .mockReturnValueOnce(1500);  // reserved for future duration calc
+      .mockImplementation(() => perfNow);
 
     const onPhaseEdit = vi
       .fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>()
-      .mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never });
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never });
 
     const segments = [makeSegment("seg-001", "idle")];
-
     render(
       <SegmentTable
         segments={segments}
         apiEnabled={true}
         labelset={fakeLabelset}
         onPhaseEdit={onPhaseEdit}
-        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never })}
-        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never })}
-        // onEditFocus simulates what RunViewer does post-migration:
-        // editStartRef.current = performance.now()
-        onEditFocus={() => { performance.now(); }}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
         editInFlight={false}
         staleRun={false}
       />,
     );
 
-    const select = screen.getByLabelText("phase for seg-001");
+    const phaseSel = screen.getByLabelText("phase for seg-001") as HTMLSelectElement;
+    const verbInput = screen.getByLabelText("verb for seg-001") as HTMLInputElement;
 
-    // Use fireEvent (not userEvent) so testing infrastructure does not call
-    // Date.now() internally, keeping the dateSpy assertion clean.
-    fireEvent.focus(select);                               // → onEditFocus → performance.now 1000
-    fireEvent.change(select, { target: { value: "grasp_object" } }); // → onPhaseEdit
+    perfNow = 100;
+    await act(async () => { fireEvent.focus(phaseSel); });
+    perfNow = 150;
+    await act(async () => { fireEvent.focus(verbInput); });
+    perfNow = 200;
+    await act(async () => {
+      fireEvent.change(phaseSel, { target: { value: "grasp_object" } });
+    });
 
     await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
     const call = onPhaseEdit.mock.calls[0];
+    expect(call[3]).toBe(100); // 200 - 100, NOT 200 - 150
+    perfSpy.mockRestore();
+  });
 
-    // performance.now() must be called at least once (t0 capture on focus),
-    // proving the timing path uses the monotonic clock post-migration.
-    expect(perfSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-    // Note: asserting dateSpy.not.toHaveBeenCalled() is not feasible here
-    // because React's internal scheduler calls Date.now() regardless of
-    // fireEvent vs userEvent.  The positive assertion on performance.now()
-    // above is the correct proof that the monotonic clock is in use.
-    void dateSpy; // kept in scope for documentation; restored below.
-    // Smoke: 3-arg signature still in effect (Map refactor lands in Task 2).
-    expect(call[0]).toBe("seg-001");
-    expect(call[1]).toBe("grasp_object");
-    expect(call[2]).toBe("idle");
+  it("T6: editStartRef does not leak across segment rows", async () => {
+    let perfNow = 0;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNow);
 
-    dateSpy.mockRestore();
+    const onPhaseEdit = vi
+      .fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>()
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never });
+
+    const segments = [
+      makeSegment("seg-001", "idle"),
+      makeSegment("seg-002", "idle"),
+    ];
+    render(
+      <SegmentTable
+        segments={segments}
+        apiEnabled={true}
+        labelset={fakeLabelset}
+        onPhaseEdit={onPhaseEdit}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        editInFlight={false}
+        staleRun={false}
+      />,
+    );
+
+    const row1 = screen.getByLabelText("phase for seg-001") as HTMLSelectElement;
+    const row2 = screen.getByLabelText("phase for seg-002") as HTMLSelectElement;
+
+    perfNow = 100;
+    await act(async () => { fireEvent.focus(row1); });
+    perfNow = 150;
+    await act(async () => { fireEvent.focus(row2); });
+    perfNow = 200;
+    await act(async () => {
+      fireEvent.change(row2, { target: { value: "grasp_object" } });
+    });
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
+    expect(onPhaseEdit.mock.calls[0][3]).toBe(50); // 200 - 150
+
+    perfNow = 300;
+    await act(async () => { fireEvent.focus(row2); });
+    perfNow = 400;
+    await act(async () => {
+      fireEvent.change(row2, { target: { value: "release_object" } });
+    });
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(2));
+    expect(onPhaseEdit.mock.calls[1][3]).toBe(100); // 400 - 300
+
     perfSpy.mockRestore();
   });
 });

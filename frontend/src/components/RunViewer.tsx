@@ -83,7 +83,6 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     };
   }, [apiBase, apiEnabled]);
   const abortRef = useRef<AbortController | null>(null);
-  const editStartRef = useRef<number | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [widthPx, setWidthPx] = useState(0);
   const obsRef = useRef<ResizeObserver | null>(null);
@@ -121,6 +120,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     segmentId: string,
     newPhase: string,
     _oldPhase: string,
+    clientEditDurationMs: number | null,
   ): Promise<PatchResult> => {
     if (state.kind !== "loaded") {
       return {
@@ -131,11 +131,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
       };
     }
     const data = state.data;
-    const durationMs =
-      editStartRef.current !== null
-        ? Math.round(performance.now() - editStartRef.current)
-        : null;
-    editStartRef.current = null;
+    const durationMs = clientEditDurationMs;
     setEditInFlight(true);
     setToast(undefined);
     let result: PatchResult;
@@ -331,14 +327,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   const onReviewedToggle = async (
     segmentId: string,
     newReviewed: boolean,
+    clientEditDurationMs: number | null,
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
-    const reviewedDurationMs =
-      editStartRef.current !== null
-        ? Math.round(performance.now() - editStartRef.current)
-        : null;
-    editStartRef.current = null;
+    const reviewedDurationMs = clientEditDurationMs;
     setReviewedPatchInFlight(true);
     setToast(undefined);
     let result;
@@ -402,14 +395,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   const onLabelsEdit = async (
     segmentId: string,
     labels: LabelsEditPayload,
+    clientEditDurationMs: number | null,
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
-    const labelsDurationMs =
-      editStartRef.current !== null
-        ? Math.round(performance.now() - editStartRef.current)
-        : null;
-    editStartRef.current = null;
+    const labelsDurationMs = clientEditDurationMs;
     setLabelsPatchInFlight(true);
     setToast(undefined);
     let result;
@@ -676,7 +666,6 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           onPhaseEdit={onPhaseEdit}
           onReviewedToggle={onReviewedToggle}
           onLabelsEdit={onLabelsEdit}
-          onEditFocus={() => { editStartRef.current = performance.now(); }}
           editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           staleRun={staleRun}
           toast={toast}
