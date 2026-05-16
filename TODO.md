@@ -1,5 +1,7 @@
 # TODO (2026-05-16 現在)
 
+**Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green. 次窓を開ける場合はユーザー判断。
+
 ## 完了済み ✅
 
 | ストリーム | 内容 | コミット |
@@ -29,7 +31,7 @@
 - [x] **T12**: mypy --strict + 全 regression (10 new tests + 210 existing, all pass)
 - [x] **T13**: 手動 smoke (SO101 ep0 copy — PATCH reviewed 2500ms → history correct, eval CLI OK)
 - [x] **T14〜T15**: docs (`2026-05-16-phase5-d-results.md`) + memory + TODO
-- [ ] **main にマージ** (ユーザー判断待ち)
+- [x] **main にマージ** (`3d8bb34`)
 
 ---
 
@@ -40,21 +42,12 @@
 
 ---
 
-### 3. 別セッション作業中の未 push コミット (触らない)
-
-local main が origin/main より **4 commits ahead** (15時間前、gayagaya 名義)。別のアクティブセッションが作業中の可能性があるため、このセッションからは push しない:
-
-- `3b6899e feat(batch_annotate): share SAM3 runtime + BATCH_RUNS_ROOT override`
-- `0e45447 feat(pipeline): add preloaded_sam3_runtime to AnnotateRequest`
-- `ce678b4 chore(gitignore): exclude docs/superpowers/ and working logs from git`
-- `79bdbcd refactor(sam3_runtime): split close() into _close_all_sessions() + final teardown`
-
 ---
 
 ## 推奨次ステップ
 
 ```
-S-D main マージ → Phase 5 E (MimicRec integration)
+Phase 5 E (MimicRec integration) — 新セッションで spec から
 ```
 
 ---
@@ -95,11 +88,12 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
   - **smoke 自体は main で実行可能**: D は merge 済なので `/misc/dl00/gayagaya/MimicAnno` (main) で `mimicanno eval` も `mimicanno serve` も使える。新 worktree 不要なら main でやり直しても OK。
 - **(古い状態) 2026-05-16 22:00 確認**: `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree で別セッションが smoke 実行中。`mimicanno serve` (PID 1460990) + `vite` (PID 1460389) 稼働中、`/tmp/mimicanno-d-smoke.log` / `/tmp/vite-d-smoke.log` 出力中。frontend 3 ファイルに未コミット変更あり。
 - **状態の補足**: D r1 実装は main に merge 済 (`3d8bb34`, 2026-05-16 23:?? 本セッション)。`mimicanno eval` CLI は main で利用可能。
-- [ ] 前提: `feat/phase5-d-eval-harness` を main に merge (S-D 実装と合流) → `mimicanno eval` が CLI に現れることを `mimicanno --help` で確認
-- [ ] 新規 run を annotate → `mimicanno serve` 起動 → frontend で relabel/boundary/reviewed/labels 4 種を編集
-- [ ] `mimicanno eval <run>` で history が読まれ metrics + render が出ること
-- [ ] phase `<select>` focusin/change hook の計測値が EditEvent に乗ること (history JSON を直接 grep して `dwell_ms` などのフィールド存在確認)
+- [x] 前提: `feat/phase5-d-eval-harness` を main に merge (S-D 実装と合流) → `mimicanno eval` が CLI に現れることを `mimicanno --help` で確認
+- [x] 新規 run を annotate → `mimicanno serve` 起動 → frontend で relabel/boundary/reviewed/labels 4 種を編集 (17 events × 4 edit types on SO101 v5, Sonnet session)
+- [x] `mimicanno eval <run>` で history が読まれ metrics + render が出ること
+- [x] phase `<select>` focusin/change hook の計測値が EditEvent に乗ること (history JSON を直接 grep して `dwell_ms` などのフィールド存在確認)
 - annotate 部分のみ GPU、eval/edit 自体は CPU
+- **G2: DONE** — 詳細は `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md`
 
 ### G3. autonomy exit 用 end-to-end 実データ sanity check ⏳ **本セッション (2026-05-16 後半) 再着手中**
 - **🔧 状態 (2026-05-16 後半, 本セッション再開)**: 前セッション (22:45) の env blocker (`.venv` torch 2.11.0+cu130 vs driver 12.6) の解消を進めるため再着手。着手前に `nvidia-smi` で GPU 占有確認 + G1/G4 別セッションの稼働状況と env 共有方針を確認する。**他セッション (G1 batch_annotate / G4 gem4 smoke) と `.venv` を共有しているため、torch 差し替えは事前に handoff note + branch 状態を読んでから判断する** ([[feedback_handoff_conflict_check]])。
