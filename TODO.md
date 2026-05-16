@@ -4,33 +4,20 @@
 
 ---
 
-## 🚧 進行中 (本セッション)
+## ✅ D r2 frontend timing — branch SHIPPED (本 worktree)
 
-**D r2 frontend timing 3件 — brainstorming 段階** (2026-05-16, Opus 4.7 session, Web UI 担当)
+**ブランチ**: `feat/phase5-d-r2-frontend-timing` (worktree `.claude/worktrees/d-r2-frontend-timing/`)
+**6 commits ahead of main** (a4ad6dc..191ab83)、**123 tests passing** (115 baseline + 8 new)
+**結果 note**: `docs/superpowers/notes/2026-05-17-phase5-d-r2-frontend-timing-results.md`
 
-スコープ: D r2 全体のうち **frontend timing regression のみ** を切り出して先行修正。backend 側 D r2 (PATCH-route schema_version 等) は別セッション/別 spec。
+修正済 3 regression:
+- #6 `Date.now()` non-monotonicity → `performance.now()` (T5)
+- #2 cross-input contamination → `useRef<Map<EditKind, number>>` + kind-aware onFocus + sync read-and-delete (T1, T6)
+- #5 focusout t0 discard → `onBlur={() => discardEdit(kind)}` on phase/reviewed (T2, T3)
+- 追加: T4 (labels sub-field) / I1 (phase e2e) / I2 (labels async-await boundary)
 
-対象修正 (autonomy exit summary §"D r2 候補" frontend 3件):
-1. **editStartRef cross-input 誤計測** → edit-type 単位 (phase / reviewed / labels) に分離 (Map 化)
-2. **focusout 時 t0 discard 未実装** → blur で t0 を null に戻す (labels は handleLabelBlur 内で同期 read+delete)
-3. **clock-skew clamp 未実装** → `Date.now()` → `performance.now()` (monotonic) に切替
-
-**触るファイル (被り判定用)**:
-- `frontend/src/components/RunViewer.tsx` — editStartRef を Map 化、performance.now() 切替 (line 86, 134-138, 337-341, 408-412, 679 周辺)
-- `frontend/src/components/SegmentTable.tsx` — onEditFocus(kind) signature 変更、6 入力に kind/onBlur 追加、handleLabelBlur 同期 read+delete (line 200-390)
-- `frontend/src/components/__tests__/SegmentTable.test.tsx` — 新規 6 test (T1-T6)
-- `frontend/src/components/__tests__/RunViewer.integration.test.tsx` — e2e smoke 1 ケース追加
-
-**触らないファイル**:
-- 4 client (`editClient.ts` / `labelsClient.ts` / `reviewedClient.ts` / `boundaryClient.ts`) — PATCH body 契約不変
-- backend 全般 (D r2 backend は別 spec/別セッション)
-- boundary drag 関連 (D r1 と同じく untimed のまま)
-
-次ステップ: spec を `docs/superpowers/specs/2026-05-16-phase5-d-r2-frontend-timing-design.md` に起こす → user review → writing-plans → executing-plans (TDD)。
-
-**コンフリクト確認 (2026-05-16 時点)**:
-- main `4217738` clean
-- 別 worktree `.claude/worktrees/agent-a3a7bb0b1c161da1e` は run-set switcher の stale orphan (PR #9 済)、active な D r2 frontend 作業は他に無し
+**次ステップ**: PR open は user 判断。`superpowers:finishing-a-development-branch` skill 経由でマージ判定。
+**pre-existing 14 件の TS エラー**: baseline からの残留 (テスト fixtures が古い prop signature)、別チケットでクリーンアップ推奨 (Vitest は影響なし、`tsc -b` のみ fail)。
 
 ---
 
@@ -39,7 +26,7 @@
 | 優先 | ID | 内容 | 状態・備考 |
 |---|---|---|---|
 | 高 | **Phase 5 E** | MimicRec integration (`~/MimicRec/` 側の `save_annotations` swap-out + Replay page) | **未着手**。autonomy 窓境界を超えるので新 autonomy 窓 + ユーザー新規許可必要 |
-| 高 | **D r2** | label_agreement の真の意味付け修正 (現状は `label_source=="human_edit"` 近似) ほか 6 件 | spec 未着手。詳細は note `2026-05-16-phase5-autonomy-exit-summary.md` §"怪しかったところ / D r2 候補" |
+| 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。frontend 3件は `feat/phase5-d-r2-frontend-timing` branch で完了 (上記)。残るは backend のみ。詳細: `2026-05-16-phase5-autonomy-exit-summary.md` |
 | 中 | **G1** | batch_annotate 実機 smoke (4B variant) | ⚠️ 別セッション作業中・本セッション触らない。26B は手元 RTX A6000 で VRAM 不足 → 別ホスト案件 |
 | 中 | **G3** | autonomy exit end-to-end 実データ sanity check (SO101 3-5 ep × rubric 妥当性) | ⏸ `.venv` torch 2.11.0+cu130 vs driver 12.6 mismatch で停止中。.venv は G1/G4 と共有のため独断で書き換えず、env 調整方針要 |
 | 中 | **G4** | gem4 新ロボット 3 dataset × 1 ep smoke (`batch_annotate_4B.py`) | ⏸ G3 と同じ env 問題で停止。SAM3 grounding cam 確認 + 1 ep ずつ実行 |
