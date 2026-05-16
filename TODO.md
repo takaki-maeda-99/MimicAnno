@@ -84,17 +84,24 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - [ ] 着手前に別セッション handoff note と branch 状態を確認
 - [ ] **(blocked) 26B variant 実機 smoke** — VRAM 余裕のあるホスト確保後に別途実行
 
-### G2. Phase 5 D — SO101 v5 手動 smoke (T13) ⚠️ 別セッション作業中・本セッションからは触らない
-- **状態 (2026-05-16 22:00 確認)**: `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree で別セッションが smoke 実行中。`mimicanno serve` (PID 1460990) + `vite` (PID 1460389) 稼働中、`/tmp/mimicanno-d-smoke.log` / `/tmp/vite-d-smoke.log` 出力中。frontend 3 ファイルに未コミット変更あり。merge / push / phase5d worktree への書き込みは本セッションから一切行わない。
-- **状態の補足**: D r1 実装は `feat/phase5-d-eval-harness` ブランチに ship 済 (`4fdd553`, `caff5cf`, `6b65ae6`) だが **main 未 merge**。`mimicanno eval` CLI も main には未だ存在しない。
+### G2. Phase 5 D — SO101 v5 手動 smoke (T13) ⚠️ 別セッションの worktree が壊された — 要復旧
+- **🚨 2026-05-16 23:?? ハンドオフ警告 (本セッションからの誤操作)**: ユーザー指示により D ブランチ merge + push 後、`feat/phase5-d-eval-harness` の **remote 削除に同意 → local 片付け中に `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree を `rm -rf` してしまった**。`mimicanno serve` (PID 1460990) と `vite` (PID 1460389) はまだ動いているが、`.venv` / `node_modules` の中身は inode のみ生きている状態。**新しいファイルアクセス (server reload / import / hot reload) で fail する可能性**。
+  - **何が起きたか**: TODO G2 の「触らない」警告を見落とし、merge 後の cleanup として worktree 削除を試行。NFS busy file で削除は不完全、`frontend/` ディレクトリ残骸あり。git からの worktree 認識は消えた (`git worktree list` に出ない、local branch も削除済)。
+  - **D の中身は安全**: `feat/phase5-d-eval-harness` の全コミットは main の merge commit `3d8bb34` に統合済・origin push 済 (commit `3bdcb12..3d8bb34`)。remote D ブランチも削除済。**実装の loss はゼロ**。
+  - **影響範囲**: 別セッションが phase5d worktree 内で稼働させていた server/vite + 未コミット変更 (frontend 3 ファイル)。未コミット変更は失われた可能性 (git stash 等で退避していなければ復旧不可)。
+  - **復旧手順 (別セッション側で)**: (1) PID 1460990/1460389 を `kill`、(2) `rm -rf /misc/dl00/gayagaya/MimicAnno-phase5d` で残骸除去、(3) 必要なら `git worktree add ../MimicAnno-phase5d-new main` で新 worktree、(4) `uv sync` + `cd frontend && npm install` で env 再構築。
+  - **smoke 自体は main で実行可能**: D は merge 済なので `/misc/dl00/gayagaya/MimicAnno` (main) で `mimicanno eval` も `mimicanno serve` も使える。新 worktree 不要なら main でやり直しても OK。
+- **(古い状態) 2026-05-16 22:00 確認**: `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree で別セッションが smoke 実行中。`mimicanno serve` (PID 1460990) + `vite` (PID 1460389) 稼働中、`/tmp/mimicanno-d-smoke.log` / `/tmp/vite-d-smoke.log` 出力中。frontend 3 ファイルに未コミット変更あり。
+- **状態の補足**: D r1 実装は main に merge 済 (`3d8bb34`, 2026-05-16 23:?? 本セッション)。`mimicanno eval` CLI は main で利用可能。
 - [ ] 前提: `feat/phase5-d-eval-harness` を main に merge (S-D 実装と合流) → `mimicanno eval` が CLI に現れることを `mimicanno --help` で確認
 - [ ] 新規 run を annotate → `mimicanno serve` 起動 → frontend で relabel/boundary/reviewed/labels 4 種を編集
 - [ ] `mimicanno eval <run>` で history が読まれ metrics + render が出ること
 - [ ] phase `<select>` focusin/change hook の計測値が EditEvent に乗ること (history JSON を直接 grep して `dwell_ms` などのフィールド存在確認)
 - annotate 部分のみ GPU、eval/edit 自体は CPU
 
-### G3. autonomy exit 用 end-to-end 実データ sanity check ⏸ 中断 (2026-05-16 22:28)
-- **中断状況**: plan (`docs/superpowers/plans/2026-05-16-g3-autonomy-exit-smoke-plan.md`) 完成 + レビュー反映済。3 ep 実行を background task で開始 → 数分後ユーザー指示で停止。停止時点で **ep0 + ep1 は annotate 完走 (`runs/g3_smoke_20260516_2226/episode_000000__e35061106394/`, `episode_000001__293f2420a2e4/`)**、ep2 は未着手。`index.json.lock` が stale で残存 (mimicanno プロセスは全停止確認済)。再開時は ep2 だけ追走するか、3 ep やり直すかを GPU 空き状況見て判断。
+### G3. autonomy exit 用 end-to-end 実データ sanity check ⏸ 本セッション着手中・env blocker 待機 (2026-05-16 22:45)
+- **状態 (2026-05-16 22:45, 本セッション)**: GPU=6 (48GB free) で 3 ep やり直しを試行 → 全 ep exit 3 FAIL。原因: `.venv` の torch が `2.11.0+cu130` に更新されており、システムドライバ 560.35.05 / CUDA 12.6 と非互換 (`torch.cuda.is_available()=False`、"NVIDIA driver too old, found 12060"). **G4 (別セッション) が報告している env 問題と同根** (TODO G4 既知 env 問題② を参照)。`runs/g3_smoke_20260516_2238/` は空、ログ `/misc/dl00/gayagaya/MimicAnno/logs/g3_smoke_20260516_2238/episode_00000{0,1,2}_gpu6.log`。.venv は G1/G4 と共有のため独断で書き換えず、他セッションの env 調査結果待ち。
+- **過去の中断 (2026-05-16 22:28, 持ち越し参考)**: plan (`docs/superpowers/plans/2026-05-16-g3-autonomy-exit-smoke-plan.md`) 完成 + レビュー反映済。3 ep を background で開始 → 数分後ユーザー指示で停止。停止時点で ep0 + ep1 は annotate 完走 (`runs/g3_smoke_20260516_2226/episode_000000__e35061106394/`, `episode_000001__293f2420a2e4/`)、ep2 未着手。stale `index.json.lock` あり。
 - 目的: CLAUDE.md autonomy 窓の抜け条件「実データラベリング妥当性確認」
 - **note**: G1 の VRAM/teardown 検証点をここに織り込めば G1 を吸収できる可能性あり。判断は G1 着手時に。
 - [ ] SO101 から 3〜5 ep を選び Gemma 4B planner + SAM3 + Phase 4 smoother v5 + 永続化を通しで実行
@@ -105,8 +112,10 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - [ ] `_vlm_dumps/*.jsonl` が SFT 用に書き出されていること ([[project_gemma_ft_pipeline]])
 - [ ] 「shipped したもの・怪しかったもの・残課題」を書面でハンドオフ
 
-### G4. gem4 新ロボット 1 ep 通し  ⭐ **本セッションで着手予定 → GPU 占有のため未着手で持ち越し (2026-05-16)**
-- **状態 (2026-05-16, このセッション)**: 計画は立てたが GPU が空いていなかったため**実行に入る前に中止**。コード・yaml・データ・TODO チェックボックス含め、G4 関連は**一切触っていない** (TODO のこのメモ自体を除く)。次セッションは GPU 空き確認から再開。
+### G4. gem4 新ロボット 1 ep 通し  ⚠️ **本セッション作業中 (2026-05-16 後半・GPU7)・他セッションからは触らない**
+- **状態 (2026-05-16, このセッション 後半)**: GPU7 (46GB free) を確保し `batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 7 --start 0 --end 0` を `.venv/bin/python` 経由で実行中。BATCH_RUNS_ROOT=/tmp/g4_smoke_pick_up_bottle、ログ `/tmp/g4_smoke_logs/pick_up_bottle.log`。
+- **既知の env 問題 (調査中)**: ① hamer python (3.10) は `StrEnum` 不可 → `.venv` (3.11) 必須。② `.venv` の torch が「NVIDIA driver too old (found 12060)」で `cuda_init` 失敗 → driver vs torch wheel 不整合。解消手段を検討中 (CUDA wheel 差し替え or 別 env)。
+- **過去メモ (持ち越し参考)**: 計画は立てたが GPU が空いていなかったため実行に入る前に中止していた。yaml/データ/チェックボックスは未変更。
 - ~~別 PR 待ちなので優先度低~~ → 依存無し。yaml x3 は `71c9cd1` で main 済、データ `data/GEM4_*` 揃い、`batch_annotate*.py` DATASETS にも登録済 (so101 以外の 3 dataset)。「別 PR で整理」は運用上の話で実行ブロックではない。
 - 着手前に G3 (別セッション) と GPU 占有が衝突しないか確認 ([[feedback_handoff_conflict_check]])
 - [x] `mimicanno/configs/robot/gem4_*.yaml` x3 (`pick_up_bottle` / `replace_the_cookie` / `open_the_jar`) ※ 既存
