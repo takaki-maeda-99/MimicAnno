@@ -1,5 +1,44 @@
 # TODO (2026-05-16 現在)
 
+## 🔧 作業中 (Sonnet 4.6 session, 2026-05-16 23:00頃)
+
+**Branch:** `fix/boundary-route-effective-root` (pushed to origin)
+
+D r1 smoke 中に発覚した `patch_boundary_route` の `Depends(get_effective_root)`
+欠落 bug を修正。**41 tests green**, smoke で boundary drag 動作確認済み。
+
+### このブランチに乗っている commits
+
+| commit | 内容 |
+|---|---|
+| `33cd618` | fix(server): patch_boundary_route — add Depends(get_effective_root) + regression test (`test_patch_boundary_with_run_set`) |
+| `b0728ab` | docs(todo): handoff note (D-merge session 由来、誤って付着、merge で main に届く) |
+
+### 触っているファイル
+
+- `mimicanno/server/routes.py` (L470-474, L529) — patch_boundary_route fix
+- `tests/server/test_routes_run_set.py` — regression test 追加
+- (`TODO.md` ← この section だけ)
+
+### 動いているプロセス
+
+| service | PID | cwd |
+|---|---|---|
+| API (mimicanno serve) | 1558553 | `/misc/dl00/gayagaya/MimicAnno` (main worktree、fix 適用済) |
+| Vite | 1560149 | `/misc/dl00/gayagaya/MimicAnno/frontend` |
+
+### 次の action
+
+- [ ] PR 作成: https://github.com/takaki-maeda-99/MimicAnno/pull/new/fix/boundary-route-effective-root
+- [ ] PR merge 後 main pull → memory/TODO 更新
+
+### 競合する可能性のあるファイル
+
+`routes.py` 触っている別 session があれば conflict 可能性あり。
+TODO.md は b0728ab で D-merge session が既に更新済み (G2 セクション)。
+
+---
+
 ## 完了済み ✅
 
 | ストリーム | 内容 | コミット |
@@ -99,8 +138,9 @@ GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonom
 - [ ] phase `<select>` focusin/change hook の計測値が EditEvent に乗ること (history JSON を直接 grep して `dwell_ms` などのフィールド存在確認)
 - annotate 部分のみ GPU、eval/edit 自体は CPU
 
-### G3. autonomy exit 用 end-to-end 実データ sanity check ⏸ 本セッション着手中・env blocker 待機 (2026-05-16 22:45)
-- **状態 (2026-05-16 22:45, 本セッション)**: GPU=6 (48GB free) で 3 ep やり直しを試行 → 全 ep exit 3 FAIL。原因: `.venv` の torch が `2.11.0+cu130` に更新されており、システムドライバ 560.35.05 / CUDA 12.6 と非互換 (`torch.cuda.is_available()=False`、"NVIDIA driver too old, found 12060"). **G4 (別セッション) が報告している env 問題と同根** (TODO G4 既知 env 問題② を参照)。`runs/g3_smoke_20260516_2238/` は空、ログ `/misc/dl00/gayagaya/MimicAnno/logs/g3_smoke_20260516_2238/episode_00000{0,1,2}_gpu6.log`。.venv は G1/G4 と共有のため独断で書き換えず、他セッションの env 調査結果待ち。
+### G3. autonomy exit 用 end-to-end 実データ sanity check ⏳ **本セッション (2026-05-16 後半) 再着手中**
+- **🔧 状態 (2026-05-16 後半, 本セッション再開)**: 前セッション (22:45) の env blocker (`.venv` torch 2.11.0+cu130 vs driver 12.6) の解消を進めるため再着手。着手前に `nvidia-smi` で GPU 占有確認 + G1/G4 別セッションの稼働状況と env 共有方針を確認する。**他セッション (G1 batch_annotate / G4 gem4 smoke) と `.venv` を共有しているため、torch 差し替えは事前に handoff note + branch 状態を読んでから判断する** ([[feedback_handoff_conflict_check]])。
+- **過去状態 (2026-05-16 22:45)**: GPU=6 (48GB free) で 3 ep やり直しを試行 → 全 ep exit 3 FAIL。原因: `.venv` の torch が `2.11.0+cu130` に更新されており、システムドライバ 560.35.05 / CUDA 12.6 と非互換 (`torch.cuda.is_available()=False`、"NVIDIA driver too old, found 12060"). **G4 (別セッション) が報告している env 問題と同根** (TODO G4 既知 env 問題② を参照)。`runs/g3_smoke_20260516_2238/` は空、ログ `/misc/dl00/gayagaya/MimicAnno/logs/g3_smoke_20260516_2238/episode_00000{0,1,2}_gpu6.log`。.venv は G1/G4 と共有のため独断で書き換えず、他セッションの env 調査結果待ち、だった。
 - **過去の中断 (2026-05-16 22:28, 持ち越し参考)**: plan (`docs/superpowers/plans/2026-05-16-g3-autonomy-exit-smoke-plan.md`) 完成 + レビュー反映済。3 ep を background で開始 → 数分後ユーザー指示で停止。停止時点で ep0 + ep1 は annotate 完走 (`runs/g3_smoke_20260516_2226/episode_000000__e35061106394/`, `episode_000001__293f2420a2e4/`)、ep2 未着手。stale `index.json.lock` あり。
 - 目的: CLAUDE.md autonomy 窓の抜け条件「実データラベリング妥当性確認」
 - **note**: G1 の VRAM/teardown 検証点をここに織り込めば G1 を吸収できる可能性あり。判断は G1 着手時に。
