@@ -32,6 +32,47 @@ D r1 smoke 中に発覚した `patch_boundary_route` の `Depends(get_effective_
 - [ ] PR 作成: https://github.com/takaki-maeda-99/MimicAnno/pull/new/fix/boundary-route-effective-root
 - [ ] PR merge 後 main pull → memory/TODO 更新
 
+### PR Title
+
+```
+fix(server): patch_boundary_route missing Depends(get_effective_root)
+```
+
+### PR Body (ブラウザ UI に貼り付け)
+
+```markdown
+## Summary
+
+- `patch_boundary_route` was missing `Depends(get_effective_root)` that the other 3 PATCH routes (phase/reviewed/labels) have, causing `?run_set=<subdir>` to be silently ignored and PATCH requests on subdir-hosted runs to fail with 404 `run_not_found`.
+- Root cause: B r2 / S-RS integration gap — S-RS landed after B r2, the 3 other routes were written post-S-RS and threaded `effective_root`, but boundary was left behind.
+- Discovered during D r1 smoke testing on SO101 v5.
+
+## Commits
+
+1. **`33cd618` fix(server): patch_boundary_route — add Depends(get_effective_root)** — the actual fix + regression test (`test_patch_boundary_with_run_set` in `tests/server/test_routes_run_set.py`, parallels the existing `test_patch_with_run_set` for phase).
+2. **`b0728ab` docs(todo): handoff note — phase5d worktree damaged by cleanup misstep** — orphaned TODO commit from a parallel D-merge session; landed on this branch by accident but is harmless to merge.
+3. **`8fc47e7` docs(todo): mark fix/boundary-route-effective-root work in progress** — work-in-progress section in TODO.md.
+
+## Fix
+
+`mimicanno/server/routes.py`:
+- L470-474: add `effective_root: Path = Depends(get_effective_root)` to signature
+- L529: `runs_root=runs_root` → `runs_root=effective_root`
+
+## Verification
+
+- 41 server tests green (`tests/server/test_routes_run_set.py` 9 + `test_routes_patch_boundary.py` 19 + `test_boundary_integration.py` 2 + `test_boundary_patch_concurrent.py` 1 + 10 others)
+- Live smoke on SO101 v5: boundary drag now persists + `mimicanno eval` records `edit_type=boundary` events (7 in test run, total 17 across 4 edit types: relabel 1, boundary 7, reviewed 5, labels 4)
+
+## Test plan
+
+- [x] `uv run pytest tests/server/test_routes_run_set.py tests/server/test_routes_patch_boundary.py tests/server/test_boundary_integration.py tests/server/test_boundary_patch_concurrent.py`
+- [x] Live SO101 v5 smoke: PATCH `/boundaries/{id}?run_set=so101_phase4_v5` returns 200, ETag updates, annotation.history appends `edit_type=boundary`
+- [x] `mimicanno eval runs/so101_phase4_v5/` shows boundary events in history
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
 ### 競合する可能性のあるファイル
 
 `routes.py` 触っている別 session があれば conflict 可能性あり。
