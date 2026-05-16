@@ -431,6 +431,147 @@ describe("RunViewer error toast composition (spec §3.5)", () => {
   });
 });
 
+describe("D r2 timing integration — body propagation", () => {
+  it("I1: phase edit PATCH body carries client_edit_duration_ms from performance.now", async () => {
+    // performance.now spy must be installed BEFORE render so that
+    // startEdit("phase") on the first focus event reads our stub value.
+    let perfNowValue = 1000;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNowValue);
+
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/segments/")) {
+        return jsonResp(
+          { ...MANIFEST, run_hash: NEW_RUN_HASH },
+          { headers: { ETag: `"${NEW_RUN_HASH}"` } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={undefined} />
+      </ApiToggleProvider>,
+    );
+
+    const sel = (await screen.findByLabelText(
+      "phase for seg-001",
+    )) as HTMLSelectElement;
+
+    // Focus → startEdit("phase") stores perfNowValue (1000).
+    await act(async () => {
+      fireEvent.focus(sel);
+    });
+    // Advance clock: consumeEdit will compute 1500 - 1000 = 500 ms.
+    perfNowValue = 1500;
+    // Change → handlePhaseChange → consumeEdit → PATCH body.
+    await act(async () => {
+      fireEvent.change(sel, { target: { value: "grasp_object" } });
+    });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+    });
+
+    const patchCall = fetchMock.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+    )!;
+    const body = JSON.parse((patchCall[1] as RequestInit).body as string);
+    expect(body.client_edit_duration_ms).toBe(500);
+
+    perfSpy.mockRestore();
+  });
+
+  it("I2: labels blur-commit PATCH carries client_edit_duration_ms across async-await boundary", async () => {
+    // performance.now spy installed BEFORE render — startEdit("labels") on
+    // the verb input's onFocus will read our stub value (1000).
+    let perfNowValue = 1000;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNowValue);
+
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/segments/")) {
+        return jsonResp(
+          { ...MANIFEST, run_hash: NEW_RUN_HASH },
+          { headers: { ETag: `"${NEW_RUN_HASH}"` } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={undefined} />
+      </ApiToggleProvider>,
+    );
+
+    const verbInput = (await screen.findByLabelText(
+      "verb for seg-001",
+    )) as HTMLInputElement;
+
+    // Focus → startEdit("labels") stores perfNowValue (1000).
+    await act(async () => {
+      fireEvent.focus(verbInput);
+    });
+    // Change the verb so labelsChanged() returns true (otherwise early-return
+    // path would skip the PATCH, though duration is still consumed synchronously).
+    await act(async () => {
+      fireEvent.change(verbInput, { target: { value: "cup" } });
+    });
+    // Advance clock to 2000: consumeEdit in handleLabelBlur will compute
+    // 2000 - 1000 = 1000 ms. This happens synchronously at function entry
+    // before the `await onLabelsEdit(...)` call — spec §3.3 contract.
+    perfNowValue = 2000;
+    await act(async () => {
+      fireEvent.blur(verbInput);
+    });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        (c) =>
+          (c[1] as RequestInit | undefined)?.method === "PATCH" &&
+          typeof c[0] === "string" &&
+          (c[0] as string).includes("/labels"),
+      );
+      expect(patchCall).toBeDefined();
+    });
+
+    const patchCall = fetchMock.mock.calls.find(
+      (c) =>
+        (c[1] as RequestInit | undefined)?.method === "PATCH" &&
+        typeof c[0] === "string" &&
+        (c[0] as string).includes("/labels"),
+    )!;
+    const body = JSON.parse((patchCall[1] as RequestInit).body as string);
+    // Synchronous capture before await: 2000 - 1000 = 1000 ms.
+    expect(body.client_edit_duration_ms).toBe(1000);
+
+    perfSpy.mockRestore();
+  });
+});
+
 describe("D r2 timing — performance.now() migration", () => {
   it("T5: client_edit_duration_ms remains non-negative under wall-clock skew", async () => {
     // Wall clock decreases (e.g. NTP slew correcting a fast clock) between
