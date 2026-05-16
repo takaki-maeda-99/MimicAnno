@@ -2,6 +2,38 @@
 
 **Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green. 次窓を開ける場合はユーザー判断。
 
+---
+
+## 残タスク (一覧)
+
+| 優先 | ID | 内容 | 状態・備考 |
+|---|---|---|---|
+| 高 | **Phase 5 E** | MimicRec integration (`~/MimicRec/` 側の `save_annotations` swap-out + Replay page) | **未着手**。autonomy 窓境界を超えるので新 autonomy 窓 + ユーザー新規許可必要 |
+| 高 | **D r2** | label_agreement の真の意味付け修正 (現状は `label_source=="human_edit"` 近似) ほか 6 件 | spec 未着手。詳細は note `2026-05-16-phase5-autonomy-exit-summary.md` §"怪しかったところ / D r2 候補" |
+| 中 | **G1** | batch_annotate 実機 smoke (4B variant) | ⚠️ 別セッション作業中・本セッション触らない。26B は手元 RTX A6000 で VRAM 不足 → 別ホスト案件 |
+| 中 | **G3** | autonomy exit end-to-end 実データ sanity check (SO101 3-5 ep × rubric 妥当性) | ⏸ `.venv` torch 2.11.0+cu130 vs driver 12.6 mismatch で停止中。.venv は G1/G4 と共有のため独断で書き換えず、env 調整方針要 |
+| 中 | **G4** | gem4 新ロボット 3 dataset × 1 ep smoke (`batch_annotate_4B.py`) | ⏸ G3 と同じ env 問題で停止。SAM3 grounding cam 確認 + 1 ep ずつ実行 |
+| 低 | **G6** | Gemma 4B planner 単体 regression (1 ep) | 未着手。GPU 必須 |
+| 低 | **G7** | Hand pipeline + HAMER 実機 smoke (fisheye 投影 + 3軸 overlay + cam_t time-series) | 未着手。GPU 必須 |
+| 低 | **G8** | UniDAC `precompute_depth` / warp / fuse 1 ep 実機 | 未着手。`conda activate unidac` + GPU 必須 |
+| 低 | テストフィクスチャ | `tests/fixtures/loadable_run/` に合成固定データをコミット (CI 対応) | 未着手 |
+| 低 | gem4 設定整理 | `mimicanno/configs/robot/gem4_*.yaml` x3 + run scripts の clean-up | 本体は main 済み。docs/別 PR で整理可 |
+
+### 別セッション関連 (本セッションからは触らない)
+
+| 項目 | 状態 |
+|---|---|
+| 未 push 4 commits (`79bdbcd`/`ce678b4`/`0e45447`/`3b6899e`) | 別アクティブセッションの成果物、push 控える |
+| `feat/phase5-d-eval-harness` worktree 残骸 (`/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/` `node_modules/`) | git 認識外、ディスク上のゴミのみ、`rm -rf` でいつでも除去可 |
+
+### 詳細 / 引継ぎ note
+
+- 全体サマリー: `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md`
+- D r1 結果詳細: `docs/superpowers/notes/2026-05-16-phase5-d-results.md`
+- 各 G タスクの詳細は本 file 下部 §"GPU 実機テスト未消化" 参照
+
+---
+
 ## 完了済み ✅
 
 | ストリーム | 内容 | コミット |
