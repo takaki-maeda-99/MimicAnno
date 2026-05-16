@@ -416,4 +416,58 @@ describe("D r2 timing — kind-keyed edit ref", () => {
 
     perfSpy.mockRestore();
   });
+
+  it("T4: labels slot uses latest focus across sub-fields (verb blur discards, object focus overwrites)", async () => {
+    // Verb / object / target / flags inputs all key the edit-timing slot
+    // by "labels". Spec §3.3: handleLabelBlur runs consumeEdit("labels")
+    // SYNCHRONOUSLY at function entry, even on the no-change early-return
+    // path, so a subsequent sub-field focus starts a fresh t0.
+    let perfNow = 0;
+    const perfSpy = vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+
+    const onLabelsEdit = vi
+      .fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>()
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never });
+
+    // verb starts as "grab" so blurring without typing is a no-op (early-return
+    // path). object starts as null so typing "tape" is a real change.
+    const segments = [{ ...makeSegment("seg-001", "idle"), verb: "grab" }];
+    render(
+      <SegmentTable
+        segments={segments}
+        apiEnabled={true}
+        labelset={fakeLabelset}
+        onPhaseEdit={vi.fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:h", manifest: {} as never })}
+        onLabelsEdit={onLabelsEdit}
+        editInFlight={false}
+        staleRun={false}
+      />,
+    );
+
+    const verb = screen.getByLabelText("verb for seg-001") as HTMLInputElement;
+    const object = screen.getByLabelText("object for seg-001") as HTMLInputElement;
+
+    // 1. Focus verb @ 100, blur verb without changing value (no PATCH expected;
+    //    handleLabelBlur's sync consumeEdit clears the slot before early-return).
+    perfNow = 100;
+    await act(async () => { fireEvent.focus(verb); });
+    perfNow = 180;
+    await act(async () => { fireEvent.blur(verb); });
+
+    // 2. Focus object @ 200, type "tape", blur @ 250 → PATCH with duration = 50.
+    perfNow = 200;
+    await act(async () => { fireEvent.focus(object); });
+    await act(async () => {
+      fireEvent.change(object, { target: { value: "tape" } });
+    });
+    perfNow = 250;
+    await act(async () => { fireEvent.blur(object); });
+
+    await waitFor(() => expect(onLabelsEdit).toHaveBeenCalledTimes(1));
+    // Without sync clear: duration would be 250-100=150. With fix: 250-200=50.
+    expect(onLabelsEdit.mock.calls[0][2]).toBe(50);
+
+    perfSpy.mockRestore();
+  });
 });
