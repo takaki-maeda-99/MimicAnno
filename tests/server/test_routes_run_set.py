@@ -141,3 +141,52 @@ def test_patch_with_run_set(
     new_run_hash = r.headers.get("ETag", "").strip('"')
     assert new_run_hash.startswith("sha256:")
     assert new_run_hash != run_hash
+
+
+def test_patch_boundary_with_run_set(
+    tmp_parent_runs_root_loadable: Path,
+    loadable_run_set_name: str,
+    loadable_canonical_name: str,
+) -> None:
+    """Regression: PATCH /boundaries/{id} with ?run_set= routes to the
+    correct subdirectory (was broken by missing Depends(get_effective_root)
+    on patch_boundary_route — fix branch fix/boundary-route-effective-root)."""
+    from mimicanno.server.app import create_app
+    from fastapi.testclient import TestClient as _TC
+    app = create_app(
+        runs_root=tmp_parent_runs_root_loadable,
+        cors_origins=[],
+        reviewer=None,
+    )
+    client = _TC(app)
+
+    run_dir = (
+        tmp_parent_runs_root_loadable / loadable_run_set_name / loadable_canonical_name
+    )
+    manifest_data = json.loads((run_dir / "manifest.json").read_text())
+    run_hash = manifest_data["run_hash"]
+
+    ann_data = json.loads((run_dir / "annotation.json").read_text())
+    # boundary_id = right segment's id (index >= 1). Move by 1 frame into
+    # the existing segment range so the validate_new_frame check passes.
+    right_seg = ann_data["segments"][1]
+    left_seg = ann_data["segments"][0]
+    boundary_id = right_seg["segment_id"]
+    old_start = int(right_seg["start_frame"])
+    new_frame = old_start + 1
+    # Guard: new_frame must remain strictly inside (left.start, right.end].
+    assert left_seg["start_frame"] < new_frame <= right_seg["end_frame"]
+
+    url = (
+        f"/api/runs/{loadable_canonical_name}/boundaries/{boundary_id}"
+        f"?run_set={loadable_run_set_name}"
+    )
+    r = client.patch(
+        url,
+        content=json.dumps({"frame": new_frame}),
+        headers={"Content-Type": "application/json", "If-Match": f'"{run_hash}"'},
+    )
+    assert r.status_code == 200, r.text
+    new_run_hash = r.headers.get("ETag", "").strip('"')
+    assert new_run_hash.startswith("sha256:")
+    assert new_run_hash != run_hash
