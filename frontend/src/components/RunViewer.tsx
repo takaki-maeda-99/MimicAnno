@@ -133,7 +133,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     const data = state.data;
     const durationMs =
       editStartRef.current !== null
-        ? Math.round(Date.now() - editStartRef.current)
+        ? Math.round(performance.now() - editStartRef.current)
         : null;
     editStartRef.current = null;
     setEditInFlight(true);
@@ -336,7 +336,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     const data = state.data;
     const reviewedDurationMs =
       editStartRef.current !== null
-        ? Math.round(Date.now() - editStartRef.current)
+        ? Math.round(performance.now() - editStartRef.current)
         : null;
     editStartRef.current = null;
     setReviewedPatchInFlight(true);
@@ -407,7 +407,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     const data = state.data;
     const labelsDurationMs =
       editStartRef.current !== null
-        ? Math.round(Date.now() - editStartRef.current)
+        ? Math.round(performance.now() - editStartRef.current)
         : null;
     editStartRef.current = null;
     setLabelsPatchInFlight(true);
@@ -676,7 +676,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           onPhaseEdit={onPhaseEdit}
           onReviewedToggle={onReviewedToggle}
           onLabelsEdit={onLabelsEdit}
-          onEditFocus={() => { editStartRef.current = Date.now(); }}
+          onEditFocus={() => { editStartRef.current = performance.now(); }}
           editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           staleRun={staleRun}
           toast={toast}

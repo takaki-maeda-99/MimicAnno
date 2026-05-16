@@ -430,3 +430,93 @@ describe("RunViewer error toast composition (spec §3.5)", () => {
     });
   });
 });
+
+describe("D r2 timing — performance.now() migration", () => {
+  it("T5: client_edit_duration_ms remains non-negative under wall-clock skew", async () => {
+    // Wall clock decreases (e.g. NTP slew correcting a fast clock) between
+    // focus and commit. With Date.now() the duration would be negative;
+    // performance.now() is monotonic so it stays non-negative.
+    //
+    // We install the performance.now mock only AFTER the initial render
+    // settles, because React/jsdom internals call performance.now during
+    // setup and would otherwise consume our mockReturnValueOnce values.
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(INDEX_DOC);
+      if (url.endsWith("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.endsWith("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.endsWith("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.endsWith("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/segments/")) {
+        return jsonResp(
+          { ...MANIFEST, run_hash: NEW_RUN_HASH },
+          { headers: { ETag: `"${NEW_RUN_HASH}"` } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort={undefined} />
+      </ApiToggleProvider>,
+    );
+
+    const sel = (await screen.findByLabelText(
+      "phase for seg-001",
+    )) as HTMLSelectElement;
+
+    // Install timing spies AFTER render settles. React/jsdom call
+    // performance.now and Date.now many times incidentally, so we use a
+    // controllable counter rather than mockReturnValueOnce (which would
+    // be consumed by unrelated callers). We bump the counters manually
+    // between the focus and commit events.
+    let perfNowValue = 1000;
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => perfNowValue);
+    // Simulate wall-clock going backward between focus and commit.
+    let dateNowValue = 200;
+    const dateSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => dateNowValue);
+
+    // Focus event → onEditFocus → editStartRef.current = now() (1000)
+    await act(async () => {
+      fireEvent.focus(sel);
+    });
+    // Advance: perf.now monotonic forward, Date.now backward (NTP slew).
+    perfNowValue = 1500;
+    dateNowValue = 100;
+    // Commit → duration calc = now() - editStartRef.current
+    await act(async () => {
+      fireEvent.change(sel, { target: { value: "grasp_object" } });
+    });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+    });
+
+    const patchCall = fetchMock.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+    )!;
+    const body = JSON.parse((patchCall[1] as RequestInit).body as string);
+    // Monotonic: 1500 - 1000 = 500. Non-negative is the load-bearing
+    // assertion; the exact value (500, not Date.now's -100) proves the
+    // path uses performance.now, not Date.now.
+    expect(body.client_edit_duration_ms).toBeGreaterThanOrEqual(0);
+    expect(body.client_edit_duration_ms).toBe(500);
+    // Both spies are exercised incidentally by React/jsdom too — we only
+    // assert the duration value, which is the load-bearing behaviour.
+    expect(perfSpy).toHaveBeenCalled();
+    expect(dateSpy).toHaveBeenCalled();
+
+    perfSpy.mockRestore();
+    dateSpy.mockRestore();
+  });
+});
