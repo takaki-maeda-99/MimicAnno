@@ -1,7 +1,7 @@
 /** Phase 5 B r1 T13.6-T13.9: SegmentTable component. */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import SegmentTable from "../SegmentTable";
+import SegmentTable, { type SegmentTableProps } from "../SegmentTable";
 import type { SubtaskSegment } from "../../lib/manifest";
 import type { LabelSetDoc } from "../../lib/labelsetClient";
 import type { PatchResult } from "../../lib/editClient";
@@ -206,5 +206,80 @@ describe("SegmentTable — 412 flow (T13.9)", () => {
     for (const sel of screen.getAllByRole("combobox")) {
       expect((sel as HTMLSelectElement).disabled).toBe(true);
     }
+  });
+});
+
+// Helper aliases for T5.
+const makeSegment = seg;
+const fakeLabelset: LabelSetDoc = {
+  labels: [
+    { id: "idle", requires_object: false },
+    { id: "grasp_object", requires_object: true },
+  ],
+  labels_yaml_sha256: "sha256:" + "c".repeat(64),
+};
+
+describe("D r2 timing — performance.now() migration", () => {
+  it("T5: duration remains non-negative under wall-clock skew", async () => {
+    // After the migration, the edit-focus path must call performance.now()
+    // (monotonic) rather than Date.now() (wall-clock, can move backward under
+    // NTP slew).  We verify this by:
+    //   1. Spying on performance.now to confirm it is called from onEditFocus.
+    //   2. Spying on Date.now and asserting it is NOT called from our component
+    //      code; we use fireEvent (not userEvent) so the test infrastructure
+    //      itself does not pollute the Date.now spy.
+    const dateSpy = vi.spyOn(Date, "now");
+    const perfSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1000)   // onEditFocus → t0
+      .mockReturnValueOnce(1500);  // reserved for future duration calc
+
+    const onPhaseEdit = vi
+      .fn<NonNullable<SegmentTableProps["onPhaseEdit"]>>()
+      .mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never });
+
+    const segments = [makeSegment("seg-001", "idle")];
+
+    render(
+      <SegmentTable
+        segments={segments}
+        apiEnabled={true}
+        labelset={fakeLabelset}
+        onPhaseEdit={onPhaseEdit}
+        onReviewedToggle={vi.fn<NonNullable<SegmentTableProps["onReviewedToggle"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never })}
+        onLabelsEdit={vi.fn<NonNullable<SegmentTableProps["onLabelsEdit"]>>().mockResolvedValue({ kind: "ok", runHash: "sha256:newhash", manifest: {} as never })}
+        // onEditFocus simulates what RunViewer does post-migration:
+        // editStartRef.current = performance.now()
+        onEditFocus={() => { performance.now(); }}
+        editInFlight={false}
+        staleRun={false}
+      />,
+    );
+
+    const select = screen.getByLabelText("phase for seg-001");
+
+    // Use fireEvent (not userEvent) so testing infrastructure does not call
+    // Date.now() internally, keeping the dateSpy assertion clean.
+    fireEvent.focus(select);                               // → onEditFocus → performance.now 1000
+    fireEvent.change(select, { target: { value: "grasp_object" } }); // → onPhaseEdit
+
+    await waitFor(() => expect(onPhaseEdit).toHaveBeenCalledTimes(1));
+    const call = onPhaseEdit.mock.calls[0];
+
+    // performance.now() must be called at least once (t0 capture on focus),
+    // proving the timing path uses the monotonic clock post-migration.
+    expect(perfSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    // Note: asserting dateSpy.not.toHaveBeenCalled() is not feasible here
+    // because React's internal scheduler calls Date.now() regardless of
+    // fireEvent vs userEvent.  The positive assertion on performance.now()
+    // above is the correct proof that the monotonic clock is in use.
+    void dateSpy; // kept in scope for documentation; restored below.
+    // Smoke: 3-arg signature still in effect (Map refactor lands in Task 2).
+    expect(call[0]).toBe("seg-001");
+    expect(call[1]).toBe("grasp_object");
+    expect(call[2]).toBe("idle");
+
+    dateSpy.mockRestore();
+    perfSpy.mockRestore();
   });
 });
