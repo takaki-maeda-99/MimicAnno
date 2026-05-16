@@ -1,0 +1,16 @@
+{
+  "schema_version": "0.1.0",
+  "runs": [
+    {
+      "episode_id": "episode_000000",
+      "run_hash": "sha256:e350611063945b4e1bce196aec7cd05162af51ff7ad6a82f854af9d081f0fb7d",
+      "run_hash_short": "e35061106394",
+      "config_hash_short": "00c8107f",
+      "input_hash_short": "dc8780f2",
+      "manifest_url": "episode_000000__e35061106394/manifest.json",
+      "task_text": "Put the tape into the bottle",
+      "pipeline_phase": 4,
+      "generated_at": "2026-05-12T12:58:29.479282Z"
+    }
+  ]
+}

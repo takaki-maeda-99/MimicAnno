@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.server.app import create_app
-from tests.server.conftest import _REAL_SO101_RUN, _build_loadable_fixture
+from tests.server.conftest import _LOADABLE_RUN_NAME, _build_loadable_fixture
 
 
 def _client(runs_root: Path) -> TestClient:
@@ -44,8 +44,6 @@ def _get_other_phase(runs_root: Path, canonical_name: str) -> str:
 
 @pytest.fixture
 def runs_root_with_loadable(tmp_path: Path) -> Path:
-    if not _REAL_SO101_RUN.is_dir():
-        pytest.skip(f"loadable fixture missing: {_REAL_SO101_RUN}")
     root = tmp_path / "runs"
     root.mkdir()
     _build_loadable_fixture(root)
@@ -55,7 +53,7 @@ def runs_root_with_loadable(tmp_path: Path) -> Path:
 def test_patch_phase_with_duration_200(runs_root_with_loadable: Path) -> None:
     """PATCH with client_edit_duration_ms=1500 → 200 + history has that value."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
     seg_id = _seg0_id(root, name)
     new_phase = _get_other_phase(root, name)
@@ -79,7 +77,7 @@ def test_patch_phase_with_duration_200(runs_root_with_loadable: Path) -> None:
 def test_patch_phase_without_duration_200(runs_root_with_loadable: Path) -> None:
     """PATCH without client_edit_duration_ms → 200 + history entry with None."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
     seg_id = _seg0_id(root, name)
     new_phase = _get_other_phase(root, name)
@@ -100,7 +98,7 @@ def test_patch_phase_without_duration_200(runs_root_with_loadable: Path) -> None
 def test_patch_phase_negative_duration_400(runs_root_with_loadable: Path) -> None:
     """PATCH with client_edit_duration_ms=-1 → 400 invalid_body."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
     seg_id = _seg0_id(root, name)
     new_phase = _get_other_phase(root, name)
@@ -119,7 +117,7 @@ def test_patch_phase_negative_duration_400(runs_root_with_loadable: Path) -> Non
 def test_patch_phase_float_duration_400(runs_root_with_loadable: Path) -> None:
     """PATCH with client_edit_duration_ms=1.5 → 400 invalid_body."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
     seg_id = _seg0_id(root, name)
     new_phase = _get_other_phase(root, name)

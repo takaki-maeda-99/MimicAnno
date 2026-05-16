@@ -1,0 +1,58 @@
+{
+  "candidates": [
+    {
+      "frame": 20,
+      "id": "b_001",
+      "score": 0.5,
+      "scores": {
+        "gripper_zero_crossing": 1.0
+      },
+      "sources": [
+        "gripper_zero_crossing"
+      ],
+      "time": 1.358990175526751
+    },
+    {
+      "frame": 50,
+      "id": "b_002",
+      "score": 0.5,
+      "scores": {
+        "gripper_zero_crossing": 1.0,
+        "object_motion_start_stop": 1.0
+      },
+      "sources": [
+        "gripper_zero_crossing",
+        "object_motion_start_stop"
+      ],
+      "time": 3.3652868217572944
+    },
+    {
+      "frame": 88,
+      "id": "b_003",
+      "score": 0.682964984642462,
+      "scores": {
+        "eef_velocity_valley": 0.9961241821289842,
+        "gripper_zero_crossing": 0.867867878220432
+      },
+      "sources": [
+        "eef_velocity_valley",
+        "gripper_zero_crossing"
+      ],
+      "time": 5.841525059027143
+    },
+    {
+      "frame": 99,
+      "id": "b_004",
+      "score": 0.490930873573666,
+      "scores": {
+        "gripper_zero_crossing": 0.981861747147332
+      },
+      "sources": [
+        "gripper_zero_crossing"
+      ],
+      "time": 6.616676555895721
+    }
+  ],
+  "episode_id": "episode_000000",
+  "schema_version": "0.1.0"
+}
