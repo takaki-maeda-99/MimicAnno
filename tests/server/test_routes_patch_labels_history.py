@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.server.app import create_app
-from tests.server.conftest import _REAL_SO101_RUN, _build_loadable_fixture
+from tests.server.conftest import _LOADABLE_RUN_NAME, _build_loadable_fixture
 
 
 def _client(runs_root: Path) -> TestClient:
@@ -24,8 +24,6 @@ def _client(runs_root: Path) -> TestClient:
 
 @pytest.fixture
 def runs_root_with_loadable(tmp_path: Path) -> Path:
-    if not _REAL_SO101_RUN.is_dir():
-        pytest.skip(f"loadable fixture missing: {_REAL_SO101_RUN}")
     root = tmp_path / "runs"
     root.mkdir()
     _build_loadable_fixture(root)
@@ -42,7 +40,7 @@ def test_patch_labels_with_duration_emits_history(
     """PATCH /labels with client_edit_duration_ms=1234 →
     history += EditEvent(edit_type="labels", client_edit_duration_ms=1234)."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
 
     client = _client(root)
@@ -72,7 +70,7 @@ def test_patch_labels_without_duration_emits_history(
 ) -> None:
     """PATCH /labels without client_edit_duration_ms → history entry has None."""
     root = runs_root_with_loadable
-    name = _REAL_SO101_RUN.name
+    name = _LOADABLE_RUN_NAME
     rh = read_manifest(root / name / "manifest.json").run_hash
 
     client = _client(root)

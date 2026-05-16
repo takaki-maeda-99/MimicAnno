@@ -127,82 +127,45 @@ def known_run_hash() -> str:
 
 
 # ----------------------------------------------------------------------------
-# Phase 5 B r1 — `tmp_runs_root_loadable`
+# Phase 5 B r1 — `tmp_runs_root_loadable` (frozen fixture)
 #
 # The Phase 5 A `tmp_runs_root` above writes a minimal manifest that lacks
 # fields `mimicanno/io.py::read_manifest` requires; sufficient for A's
 # bytes-passthrough route tests, but the PATCH writer (T6+) needs to parse
-# manifest + annotation contents. This fixture copies a real SO101 v5 run
-# (allow-list of 5 artifacts, no video / no _vlm_dumps) and injects
-# `canonical_name` since the source predates T4.
+# manifest + annotation contents. This fixture copies a frozen SO101 v5
+# ep0 snapshot from `tests/fixtures/loadable_run/` (committed to the repo)
+# so CI does not depend on the live `runs/` tree.
+#
+# See `docs/superpowers/specs/2026-05-16-loadable-run-fixture-design.md`.
 # ----------------------------------------------------------------------------
 
 
 import shutil  # noqa: E402
 
-from mimicanno.schema_versions import INDEX_SCHEMA_VERSION  # noqa: E402
-
-_REAL_SO101_RUN = (
-    Path(__file__).resolve().parent.parent.parent
-    / "runs" / "so101_phase4_v5" / "episode_000000__e35061106394"
+_FROZEN_FIXTURE_ROOT = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "loadable_run"
 )
-_LOADABLE_ARTIFACT_FILES = (
-    "annotation.json", "boundaries.json", "signals.json", "tracks.json",
+_FROZEN_RUN_FILES = (
+    "manifest.json", "annotation.json", "boundaries.json",
+    "signals.json", "tracks.json",
 )
+_FROZEN_INDEX_FILE = "index.json"
+_LOADABLE_RUN_NAME = "episode_000000__e35061106394"
 
 
 def _build_loadable_fixture(dst_runs_root: Path) -> str:
-    """Build a loadable runs/ tree under ``dst_runs_root`` from
-    ``_REAL_SO101_RUN``. Returns the run dir name."""
-    name = _REAL_SO101_RUN.name
-    dst_run = dst_runs_root / name
+    """Copy the frozen loadable-run snapshot into ``dst_runs_root``.
+
+    Returns the run dir name (== ``_LOADABLE_RUN_NAME``)."""
+    dst_run = dst_runs_root / _LOADABLE_RUN_NAME
     dst_run.mkdir(parents=True)
-
-    # Allow-list copy: 5 files only. video.mp4 and _vlm_dumps are skipped.
-    for fname in _LOADABLE_ARTIFACT_FILES:
-        shutil.copy(_REAL_SO101_RUN / fname, dst_run / fname)
-
-    # Manifest: inject canonical_name + strip video row.
-    # Also normalise run_hash back to the auto-pipeline value so that
-    # test_edit_short_circuit invariant holds regardless of T16 / smoke edits.
-    raw = json.loads((_REAL_SO101_RUN / "manifest.json").read_text())
-    raw["canonical_name"] = name
-    raw["artifacts"] = [a for a in raw["artifacts"] if a.get("role") != "video"]
-    from mimicanno.config import compose_run_hash as _compose
-    auto_rh = _compose(raw["config_hash"], raw["input_hash"])
-    raw["run_hash"] = auto_rh
-    raw.pop("edited_at", None)
-    (dst_run / "manifest.json").write_text(json.dumps(raw, indent=2))
-
-    # Also reset run_hash in annotation.json so it matches the manifest.
-    ann_raw = json.loads((dst_run / "annotation.json").read_text())
-    ann_raw["run_hash"] = auto_rh
-    (dst_run / "annotation.json").write_text(json.dumps(ann_raw))
-
-    # Single-row index.json (real index has 23 rows; tests only need one).
-    rh = auto_rh
-    rh_hex = rh[len("sha256:"):] if rh.startswith("sha256:") else rh
-    ch = str(raw["config_hash"])
-    ch_hex = ch[len("sha256:"):] if ch.startswith("sha256:") else ch
-    ih = str(raw["input_hash"])
-    ih_hex = ih[len("sha256:"):] if ih.startswith("sha256:") else ih
-    suffix_len = len(name) - len("episode_000000__")
-    index = {
-        "schema_version": INDEX_SCHEMA_VERSION,
-        "runs": [{
-            "episode_id": raw["episode_id"],
-            "run_hash": rh,
-            "run_hash_short": rh_hex[:suffix_len],
-            "config_hash_short": ch_hex[:8],
-            "input_hash_short": ih_hex[:8],
-            "manifest_url": f"{name}/manifest.json",
-            "task_text": raw["task"]["text"],
-            "pipeline_phase": raw["generator"]["pipeline_phase"],
-            "generated_at": raw["generated_at"],
-        }],
-    }
-    (dst_runs_root / "index.json").write_text(json.dumps(index, indent=2))
-    return name
+    for fname in _FROZEN_RUN_FILES:
+        shutil.copy(_FROZEN_FIXTURE_ROOT / fname, dst_run / fname)
+    shutil.copy(
+        _FROZEN_FIXTURE_ROOT / _FROZEN_INDEX_FILE,
+        dst_runs_root / _FROZEN_INDEX_FILE,
+    )
+    return _LOADABLE_RUN_NAME
 
 
 @pytest.fixture
@@ -211,12 +174,7 @@ def tmp_runs_root_loadable(tmp_path: Path) -> Path:
     (full schema) and annotation.json carries real SubtaskSegment data —
     for PATCH writer tests that actually parse and mutate the contents.
 
-    Skips test if the real SO101 v5 run isn't checked out locally."""
-    if not _REAL_SO101_RUN.is_dir():
-        pytest.skip(
-            f"loadable fixture source missing: {_REAL_SO101_RUN}; "
-            "this dev box only — CI should commit a frozen fixture instead.",
-        )
+    Always available: backed by a frozen fixture committed to the repo."""
     root = tmp_path / "runs"
     root.mkdir()
     _build_loadable_fixture(root)
@@ -225,8 +183,8 @@ def tmp_runs_root_loadable(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def loadable_canonical_name() -> str:
-    """The dir name in ``tmp_runs_root_loadable`` (matches real SO101 ep0)."""
-    return _REAL_SO101_RUN.name
+    """The dir name in ``tmp_runs_root_loadable``."""
+    return _LOADABLE_RUN_NAME
 
 
 # ----------------------------------------------------------------------------
@@ -248,16 +206,10 @@ def tmp_parent_runs_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def tmp_parent_runs_root_loadable(tmp_path: Path) -> Path:
-    """Multi-mode parent dir with a real loadable so101 run-set subdirectory.
+    """Multi-mode parent dir with a frozen loadable so101 run-set subdirectory.
 
-    Skips if the real SO101 v5 run is not checked out locally.
     Used for S-RS T5: PATCH with ?run_set= integration test.
     """
-    if not _REAL_SO101_RUN.is_dir():
-        pytest.skip(
-            f"loadable fixture source missing: {_REAL_SO101_RUN}; "
-            "this dev box only — CI should commit a frozen fixture instead.",
-        )
     sub = tmp_path / "so101_phase4_v5"
     sub.mkdir()
     _build_loadable_fixture(sub)
