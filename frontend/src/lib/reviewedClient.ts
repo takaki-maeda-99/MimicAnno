@@ -18,10 +18,12 @@ export async function patchReviewed(args: {
   segmentId: string;
   reviewed: boolean;
   ifMatchRunHash: string;
+  runSet?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  clientEditDurationMs?: number | null;
 }): Promise<ReviewedPatchResult> {
-  const { apiBase, runName, segmentId, reviewed, ifMatchRunHash, signal, timeoutMs = 10_000 } = args;
+  const { apiBase, runName, segmentId, reviewed, ifMatchRunHash, runSet, signal, timeoutMs = 10_000, clientEditDurationMs } = args;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -29,7 +31,13 @@ export async function patchReviewed(args: {
     ? (AbortSignal as { any?: (s: AbortSignal[]) => AbortSignal }).any?.([signal, controller.signal]) ?? controller.signal
     : controller.signal;
 
-  const url = `${apiBase}/api/runs/${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/reviewed`;
+  const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
+  const url = `${apiBase}${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/reviewed${runSetQs}`;
+
+  const bodyObj: Record<string, unknown> = { reviewed };
+  if (clientEditDurationMs != null) {
+    bodyObj.client_edit_duration_ms = clientEditDurationMs;
+  }
 
   try {
     const resp = await fetch(url, {
@@ -38,7 +46,7 @@ export async function patchReviewed(args: {
         "Content-Type": "application/json",
         "If-Match": `"${ifMatchRunHash}"`,
       },
-      body: JSON.stringify({ reviewed }),
+      body: JSON.stringify(bodyObj),
       signal: combinedSignal,
     });
 

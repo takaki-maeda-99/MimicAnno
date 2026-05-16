@@ -416,6 +416,46 @@ class Manifest:
         return d
 
 
+_VALID_EDIT_TYPES = frozenset({"relabel", "boundary", "reviewed", "labels"})
+
+
+@dataclass(slots=True)
+class EditEvent:
+    edit_type: str
+    segment_id: str
+    edited_at: str  # ISO-8601 UTC with Z
+    client_edit_duration_ms: int | None
+    reviewer: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "edit_type": self.edit_type,
+            "segment_id": self.segment_id,
+            "edited_at": self.edited_at,
+            "reviewer": self.reviewer,
+        }
+        if self.client_edit_duration_ms is not None:
+            d["client_edit_duration_ms"] = self.client_edit_duration_ms
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "EditEvent":
+        edit_type = str(d["edit_type"])
+        if edit_type not in _VALID_EDIT_TYPES:
+            raise ValueError(f"unknown edit_type: {edit_type!r}")
+        return cls(
+            edit_type=edit_type,
+            segment_id=str(d["segment_id"]),
+            edited_at=str(d["edited_at"]),
+            client_edit_duration_ms=(
+                int(d["client_edit_duration_ms"])
+                if d.get("client_edit_duration_ms") is not None
+                else None
+            ),
+            reviewer=d.get("reviewer"),
+        )
+
+
 @dataclass(slots=True)
 class AnnotationResult:
     schema_version: str
@@ -433,9 +473,10 @@ class AnnotationResult:
     boundaries_url: str
     signals_url: str
     notes: str | None
+    history: list[EditEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "schema_version": self.schema_version,
             "episode_id": self.episode_id,
             "task": self.task.to_dict(),
@@ -452,6 +493,9 @@ class AnnotationResult:
             "signals_url": self.signals_url,
             "notes": self.notes,
         }
+        if self.history:
+            d["history"] = [e.to_dict() for e in self.history]
+        return d
 
 
 # ---------------------------------------------------------------------------

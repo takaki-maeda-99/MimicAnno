@@ -16,20 +16,18 @@
 
 ## 残タスク
 
-### 1. S-D — Evaluation harness — `feat/phase5-d-eval-harness`
-
-spec/plan 完成、実装ゼロ:
+### 1. S-D — Evaluation harness — `feat/phase5-d-eval-harness` ✅ DONE
 
 - [x] spec: `docs/superpowers/specs/2026-05-16-phase5-d-eval-harness-design.md` (rev1)
 - [x] plan: `docs/superpowers/plans/2026-05-16-phase5-d-eval-harness-plan.md` (rev1)
-- [ ] **T1〜T3**: `EditEvent` dataclass + `AnnotationResult.history` + schema v2.0 bump
-- [ ] **T4〜T7**: `_build_event` + `apply_edit` 拡張 + server tests
-- [ ] **T8〜T10**: `mimicanno/eval/` package (`metrics.py` + `render.py` + CLI)
-- [ ] **T11**: frontend — phase `<select>` focusin/change 計測 hook
-- [ ] **T12**: mypy --strict + 全 regression
-- [ ] **T13**: 手動 smoke (SO101 v5)
-- [ ] **T14〜T15**: docs + memory
-- [ ] **main にマージ**
+- [x] **T1〜T3**: `EditEvent` dataclass + `AnnotationResult.history` + annotation schema 0.3.0
+- [x] **T4〜T7**: `event_builder.py` + 4 repo/route extensions + server tests
+- [x] **T8〜T10**: `mimicanno/eval/` package (`metrics.py` + `render.py` + CLI)
+- [x] **T11**: frontend timing hook (all 4 edit clients + SegmentTable onEditFocus + RunViewer editStartRef)
+- [x] **T12**: mypy --strict + 全 regression (10 new tests + 210 existing, all pass)
+- [x] **T13**: 手動 smoke (SO101 ep0 copy — PATCH reviewed 2500ms → history correct, eval CLI OK)
+- [x] **T14〜T15**: docs (`2026-05-16-phase5-d-results.md`) + memory + TODO
+- [ ] **main にマージ** (ユーザー判断待ち)
 
 ---
 
@@ -54,7 +52,7 @@ local main が origin/main より **4 commits ahead** (15時間前、gayagaya �
 ## 推奨次ステップ
 
 ```
-S-D impl+merge (Phase 5 D)
+S-D main マージ → Phase 5 E (MimicRec integration)
 ```
 
 ---

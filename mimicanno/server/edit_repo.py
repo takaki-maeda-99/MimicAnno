@@ -37,6 +37,7 @@ from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
 from mimicanno.smoother import _recompute_confidence
+from mimicanno.server.event_builder import build_edit_event
 from mimicanno.server.write_txn import write_run_atomically
 
 
@@ -128,6 +129,7 @@ def apply_edit(
     if_match: str,
     reviewer: str | None,
     labelset: LabelSet,
+    client_edit_duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Apply a single-field phase relabel under the publish lock.
 
@@ -198,7 +200,14 @@ def apply_edit(
         annotation.segments[idx] = new_seg
 
         # Step 6-8: write annotation → manifest → index atomically.
-        annotation = replace(annotation, run_hash=new_run_hash)
+        event = build_edit_event(
+            edit_type="relabel",
+            segment_id=segment_id,
+            client_edit_duration_ms=client_edit_duration_ms,
+            reviewer=reviewer,
+        )
+        new_history = [*annotation.history, event]
+        annotation = replace(annotation, run_hash=new_run_hash, history=new_history)
         manifest = replace(
             manifest,
             run_hash=new_run_hash,

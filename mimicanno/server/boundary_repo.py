@@ -36,6 +36,7 @@ from mimicanno.server.boundary_lookup import (
     validate_new_frame,
 )
 from mimicanno.server.edit_repo import EtagMismatch, RunNotFound
+from mimicanno.server.event_builder import build_edit_event
 from mimicanno.server.write_txn import write_run_atomically
 
 
@@ -81,6 +82,7 @@ def patch_boundary(
     new_frame: int,
     if_match: str,
     reviewer: str | None,
+    client_edit_duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Move a shared segment boundary to new_frame (spec §2, §3).
 
@@ -160,7 +162,14 @@ def patch_boundary(
             old_run_hash, boundary_id, new_frame, reviewer
         )
 
-        new_annotation = replace(annotation, segments=segments, run_hash=new_run_hash)
+        event = build_edit_event(
+            edit_type="boundary",
+            segment_id=boundary_id,
+            client_edit_duration_ms=client_edit_duration_ms,
+            reviewer=reviewer,
+        )
+        new_history = [*annotation.history, event]
+        new_annotation = replace(annotation, segments=segments, run_hash=new_run_hash, history=new_history)
         new_manifest = replace(manifest, run_hash=new_run_hash, edited_at=_now_iso())
 
         suffix_len = len(name) - len(manifest.episode_id) - len(CANONICAL_SEPARATOR)

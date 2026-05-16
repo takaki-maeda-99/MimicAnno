@@ -24,6 +24,7 @@ export async function patchLabels(args: {
   runSet?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  clientEditDurationMs?: number | null;
 }): Promise<LabelsPatchResult> {
   const {
     apiBase,
@@ -37,6 +38,7 @@ export async function patchLabels(args: {
     runSet,
     signal,
     timeoutMs = 10_000,
+    clientEditDurationMs,
   } = args;
 
   const controller = new AbortController();
@@ -47,7 +49,12 @@ export async function patchLabels(args: {
 
   const runSetQs = runSet && runSet !== "." ? `?run_set=${encodeURIComponent(runSet)}` : "";
   const url =
-    `${apiBase}/api/runs/${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/labels${runSetQs}`;
+    `${apiBase}${encodeURIComponent(runName)}/segments/${encodeURIComponent(segmentId)}/labels${runSetQs}`;
+
+  const bodyObj: Record<string, unknown> = { verb, object: object_, target, failure_flags };
+  if (clientEditDurationMs != null) {
+    bodyObj.client_edit_duration_ms = clientEditDurationMs;
+  }
 
   try {
     const resp = await fetch(url, {
@@ -56,7 +63,7 @@ export async function patchLabels(args: {
         "Content-Type": "application/json",
         "If-Match": `"${ifMatchRunHash}"`,
       },
-      body: JSON.stringify({ verb, object: object_, target, failure_flags }),
+      body: JSON.stringify(bodyObj),
       signal: combinedSignal,
     });
 
