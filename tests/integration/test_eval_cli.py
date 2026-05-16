@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.server.conftest import _REAL_SO101_RUN, _build_loadable_fixture
+from tests.server.conftest import _build_loadable_fixture
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -19,11 +19,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @pytest.mark.timeout(60)
 def test_eval_cli_with_real_fixture(tmp_path: Path) -> None:
-    """`mimicanno eval <runs_root> --format json` on a real fixture →
+    """`mimicanno eval <runs_root> --format json` on the frozen fixture →
     JSON with at least one run."""
-    if not _REAL_SO101_RUN.is_dir():
-        pytest.skip(f"loadable fixture missing: {_REAL_SO101_RUN}")
-
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
     _build_loadable_fixture(runs_root)
