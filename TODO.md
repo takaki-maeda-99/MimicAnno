@@ -8,6 +8,18 @@
 
 ## 残タスク
 
+### One-shot env setup + start_ui hardening ✅ **完了 (2026-05-17 PM)** — feat/setup-serve-scripts → main (FF, 14 commits)
+
+- `scripts/setup_envs.sh` を 6-step idempotent orchestrator に書き直し: `submodules → core → unidac → hamer → frontend → weights`。flags: `--all` (default), `--core/--unidac/--hamer/--frontend/--weights`, `--skip-weights`。
+- 新規 `scripts/lib/{log,preflight}.sh` + `scripts/setup/*.sh` で責務分離。`STEP_OK/FAIL/USER` exit code, `dry_run_short_circuit` helper, `SETUP_DRY_RUN=1` で CI smoke。
+- gated HF DL を `hf download` (← `huggingface-cli` は廃止) で SAM3 snapshot + Gemma 4 (`google/gemma-4-E2B-it`) を取得。HF auth は `HF_TOKEN` env or `hf auth login`。
+- `scripts/start_ui.sh`: deps check (`.venv/bin/mimicanno` + `frontend/node_modules/.modules.yaml`) + `lsof` port probe + `kill -- -$$` で vite 孫プロセス孤児を防止 + `pnpm run dev --port` (pnpm v11 で `--` separator は禁。詳細は memory `feedback-pnpm-v11-arg-separator`)。
+- `scripts/setup/submodules.sh`: SSH→HTTPS rewrite を `git -c url.insteadOf=...` でコマンド単位スコープ化 (global config leak 防止)。
+- README.md / README.ja.md の Install セクションを `bash scripts/setup_envs.sh` 一発に書き換え。
+- smoke 完走: `--all` 2.5s / `SETUP_DRY_RUN=1 --all` 短絡 / `--core --frontend` 選択 / start_ui の `/healthz` + `/api/runs/index.json` 200 + Ctrl-C 孤児なし。
+- 既知 minor (Won't fix): summary 表で SKIP/PASS 区別なし (全 step 改修要のため見送り)。
+- 関連 memory: `project-setup-envs-shipped`, `reference-hf-cli-deprecated`, `feedback-pnpm-v11-arg-separator`。
+
 ### SAM3 grounding retry smoke (T13) ✅ **完了 (2026-05-17 PM)** — cluster 仮説 4/6 hit (67%)
 
 - **結果ノート**: `docs/superpowers/notes/2026-05-17-sam3-grounding-retry-smoke.md`
