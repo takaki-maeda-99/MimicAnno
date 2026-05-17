@@ -525,6 +525,8 @@ class Propagator:
         stride: int,
         config: TrackingConfig,
         mask_image_size_px: int | None = None,
+        anchor_frame_index: int = 0,
+        propagation_direction: Literal["forward", "both"] = "forward",
     ) -> "tuple[list[Track], MaskCache | None]":
         """Execute propagation per spec §2.4.1.
 
@@ -595,6 +597,8 @@ class Propagator:
             prompts_with_initial_bbox=prompts_with_bbox,
             expected_frames=expected_frames,
             mask_size_hw=mask_size_hw,
+            anchor_frame_index=anchor_frame_index,
+            propagation_direction=propagation_direction,
         )
 
         # Initialize per-prompt state machines

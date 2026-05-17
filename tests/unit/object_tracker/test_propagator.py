@@ -868,7 +868,7 @@ def test_run_collects_masks_from_runtime_into_cache() -> None:
 
         def propagate(
             self, *, video_path, prompts_with_initial_bbox,
-            expected_frames, mask_size_hw=None,
+            expected_frames, mask_size_hw=None, **kwargs: object,
         ):
             self.calls += 1
             self.received_mask_size = mask_size_hw
