@@ -71,7 +71,7 @@ echo ""
 uv run mimicanno serve --runs-root "$RUNS_ROOT" --port "$API_PORT" &
 API_PID=$!
 
-( cd "$REPO_ROOT/frontend" && MIMICANNO_API_PORT="$API_PORT" pnpm run dev -- --port "$VITE_PORT" ) &
+( cd "$REPO_ROOT/frontend" && MIMICANNO_API_PORT="$API_PORT" pnpm run dev --port "$VITE_PORT" ) &
 VITE_PID=$!
 
 cleanup() {
