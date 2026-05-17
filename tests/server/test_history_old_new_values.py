@@ -84,3 +84,49 @@ def test_pre_edit_overall_confidence_round_trip() -> None:
     ev = EditEvent.from_dict(d)
     assert ev.pre_edit_overall_confidence == 0.72
     assert ev.to_dict()["pre_edit_overall_confidence"] == 0.72
+
+
+from mimicanno.server.event_builder import build_edit_event
+
+
+def test_builder_propagates_values() -> None:
+    ev = build_edit_event(
+        edit_type="relabel",
+        segment_id="seg-001",
+        client_edit_duration_ms=420,
+        reviewer=None,
+        old_value={"kind": "relabel", "value": "approach"},
+        new_value={"kind": "relabel", "value": "grasp"},
+        pre_edit_overall_confidence=0.61,
+    )
+    assert ev.edit_type == "relabel"
+    assert ev.old_value == {"kind": "relabel", "value": "approach"}
+    assert ev.new_value == {"kind": "relabel", "value": "grasp"}
+    assert ev.pre_edit_overall_confidence == 0.61
+
+
+def test_builder_rejects_kind_mismatch() -> None:
+    import pytest
+    with pytest.raises(ValueError, match="kind"):
+        build_edit_event(
+            edit_type="relabel",
+            segment_id="seg-001",
+            client_edit_duration_ms=None,
+            reviewer=None,
+            old_value={"kind": "boundary", "value": 120},  # mismatched
+            new_value={"kind": "relabel", "value": "grasp"},
+            pre_edit_overall_confidence=None,
+        )
+
+
+def test_builder_existing_call_pattern_still_works() -> None:
+    """Existing PATCH repos that haven't been updated for Task 3 yet must still work."""
+    ev = build_edit_event(
+        edit_type="reviewed",
+        segment_id="seg-002",
+        client_edit_duration_ms=None,
+        reviewer=None,
+    )
+    assert ev.old_value is None
+    assert ev.new_value is None
+    assert ev.pre_edit_overall_confidence is None
