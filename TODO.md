@@ -8,6 +8,24 @@
 
 ## 残タスク
 
+### U-A: Dataset processing & visualization UI (新規 initiative, 2026-05-17)
+
+Master spec: `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` (commit `a08647e`)
+
+「既存 LeRobot v3 dataset をサーバー上で picking → UI で annotate kick + 進捗監視 + 可視化」をやる initiative。Mode B (人手動画) は別 spec。API contract は master spec §2 で凍結済 → 各 sub-project は別 Claude セッションで spec+plan+impl を並列に進める。
+
+| 優先 | ID | 内容 | 依存 | 並列性 |
+|---|---|---|---|---|
+| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` ページ + subprocess job runner) | 既存 `mimicanno serve` + `scripts/batch_annotate_4B.py` | **最初に着手** (他 sub-project の起点) |
+| 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab on `/datasets/{name}`) | master §2.1 + §2.2 contract | U-A1 backend 後に並列可 |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer 右パネルに) | master §2.4 のみ (jobs と独立) | **即並列可** |
+| 中 | **U-A4** | SAM3 mask overlay (video frame 上に tracks.json の mask を描画) | master §2.5 のみ | **即並列可** (rasterize-on-fly vs pre-bake は sub-spec で判断) |
+| 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) | U-A1 後 |
+
+各 sub-project Claude は master §8 のテンプレに従い `docs/superpowers/specs/2026-05-XX-ua-<id>-design.md` を起こす。
+
+### その他
+
 | 優先 | ID | 内容 | 状態・備考 |
 |---|---|---|---|
 | 低 | **Phase 5 E (そのうち)** | (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs、(C) read-only Python client `mimicanno.client` | MimicRec 配置待ち。本リポ完結部分のみ着手可 |
