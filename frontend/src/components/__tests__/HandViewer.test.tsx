@@ -10,14 +10,17 @@ const META = {
   video_height: 16,
 };
 
+const DUMMY_JOINTS_2D = Array.from({ length: 21 }, (_, i) => [i, 0]);
+
 const SIGNALS: Record<string, unknown> = {
-  schema_version: 2,
+  schema_version: 3,
   frame_000000: {
     right: {
       pinch_m: 0.034,
       cam_t: [0.12, -0.05, 0.63],
       euler_deg: { yaw: 45.6, pitch: -8.1, roll: 12.3 },
       depth_ok: true,
+      joints_2d: DUMMY_JOINTS_2D,
     },
     left: null,
   },
@@ -28,6 +31,7 @@ const SIGNALS: Record<string, unknown> = {
       cam_t: [0.1, 0.0, 0.5],
       euler_deg: { yaw: 10.0, pitch: 5.0, roll: -3.0 },
       depth_ok: false,
+      joints_2d: DUMMY_JOINTS_2D,
     },
     left: null,
   },
@@ -36,7 +40,7 @@ const SIGNALS: Record<string, unknown> = {
 const INDEX = {
   schema_version: "0.1.0",
   episodes: [
-    { episode_id: "GX010085", signals_ready: true },
+    { episode_id: "GX010085", signals_ready: true, depth_video_ready: true },
     { episode_id: "GX010086", signals_ready: false },
   ],
 };
@@ -81,13 +85,14 @@ describe("frame index calculation", () => {
 
 it("depth_ok=false shows 推定 badge", async () => {
   const falseDepthSignals = {
-    schema_version: 2,
+    schema_version: 3,
     frame_000000: {
       right: {
         pinch_m: 0.02,
         cam_t: [0.1, 0.0, 0.5],
         euler_deg: { yaw: 10.0, pitch: 5.0, roll: -3.0 },
         depth_ok: false,
+        joints_2d: DUMMY_JOINTS_2D,
       },
       left: null,
     },
@@ -107,12 +112,25 @@ it("depth_ok=false shows 推定 badge", async () => {
   expect(estimatedEls.length).toBeGreaterThan(0);
 });
 
-it("schema_version=1 shows re-generate message", async () => {
+it("schema_version≠3 (e.g. 1) shows re-generate message", async () => {
   vi.spyOn(window, "fetch").mockImplementation(
     vi.fn(async (url: string) => {
       if (url.endsWith("/index.json")) return jsonResp(INDEX);
       if (url.endsWith("/meta.json")) return jsonResp(META);
       if (url.endsWith("/signals.json")) return jsonResp({ schema_version: 1 });
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch,
+  );
+  render(<HandViewer episodeId="GX010085" />);
+  await waitFor(() => screen.getByText(/signals.json が古いフォーマット/));
+});
+
+it("schema_version=2 also shows re-generate message", async () => {
+  vi.spyOn(window, "fetch").mockImplementation(
+    vi.fn(async (url: string) => {
+      if (url.endsWith("/index.json")) return jsonResp(INDEX);
+      if (url.endsWith("/meta.json")) return jsonResp(META);
+      if (url.endsWith("/signals.json")) return jsonResp({ schema_version: 2 });
       return new Response("not found", { status: 404 });
     }) as typeof fetch,
   );
@@ -148,7 +166,7 @@ it("signals_ready=false shows 未生成 message", async () => {
 
 it("null frame entry shows 未検出 for both hands", async () => {
   const nullSignals = {
-    schema_version: 2,
+    schema_version: 3,
     frame_000000: { right: null, left: null },
   };
   vi.spyOn(window, "fetch").mockImplementation(
@@ -212,4 +230,13 @@ describe("HandViewer layout improvements", () => {
     await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
     expect(screen.getByText(/00:00\.0/)).toBeTruthy();
   });
+});
+
+it("renders depth video element when depth_video_ready=true", async () => {
+  render(<HandViewer episodeId="GX010085" />);
+  await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
+  const videos = document.querySelectorAll("video");
+  expect(videos.length).toBe(2);
+  const srcs = Array.from(videos).map((v) => v.getAttribute("src"));
+  expect(srcs.some((s) => s?.endsWith("/depth_video"))).toBe(true);
 });
