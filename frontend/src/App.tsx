@@ -11,7 +11,7 @@ export default function App() {
   const episodeId = params.get("run");
   const handEpisodeId = params.get("hand");
   const runHashShort = params.get("hash") ?? undefined;
-  const apiEnabled = params.get("api") === "1";
+  const apiEnabled = params.get("api") !== "0";
   // S-RS: ?run_set= selects a subdirectory under the runs root.
   const runSet = params.get("run_set") ?? undefined;
   // U-A1: ?page= selects top-level pages (datasets | jobs).

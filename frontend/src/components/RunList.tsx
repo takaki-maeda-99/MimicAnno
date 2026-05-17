@@ -37,7 +37,15 @@ export default function RunList({ runSet }: Props = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${apiBase}index.json${runSetQs}`);
+        let r = await fetch(`${apiBase}index.json${runSetQs}`);
+        // The top-level static runs/index.json is synthesized by the
+        // backend, not written to disk. When static mode 404s, retry
+        // via the API endpoint so navigating back to "/" still works
+        // as long as `mimicanno serve` is running.
+        if (!apiEnabled && r.status === 404) {
+          const apiR = await fetch(`/api/runs/index.json${runSetQs}`);
+          if (apiR.ok) r = apiR;
+        }
         if (r.status === 404) {
           if (!cancelled) {
             setState({
