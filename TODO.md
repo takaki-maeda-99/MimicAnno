@@ -20,43 +20,53 @@
 |---|---|---|---|---|
 | 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | dispatched(`feat/ua-1-catalog-jobs`, base `70a61f2`, agent `aba3901c`, background, 2026-05-17) |
 | 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/<episode_id>/` ツリーを RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | ✅ **merged** (PR #14 → `9cdce19`) — 下表 (完了済み ✅) 参照 |
-| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 未 |
+| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | **IN-PROGRESS but UNCOMMITTED** — branch `feat/ua-4-mask-overlay` local-only (tip `e909069` docs のみ)、impl 全部 stash 上。下節「U-A4 status 2026-05-17 確認」参照 → **司令塔判断 3 択** |
 | 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | U-A1 待ち |
 | 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | U-A1 待ち |
 
-#### U-A4 escalation (2026-05-17, agent `a3924de4`) — 司令塔判断待ち
+#### U-A4 status 2026-05-17 確認 — 司令塔判断 3 択
 
-Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask データ無ければ escalate」の明示指示通りに止まった。**code / branch / spec / plan いずれも未着手**。
+**前 escalation (rev2 3 択) は解決済**: master spec rev3 (`eb389ba` / merge `f9e2e1e`) で **option 1 (pre-bake) を mandate** に決定。`tracks.json` に RLE/polygon が無いので on-the-fly オプション削除。dispatch prompt も rev3 再発行済 (`e909069`、main 反映済)。
 
-**事実関係**:
-- `tracks.json` の `samples[]` は `{bbox, frame, score, time_sec}` **のみ** — RLE / polygon 無し (例: `runs/so101_phase4_v5/episode_000021__b7d99709c19d/tracks.json`)
-- **master spec L272「on-the-fly from tracks.json polygons/RLE」は disk reality と食い違い** — spec の事実誤認
-- mask 自体は存在: `mimicanno/object_tracker/propagator.py:486-493` で `mask_image_size_px` set 時に per-frame RLE を `MaskCache` に集める → `mimicanno/pipeline.py:881-998` で `vlm_labeler` overlay 描画に消費 → **discard** (disk に書かれない transient)
-- HTTP contract (§2.5: paths / 200/204/400/404 / RGBA PNG / meta.json shape) は **どの実装でも変わらない** → §2 改訂は不要
+**現状 (本セッション確認、PR #14 merge 後)**:
+1. **branch `feat/ua-4-mask-overlay`**: local のみ (origin push 無し)、tip `e909069` = docs only commit、impl commit ゼロ
+2. **impl は 2 段階の stash に分散** (rebase / 整合確認必要):
+   - `stash@{1}` (full, 14 ファイル / +1785 行): frontend (`MaskOverlay.tsx` 等), backend (`mimicanno/masks/sidecar.py` + `mask_routes.py`), `vlm_dumps.py` rev3 align 書き換え, tests 全部。**但し `pipeline.py` 改修無し**
+   - `stash@{2}` (partial, 6 ファイル / +360 行): `pipeline.py` (+5, annotate-time に mask 書き出し), `vlm_dumps.py` rev3 align, `routes.py`, `VideoPlayer.tsx`。**frontend MaskOverlay / sidecar.py / mask_routes.py 無し**
+   - 両 stash が `vlm_dumps.py` / `routes.py` / `VideoPlayer.tsx` で重複 → 機械的 pop で衝突確定
+3. **⚠️ main に schema drift**: PR #14 で merge した `mimicanno/server/vlm_dumps.py` が rev3 spec と一致してない:
 
-**3 択 (司令塔決定)**:
+   | field | main の code (PR #14) | rev3 spec (eb389ba) |
+   |---|---|---|
+   | `kind` | `"planner" / "segment"` | `"planner" / "labeler"` |
+   | `call_id` planner | `"_planner/call_NNN"` | `"call_NNN"` |
+   | `call_id` segment | `"s_NNN/attempt_M"` | `"s_NNN__attempt_M"` |
+   | `segment_ordinal` / `attempt` / `frame_url` / `keyframe_urls` / `request_json` | 無し | 必須 |
+   | `failed` 判定 (segment) | response.txt missing or non-JSON | "later attempt_M+1 exists" |
 
-| | アプローチ | spec 変更 | pipeline 変更 | 既存 run の挙動 | コスト |
-|---|---|---|---|---|---|
-| **1. Pre-bake** (agent 推奨、§3.4 既 authorize) | `pipeline.py` を改修して MaskCache を `runs/<rs>/<canonical>/_masks/<frame>.png` に書き出す。spec L272 の文言だけ修正 (RLE/polygon → pre-baked PNG sidecar) | L272 のみ wording fix (§2 contract は不変) | あり (annotate path に sidecar emit 追加) | 再 annotate するまで 204 / 空 meta。one-shot backfill CLI を別途用意可 | annotate 再走必要 |
-| 2. Spec 改訂 (tracks.json に RLE 追加) | §2.5 / §6 schema に RLE field 追加、on-the-fly 路線堅持 | **§2.5 / §6 改訂** (autonomy 閉じてるので要承認) | あり (propagator → tracks.json writer に RLE 追記) | 同じく再 annotate 要 | tracks.json ファイルサイズ増、schema 変更が U-A3 等他 sub-project に波及するか要確認 |
-| 3. Bbox downgrade | mask やめて bbox 矩形を描く。spec §2.5 の「alpha = mask presence」を「bbox interior」に書き換え | **§2.5 contract 改訂** | 無し | 既存 run でそのまま動く | overlay の意味的価値が下がる (mask の精緻さが失われる) |
+   stash@{1} / @{2} の `vlm_dumps.py` 書き換えはこの drift を直す目的でもある。
+4. **その他関連 stash** (本件無関係):
+   - `stash@{0}` = "ua-3 rev3 test file"
+   - `stash@{3}` = "stray ua-3 dispatch from parallel session"
 
-**司令塔観点 cross-cut**:
-- ~~U-A3 も ESCALATED 中~~ ✅ **解決済** (PR #14 merge `9cdce19`): §2.4 を rev3 に書き換え (commit `3f484ad`)、impl/test/review/merge 完了
-- U-A1 (catalog/jobs) は background 進行中・spec 整合は別問題
-- 選択 1 を採る場合: pipeline.py への追記は U-A1 / U-A2 の job runner / dataset summary territory と微妙に近いが、annotate path に sidecar emit を足すだけなので衝突は小さいはず
+**司令塔判断 3 択**:
 
-**次アクション (司令塔)**:
-1. 3 択から決める (推奨: 1)
-2. master spec L272 (および §2.4 if pre-bake) を rev3 として修正コミット → SHA を新 dispatch prompt に書く
-3. agent `a3924de4` に SendMessage で「option X で続行、spec rev3 SHA は ...」と渡せば context 維持で resume 可能 (新 worktree 不要)。あるいは escalation 結果を踏まえた新 dispatch prompt を書き直して別 agent で start over
+| | アプローチ | 利点 | 欠点 |
+|---|---|---|---|
+| **A. 司令塔自身で fix-up** | rebase `feat/ua-4-mask-overlay` → main、stash@{1} apply → stash@{2} から `pipeline.py` 手動マージ、test 走らせて commit → push → PR | 既存作業 100% 継承、最短 | stash@{1}/@{2} 重複ファイルの衝突解決を commander がやる必要、context 切替コスト |
+| **B. 新規 sub-Claude rev3 dispatch で start over** | stash を参考保存のまま放置、`docs/superpowers/dispatch/2026-05-17-ua-4-dispatch-prompt.md` (rev3) を新 agent に dispatch | fresh context、schema drift も込みで一貫実装可、コードレビュー独立 | 既存 stash の作業がほぼ無駄、wall clock 増 |
+| **C. 本セッション (U-A3 dispatch session) に継承させる** | 私が stash@{1} を base に rev3 整合の rebase 作業 + 不足分 (pipeline.py emit) を統合 + tests + PR | 司令塔 context は守る、U-A3 で得た repo 知識を流用、コスト中 | A と同じ衝突解決を私がやる、U-A3 と U-A4 の責務混在 |
+
+**並行課題 (どの選択でも対応必要)**:
+- main の `vlm_dumps.py` schema drift — 独立 PR で先に直すか、U-A4 PR に同梱するかの判断。stash@{1} の rewrite を切り出して独立 PR にするのが contract drift の影響範囲としてクリーン (U-A3 frontend は rev3 schema 前提なら別途調整)。**フロントエンドが今 main で動いてるか** が要確認 (PR #14 の `VlmPanel.tsx` は old schema 期待のはずなので動いてる)。
 
 **深掘り済みファイル参照** (再調査不要):
 - `mimicanno/object_tracker/propagator.py:486-493` — MaskCache 生成箇所
 - `mimicanno/pipeline.py:881-998` — vlm_labeler への受け渡し
 - `mimicanno/vlm_overlay.py` — mask 消費後 discard
-- `runs/so101_phase4_v5/episode_000021__b7d99709c19d/tracks.json` — schema 実例
+- `runs/so101_phase4_v5/episode_000021__b7d99709c19d/tracks.json` — schema 実例 (bbox/score のみ)
+- master spec rev3 `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` §2.4 / §2.5 / §3.4
+- dispatch prompt rev3 `docs/superpowers/dispatch/2026-05-17-ua-4-dispatch-prompt.md`
 
 ---
 
