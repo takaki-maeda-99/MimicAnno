@@ -81,19 +81,13 @@ export default function VlmPanel(props: VlmPanelProps): React.JSX.Element {
 
   const selectedOrdinal = ordinalFromSegmentId(selectedSegmentId);
 
-  // Pair index: planner call_NNN → NNN; labeler ordinal K → K-1.
-  const pairIndexOf = (c: VlmCall): number | null => {
-    if (c.kind === "planner") {
-      const m = c.call_id.match(/call_(\d+)/);
-      return m ? parseInt(m[1], 10) : null;
-    }
-    return c.segment_ordinal !== null ? c.segment_ordinal - 1 : null;
-  };
-
+  // Planner runs once per episode (with retries); labeler runs once per
+  // segment. There is no 1:1 pairing, so only labeler calls drive sections.
+  const labelerCalls = calls.filter((c) => c.kind === "labeler");
   const pairIndices = Array.from(
     new Set(
-      calls
-        .map(pairIndexOf)
+      labelerCalls
+        .map((c) => (c.segment_ordinal !== null ? c.segment_ordinal - 1 : null))
         .filter((v): v is number => v !== null),
     ),
   ).sort((a, b) => a - b);
@@ -102,7 +96,9 @@ export default function VlmPanel(props: VlmPanelProps): React.JSX.Element {
   const activeCalls =
     activePair === null
       ? []
-      : calls.filter((c) => pairIndexOf(c) === activePair);
+      : labelerCalls.filter(
+          (c) => c.segment_ordinal !== null && c.segment_ordinal - 1 === activePair,
+        );
 
   return (
     <aside data-testid="vlm-panel">
