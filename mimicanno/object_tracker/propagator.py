@@ -154,28 +154,30 @@ def ground_initial_detections(
     runtime: SAM3Runtime,
     initial_frame: np.ndarray,
     entities: EntityPlan,
+    frame_index: int = 0,
 ) -> TrackingPlan:
     """Ground each (role, prompt) on the initial frame; take top-scoring bbox.
-
-    For each prompt in entities.all_prompts_with_role(), call
-    runtime.ground_on_frame(initial_frame, prompt). Takes the highest-scoring
-    bbox; empty result -> failed_prompts entry. Returns the full TrackingPlan
-    ready for Propagator.run (Step C).
 
     Args:
         runtime: SAM3Runtime or test double implementing ground_on_frame.
         initial_frame: The first frame (np.ndarray), used for grounding.
         entities: EntityPlan from Step A, containing prompts organized by role.
+        frame_index: video frame index that ``initial_frame`` came from.
+            Forwarded to ``runtime.ground_on_frame`` so frame-aware test
+            doubles (FixtureSAM3Tracker) can return frame-keyed canned
+            results. Real SAM3 ignores this — its sessions are
+            single-frame.
 
     Returns:
-        TrackingPlan with initial_detections (highest-score bbox per prompt)
-        and failed_prompts (prompts with no detection).
+        TrackingPlan with initial_detections + failed_prompts.
     """
     initial_detections: dict[tuple[ROLE, str], BBox] = {}
     failed_prompts: list[tuple[ROLE, str]] = []
 
     for role, prompt in entities.all_prompts_with_role():
-        results = runtime.ground_on_frame(initial_frame, prompt)
+        results = runtime.ground_on_frame(
+            initial_frame, prompt, frame_index=frame_index,
+        )
         if not results:
             failed_prompts.append((role, prompt))
             continue

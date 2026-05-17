@@ -449,6 +449,8 @@ class SAM3Runtime:
         self,
         frame: np.ndarray,
         prompt: str,
+        *,
+        frame_index: int | None = None,  # NEW: accepted but unused (real SAM3 sends frame bytes; see fixtures.py for frame-keyed lookup)
     ) -> list[tuple[BBox, float]]:
         """Run text-prompted grounding on a single frame.
 
@@ -460,6 +462,8 @@ class SAM3Runtime:
         Args:
             frame: HxWxC uint8 numpy array (RGB).
             prompt: text prompt string (e.g., "red block").
+            frame_index: video frame index (accepted but unused — real SAM3
+                always anchors at frame_idx=0 within its single-frame session).
 
         Returns:
             List of (BBox, score) sorted by descending score. May be empty
