@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/log.sh"
 source "$SCRIPT_DIR/../lib/preflight.sh"
 
+dry_run_short_circuit
+
 cd "$REPO_ROOT"
 
 require_tool_for hamer python3.10 "Install python3.10 (e.g., via pyenv or apt)"

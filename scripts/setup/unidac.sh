@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/log.sh"
 source "$SCRIPT_DIR/../lib/preflight.sh"
 
+dry_run_short_circuit
+
 cd "$REPO_ROOT"
 
 require_tool_for unidac conda "Install miniforge or anaconda"

@@ -5,13 +5,15 @@
 #   - sam3/checkpoints/sam3.pt AND model.safetensors both >0 bytes → skip SAM3
 #   - huggingface_hub.try_to_load_from_cache returns a path → skip Gemma
 #
-# Auth: requires HF_TOKEN env OR prior `huggingface-cli login`. On miss, WARN.
+# Auth: requires HF_TOKEN env OR prior `hf auth login`. On miss, WARN.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/log.sh"
 source "$SCRIPT_DIR/../lib/preflight.sh"
+
+dry_run_short_circuit
 
 cd "$REPO_ROOT"
 

@@ -26,6 +26,18 @@ summary_add() {
     # args: <status> <step_name> <duration_or_reason>
     SUMMARY_ROWS+=("$1|$2|$3")
 }
+# Dry-run helper: if SETUP_DRY_RUN=1 is in the environment, log what this
+# step would do and exit STEP_OK without executing. Call as the first line of
+# each scripts/setup/*.sh (after sourcing log.sh).
+dry_run_short_circuit() {
+    if [[ "${SETUP_DRY_RUN:-0}" == "1" ]]; then
+        local name
+        name="$(basename "${BASH_SOURCE[1]:-?}" .sh)"
+        log "[dry-run] would execute step: $name"
+        exit "$STEP_OK"
+    fi
+}
+
 summary_print() {
     echo ""
     echo "===================== Summary ====================="

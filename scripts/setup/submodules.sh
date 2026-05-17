@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/log.sh"
 
+dry_run_short_circuit
+
 cd "$REPO_ROOT"
 
 # Sentinel: every required submodule has no leading '-' in status.
@@ -35,16 +37,17 @@ if git submodule update --init --recursive; then
     exit "$STEP_OK"
 fi
 
-# Retry with SSH→HTTPS rewrite. Apply globally only as a last resort, and warn.
-warn "submodule init failed (likely SSH auth). Retrying with HTTPS rewrite…"
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-if git submodule update --init --recursive; then
+# Retry with SSH→HTTPS rewrite, scoped to THIS command only via `-c`.
+# This avoids leaving a global git config behind if the retry also fails.
+warn "submodule init failed (likely SSH auth). Retrying with HTTPS rewrite (this run only)…"
+if git -c url."https://github.com/".insteadOf="git@github.com:" \
+       submodule update --init --recursive; then
     ok "submodules initialized via HTTPS rewrite"
-    warn "Applied global git config: url.https://github.com/.insteadOf=git@github.com:"
-    warn "Remove later with: git config --global --unset url.https://github.com/.insteadOf"
+    warn "HTTPS rewrite was applied for this run only (not persisted)."
+    warn "To persist, run: git config --global url.https://github.com/.insteadOf git@github.com:"
     exit "$STEP_OK"
 fi
 
 fail "submodule update failed even with HTTPS rewrite."
-echo "  Check network access, then run: git submodule update --init --recursive" >&2
+echo "  Check network access or SSH key, then run: git submodule update --init --recursive" >&2
 exit "$STEP_FAIL"

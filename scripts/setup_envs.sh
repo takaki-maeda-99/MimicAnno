@@ -79,8 +79,13 @@ require_tool git
 [[ "$DO_FRONTEND" -eq 1 ]] && { require_tool node "Install Node >=20"; require_tool pnpm "corepack enable && corepack prepare pnpm@latest --activate"; }
 [[ "$DO_UNIDAC" -eq 1 ]] && check_optional curl "UniDAC weights DL"
 [[ "$DO_UNIDAC" -eq 1 ]] && check_optional ffmpeg "precompute_depth.py runtime"
+[[ "$DO_HAMER" -eq 1 ]] && check_optional gdown "HaMeR demo data fetch (Google Drive)"
 check_optional lsof "start_ui.sh port probe"
 print_driver_hint
+
+if [[ "${SETUP_DRY_RUN:-0}" == "1" ]]; then
+    log "SETUP_DRY_RUN=1 — each step will short-circuit and not execute install commands."
+fi
 
 # ---------------------------------------------------------------------------
 # Step runner

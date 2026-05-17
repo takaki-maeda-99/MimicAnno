@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/log.sh"
 source "$SCRIPT_DIR/../lib/preflight.sh"
 
+dry_run_short_circuit
+
 cd "$REPO_ROOT/frontend"
 
 require_tool_for frontend node "Install Node >=20 (e.g., via nvm)"
