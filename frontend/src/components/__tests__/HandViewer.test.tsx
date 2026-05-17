@@ -83,7 +83,7 @@ describe("frame index calculation", () => {
   });
 });
 
-it("depth_ok=false shows 推定 badge", async () => {
+it("depth_ok=false shows estimated badge", async () => {
   const falseDepthSignals = {
     schema_version: 3,
     frame_000000: {
@@ -107,7 +107,7 @@ it("depth_ok=false shows 推定 badge", async () => {
   );
   render(<HandViewer episodeId="GX010085" />);
   await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  expect(screen.getByText("(推定)")).toBeTruthy();
+  expect(screen.getByText("(estimated)")).toBeTruthy();
   const estimatedEls = document.querySelectorAll(".hand-estimated");
   expect(estimatedEls.length).toBeGreaterThan(0);
 });
@@ -122,7 +122,7 @@ it("schema_version≠3 (e.g. 1) shows re-generate message", async () => {
     }) as typeof fetch,
   );
   render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => screen.getByText(/signals.json が古いフォーマット/));
+  await waitFor(() => screen.getByText(/signals.json is in an outdated format/));
 });
 
 it("schema_version=2 also shows re-generate message", async () => {
@@ -135,36 +135,36 @@ it("schema_version=2 also shows re-generate message", async () => {
     }) as typeof fetch,
   );
   render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => screen.getByText(/signals.json が古いフォーマット/));
+  await waitFor(() => screen.getByText(/signals.json is in an outdated format/));
 });
 
-it("503 on index.json shows 手のデータがありません", async () => {
+it("503 on index.json shows no-hand-data message", async () => {
   vi.spyOn(window, "fetch").mockImplementation(
     vi.fn(async () => new Response("{}", { status: 503 })) as typeof fetch,
   );
   render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => screen.getByText(/手のデータがありません/));
+  await waitFor(() => screen.getByText(/No hand data available/));
 });
 
-it("network error on index.json shows 手のデータがありません", async () => {
+it("network error on index.json shows no-hand-data message", async () => {
   vi.spyOn(window, "fetch").mockImplementation(
     vi.fn().mockRejectedValue(new TypeError("network fail")) as typeof fetch,
   );
   render(<HandViewer episodeId="GX010085" />);
-  await waitFor(() => screen.getByText(/手のデータがありません/));
+  await waitFor(() => screen.getByText(/No hand data available/));
 });
 
-it("episodeId not in index shows エピソードが見つかりません", async () => {
+it("episodeId not in index shows episode-not-found message", async () => {
   render(<HandViewer episodeId="UNKNOWN_EP" />);
-  await waitFor(() => screen.getByText(/エピソードが見つかりません: UNKNOWN_EP/));
+  await waitFor(() => screen.getByText(/Episode not found: UNKNOWN_EP/));
 });
 
-it("signals_ready=false shows 未生成 message", async () => {
+it("signals_ready=false shows not-generated message", async () => {
   render(<HandViewer episodeId="GX010086" />);
-  await waitFor(() => screen.getByText(/signals.json が未生成/));
+  await waitFor(() => screen.getByText(/signals.json not generated/));
 });
 
-it("null frame entry shows 未検出 for both hands", async () => {
+it("null frame entry shows not-detected for both hands", async () => {
   const nullSignals = {
     schema_version: 3,
     frame_000000: { right: null, left: null },
@@ -179,7 +179,7 @@ it("null frame entry shows 未検出 for both hands", async () => {
   );
   render(<HandViewer episodeId="GX010085" />);
   await waitFor(() => expect(screen.queryByText(/loading/)).toBeNull());
-  const undetectedEls = screen.getAllByText("未検出");
+  const undetectedEls = screen.getAllByText("Not detected");
   expect(undetectedEls.length).toBe(2);
 });
 

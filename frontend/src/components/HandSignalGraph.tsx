@@ -121,7 +121,7 @@ export default function HandSignalGraph({
         <span style={{ color: COLORS.x }}>x</span>
         <span style={{ color: COLORS.y }}>y</span>
         <span style={{ color: COLORS.z }}>z</span>
-        <span>{side === "right" ? "右手" : "左手"} cam_t [m]</span>
+        <span>{side === "right" ? "Right hand" : "Left hand"} cam_t [m]</span>
       </div>
       <svg
         width={widthPx}
