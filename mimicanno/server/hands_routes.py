@@ -69,12 +69,33 @@ def make_hands_router(
                 except Exception:
                     signals_ready = False
             ep_id = ep_dir.name
+            depth_video_ready = False
+            depth_source = meta.get("depth_source")
+            if isinstance(depth_source, str) and depth_source:
+                depth_meta = meta.get("depth_meta") or {}
+                fp = depth_meta.get("frames_processed")
+                fs = depth_meta.get("frames_skipped_existing", 0)
+                vtf = meta.get("video_total_frames")
+                frames_ok = (
+                    isinstance(fp, int)
+                    and isinstance(fs, int)
+                    and isinstance(vtf, int)
+                    and fp + fs == vtf
+                )
+                if frames_ok:
+                    depth_path = (repo_root / depth_source / "viz_depth.mp4").resolve()
+                    try:
+                        if depth_path.is_relative_to(repo_root.resolve()) and depth_path.exists():
+                            depth_video_ready = True
+                    except ValueError:
+                        depth_video_ready = False
             episodes.append({
                 "episode_id": ep_id,
                 "fps": meta.get("video_fps"),
                 "total_frames": meta.get("video_total_frames"),
                 "frames_with_hands": meta.get("frames_with_hands"),
                 "signals_ready": signals_ready,
+                "depth_video_ready": depth_video_ready,
                 "video_url": f"{ep_id}/video",
                 "signals_url": f"{ep_id}/signals.json",
                 "meta_url": f"{ep_id}/meta.json",

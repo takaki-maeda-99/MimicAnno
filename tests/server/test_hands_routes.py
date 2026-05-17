@@ -61,6 +61,18 @@ def test_index_signals_ready_true(client):
     assert ep["signals_ready"] is True
 
 
+def test_index_includes_depth_video_ready(client):
+    r = client.get("/api/hands/index.json")
+    assert r.status_code == 200
+    eps = r.json()["episodes"]
+    assert len(eps) >= 1
+    ep = next(e for e in eps if e["episode_id"] == "GX010085")
+    # After Task 4 the fixture meta will declare depth_source and a real
+    # viz_depth.mp4 will exist; this test guards the field is plumbed through.
+    assert "depth_video_ready" in ep
+    assert isinstance(ep["depth_video_ready"], bool)
+
+
 def test_index_no_hands_root(client_no_hands):
     r = client_no_hands.get("/api/hands/index.json")
     assert r.status_code == 503
