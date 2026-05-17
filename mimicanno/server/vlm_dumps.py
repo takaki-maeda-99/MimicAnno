@@ -77,13 +77,15 @@ def _planner_calls(planner_root: Path) -> list[VlmCall]:
 
 
 def _segment_attempt_index(attempt_dir_name: str) -> int | None:
-    """Parse `attempt_<N>` → N. Returns None for malformed names."""
+    """Parse `attempt_<N>` → N (non-negative). Returns None for malformed
+    names or negative N."""
     if not attempt_dir_name.startswith("attempt_"):
         return None
     try:
-        return int(attempt_dir_name[len("attempt_"):])
+        idx = int(attempt_dir_name[len("attempt_"):])
     except ValueError:
         return None
+    return idx if idx >= 0 else None
 
 
 def _segment_calls(ep_dir: Path) -> list[VlmCall]:

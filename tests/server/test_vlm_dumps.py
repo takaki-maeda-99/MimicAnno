@@ -308,8 +308,8 @@ def test_route_200_happy_path_with_dumps(tmp_path: Path) -> None:
 
 def test_route_registered_before_catch_all(tmp_path: Path) -> None:
     """Registration-order regression: vlm_dumps.json must not be served by
-    the /api/runs/{name}/{artifact} catch-all (which would return a
-    404 ``artifact_not_found`` or similar, NOT the vlm_dumps shape)."""
+    the /api/runs/{name}/{artifact} catch-all (which would return raw
+    file bytes or 404 ``artifact_not_found``, NOT the vlm_dumps shape)."""
     runs_root = tmp_path / "runs"
     _setup_run_set(runs_root, "rs1", "episode_000000__abc",
                    "episode_000000")
@@ -318,5 +318,29 @@ def test_route_registered_before_catch_all(tmp_path: Path) -> None:
         "/api/runs/episode_000000__abc/vlm_dumps.json?run_set=rs1",
     )
     assert r.status_code == 200
-    # If the catch-all matched, body would not have "calls" key.
-    assert "calls" in r.json()
+    body = r.json()
+    # episode_id key is unique to the vlm_dumps handler — the catch-all
+    # has no concept of it. canonical+run_set echo would also work; we
+    # assert both for defence-in-depth.
+    assert body.get("episode_id") == "episode_000000"
+    assert body.get("canonical") == "episode_000000__abc"
+    assert body.get("run_set") == "rs1"
+    assert "calls" in body
+
+
+def test_route_rejects_parent_traversal(tmp_path: Path) -> None:
+    """run_set='..' must 400, not silently read parent-of-runs index."""
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    # Plant a decoy index.json one level above runs_root.
+    (tmp_path / "index.json").write_text(json.dumps({
+        "schema_version": "0.1.0",
+        "runs": [{"manifest_url": "secret/manifest.json",
+                  "episode_id": "secret"}],
+    }))
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/secret/vlm_dumps.json?run_set=..",
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_run_set"

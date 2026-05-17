@@ -604,7 +604,11 @@ def make_router(
                 status=400, code="run_set_required",
                 message="run_set query parameter is required",
             )
-        if Path(run_set).name != run_set:
+        # Reject "." / ".." explicitly: Path("..").name == ".." and
+        # Path(".").name == "" so the .name-comparison check below catches
+        # "." but NOT ".." (which would let `parent_root / ".."` resolve
+        # to the parent of runs_root and leak existence of files there).
+        if run_set in ("..", ".") or Path(run_set).name != run_set:
             raise MimicAnnoHTTPError(
                 status=400, code="invalid_run_set",
                 message=f"run_set {run_set!r} is not a direct subdirectory",
