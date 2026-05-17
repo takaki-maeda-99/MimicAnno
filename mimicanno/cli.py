@@ -590,11 +590,35 @@ def eval_cmd(
         "markdown", "--format",
         help="Output format: markdown (default) or json.",
     ),
+    schema_version: str = typer.Option(
+        None,
+        "--schema-version",
+        help=(
+            "Required schema version for input runs. Mismatched runs exit 2 "
+            "unless --legacy. Defaults to the current annotation schema version."
+        ),
+    ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help=(
+            "Accept runs of any schema version; emit 'planner_agreement: unavailable' "
+            "for sub-current-schema runs."
+        ),
+    ),
 ) -> None:
     """Print per-run and aggregate annotation metrics."""
     from mimicanno.io import read_annotation_result
     from mimicanno.eval.metrics import compute_metrics, aggregate
     from mimicanno.eval.render import render_markdown, render_json
+    from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
+
+    # Resolve default at call time so it tracks future schema bumps.
+    effective_schema_version = (
+        schema_version
+        if schema_version is not None
+        else ARTIFACT_SCHEMA_VERSIONS["annotation"]
+    )
 
     run_dirs = sorted(runs_root.iterdir()) if runs_root.is_dir() else []
     metrics_list = []
@@ -608,9 +632,24 @@ def eval_cmd(
             continue
         try:
             ann = read_annotation_result(ann_path)
-            metrics_list.append(compute_metrics(ann, run_dir.name))
         except Exception as e:
             sys.stderr.write(f"warning: skipping {run_dir.name}: {e}\n")
+            continue
+        # Phase 6: schema enforcement (after successful load, before metrics).
+        if not legacy and ann.schema_version != effective_schema_version:
+            typer.echo(
+                json.dumps({
+                    "error": "schema_version_mismatch",
+                    "message": (
+                        f"Run {run_dir.name!r} has schema_version={ann.schema_version!r}, "
+                        f"expected {effective_schema_version!r}. "
+                        "Re-run PATCH to upgrade, or pass --legacy."
+                    ),
+                }),
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        metrics_list.append(compute_metrics(ann, run_dir.name))
 
     agg = aggregate(metrics_list)
     if fmt == "json":

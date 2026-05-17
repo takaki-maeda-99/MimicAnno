@@ -104,9 +104,13 @@ def test_smoothing_summary_from_dict_round_trip() -> None:
 
 
 def test_annotation_schema_version_bumped_to_0_2_0() -> None:
-    """Spec §4.4: annotation 0.1.0 -> 0.2.0; Phase 5 D bumped further to 0.3.0."""
+    """Spec §4.4: annotation 0.1.0 -> 0.2.0; Phase 5 D bumped further to 0.3.0;
+    Phase 6 bumped to 0.4.0. Test tracks ARTIFACT_SCHEMA_VERSIONS to avoid drift."""
     from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
-    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.3.0"
+    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.4.0"
+    # Ensure annotation version is at least 0.4.0 (Phase 6 minimum).
+    major, minor, patch = ARTIFACT_SCHEMA_VERSIONS["annotation"].split(".")
+    assert (int(major), int(minor), int(patch)) >= (0, 4, 0)
 
 
 def test_annotation_compat_block_major_unchanged() -> None:
