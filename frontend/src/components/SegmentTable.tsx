@@ -8,7 +8,7 @@
  * parent owns optimistic state, this component only emits onPhaseEdit /
  * onReviewedToggle / onLabelsEdit and reflects pending/disabled state via props.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { SubtaskSegment } from "../lib/manifest";
 import type { LabelSetDoc } from "../lib/labelsetClient";
 import type { PatchResult } from "../lib/editClient";
@@ -27,6 +27,8 @@ export interface LabelsEditPayload {
   failure_flags: string[];
 }
 
+export type EditKind = "phase" | "reviewed" | "labels";
+
 export interface SegmentTableProps {
   segments: SubtaskSegment[];
   apiEnabled: boolean;
@@ -35,16 +37,18 @@ export interface SegmentTableProps {
     segmentId: string,
     newPhase: string,
     oldPhase: string,
+    clientEditDurationMs: number | null,
   ) => Promise<PatchResult>;
   onReviewedToggle: (
     segmentId: string,
     newReviewed: boolean,
+    clientEditDurationMs: number | null,
   ) => Promise<ReviewedPatchResult>;
   onLabelsEdit: (
     segmentId: string,
     labels: LabelsEditPayload,
+    clientEditDurationMs: number | null,
   ) => Promise<LabelsPatchResult>;
-  onEditFocus?: () => void;
   editInFlight: boolean;
   staleRun: boolean;
   toast?: SegmentTableToast;
@@ -62,7 +66,6 @@ export default function SegmentTable(props: SegmentTableProps) {
     onPhaseEdit,
     onReviewedToggle,
     onLabelsEdit,
-    onEditFocus,
     editInFlight,
     staleRun,
     toast,
@@ -70,6 +73,24 @@ export default function SegmentTable(props: SegmentTableProps) {
   const editable = apiEnabled && labelset !== null;
   const disabled = editInFlight || staleRun;
 
+  // Phase 5 D r2: edit-timing ref keyed by EditKind. A single shared ref was
+  // overwritten by every onFocus across phase/reviewed/labels controls, so a
+  // focus → focus-elsewhere → commit-original sequence reported the wrong
+  // duration (the focus-elsewhere t0). Keying by kind isolates the slots.
+  const editStartRef = useRef<Map<EditKind, number>>(new Map());
+  const startEdit = (kind: EditKind) => {
+    editStartRef.current.set(kind, performance.now());
+  };
+  const consumeEdit = (kind: EditKind): number | null => {
+    const t0 = editStartRef.current.get(kind);
+    editStartRef.current.delete(kind);
+    return t0 !== undefined ? Math.round(performance.now() - t0) : null;
+  };
+  // discardEdit clears the slot on focusout without commit, so a re-focus
+  // (or a programmatic commit-without-focus) doesn't see a stale t0.
+  const discardEdit = (kind: EditKind) => {
+    editStartRef.current.delete(kind);
+  };
   return (
     <div className="segment-table">
       {toast && (
@@ -128,7 +149,9 @@ export default function SegmentTable(props: SegmentTableProps) {
               onPhaseEdit={onPhaseEdit}
               onReviewedToggle={onReviewedToggle}
               onLabelsEdit={onLabelsEdit}
-              onEditFocus={onEditFocus}
+              startEdit={startEdit}
+              consumeEdit={consumeEdit}
+              discardEdit={discardEdit}
             />
           ))}
         </tbody>
@@ -146,27 +169,21 @@ function SegmentRow({
   onPhaseEdit,
   onReviewedToggle,
   onLabelsEdit,
-  onEditFocus,
+  startEdit,
+  consumeEdit,
+  discardEdit,
 }: {
   idx: number;
   segment: SubtaskSegment;
   editable: boolean;
   labelset: LabelSetDoc | null;
   disabled: boolean;
-  onPhaseEdit: (
-    segmentId: string,
-    newPhase: string,
-    oldPhase: string,
-  ) => Promise<PatchResult>;
-  onReviewedToggle: (
-    segmentId: string,
-    newReviewed: boolean,
-  ) => Promise<ReviewedPatchResult>;
-  onLabelsEdit: (
-    segmentId: string,
-    labels: LabelsEditPayload,
-  ) => Promise<LabelsPatchResult>;
-  onEditFocus?: () => void;
+  onPhaseEdit: SegmentTableProps["onPhaseEdit"];
+  onReviewedToggle: SegmentTableProps["onReviewedToggle"];
+  onLabelsEdit: SegmentTableProps["onLabelsEdit"];
+  startEdit: (kind: EditKind) => void;
+  consumeEdit: (kind: EditKind) => number | null;
+  discardEdit: (kind: EditKind) => void;
 }) {
   // Controlled <select>: local optimistic value, reset on parent's segment
   // change (after server re-fetches). Rollback = setLocalPhase(oldPhase)
@@ -207,9 +224,13 @@ function SegmentRow({
     const newPhase = e.target.value;
     const oldPhase = segment.phase;
     if (newPhase === oldPhase) return;
+    // SYNCHRONOUS capture before any await: consume the "phase" slot now so
+    // a focus on another control between this read and the awaited PATCH
+    // cannot contaminate t0.
+    const durationMs = consumeEdit("phase");
     setLocalPhase(newPhase);
     try {
-      const r = await onPhaseEdit(segment.segment_id, newPhase, oldPhase);
+      const r = await onPhaseEdit(segment.segment_id, newPhase, oldPhase, durationMs);
       if (r.kind !== "ok") {
         setLocalPhase(oldPhase);
       }
@@ -221,9 +242,10 @@ function SegmentRow({
 
   const onReviewedChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newReviewed = e.target.checked;
+    const durationMs = consumeEdit("reviewed");
     setLocalReviewed(newReviewed);
     try {
-      const r = await onReviewedToggle(segment.segment_id, newReviewed);
+      const r = await onReviewedToggle(segment.segment_id, newReviewed, durationMs);
       if (r.kind !== "ok") {
         setLocalReviewed(!newReviewed);
       }
@@ -263,10 +285,14 @@ function SegmentRow({
   function list<T>(arr: T[]): T[] { return arr; }
 
   const handleLabelBlur = async () => {
+    // SYNCHRONOUS capture before any branch/await. Even the early-return
+    // (no-change) path must consume the slot so a re-focus later doesn't
+    // see a stale t0 from this aborted edit.
+    const durationMs = consumeEdit("labels");
     const payload = buildLabelsPayload(localVerb, localObject, localTarget, localFlags);
     if (!labelsChanged(payload)) return;
     try {
-      const r = await onLabelsEdit(segment.segment_id, payload);
+      const r = await onLabelsEdit(segment.segment_id, payload, durationMs);
       if (r.kind !== "ok") {
         // Rollback to segment prop values.
         setLocalVerb(segment.verb ?? "");
@@ -294,7 +320,8 @@ function SegmentRow({
           <select
             value={localPhase}
             onChange={onChange}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("phase")}
+            onBlur={() => discardEdit("phase")}
             disabled={disabled}
             aria-label={`phase for ${segment.segment_id}`}
           >
@@ -316,7 +343,8 @@ function SegmentRow({
             checked={localReviewed}
             disabled={disabled}
             aria-label={`reviewed for ${segment.segment_id}`}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("reviewed")}
+            onBlur={() => discardEdit("reviewed")}
             onChange={onReviewedChange}
           />
         ) : (
@@ -331,7 +359,7 @@ function SegmentRow({
             value={localVerb}
             disabled={disabled}
             aria-label={`verb for ${segment.segment_id}`}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("labels")}
             onChange={(e) => setLocalVerb(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -346,7 +374,7 @@ function SegmentRow({
             value={localObject}
             disabled={disabled}
             aria-label={`object for ${segment.segment_id}`}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("labels")}
             onChange={(e) => setLocalObject(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -361,7 +389,7 @@ function SegmentRow({
             value={localTarget}
             disabled={disabled}
             aria-label={`target for ${segment.segment_id}`}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("labels")}
             onChange={(e) => setLocalTarget(e.target.value)}
             onBlur={handleLabelBlur}
           />
@@ -376,7 +404,7 @@ function SegmentRow({
             value={localFlags}
             disabled={disabled}
             aria-label={`flags for ${segment.segment_id}`}
-            onFocus={onEditFocus}
+            onFocus={() => startEdit("labels")}
             onChange={(e) => setLocalFlags(e.target.value)}
             onBlur={handleLabelBlur}
           />

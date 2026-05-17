@@ -92,7 +92,7 @@ describe("SegmentTable — reviewed checkbox interaction", () => {
     });
 
     expect(onReviewedToggle).toHaveBeenCalledTimes(1);
-    expect(onReviewedToggle).toHaveBeenCalledWith("seg-b", true);
+    expect(onReviewedToggle).toHaveBeenCalledWith("seg-b", true, null);
   });
 
   // -------------------------------------------------------------------------
