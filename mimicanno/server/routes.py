@@ -111,9 +111,17 @@ def make_router(
 
     @router.api_route("/api/runs/index.json", methods=["GET", "HEAD"])
     def get_index(
+        run_set: str | None = Query(None, alias="run_set"),
         effective_root: Path = Depends(get_effective_root),
     ) -> Response:
         repo = RunsRepository(effective_root)
+        if run_set is None:
+            # Multi-mode merge: no run_set → cross-run-set listing.
+            # ?run_set=. stays raw pass-through (legacy bookmark stability).
+            return Response(
+                content=repo.read_merged_index(),
+                media_type="application/json",
+            )
         return Response(content=repo.read_index(), media_type="application/json")
 
     @router.api_route(

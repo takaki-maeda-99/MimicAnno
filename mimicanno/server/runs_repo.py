@@ -13,6 +13,7 @@ The repository never takes the runs/index.json.lock; writers use
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -59,6 +60,74 @@ class RunsRepository:
             status=404, code="index_missing",
             message=f"runs/index.json not found under {self.root}",
         ) from last_exc
+
+    def _read_index_bytes(self, path: Path) -> bytes | None:
+        """Read ``path`` with the same retry policy as ``read_index``.
+
+        Returns the file bytes on success; ``None`` if the file is still
+        not present after ``_RETRY_COUNT`` attempts. The retry absorbs
+        the publish dir-gap window (publish.py:141-165) so a run-set
+        that's mid-publish is not silently dropped from the merged listing.
+        """
+        for _ in range(_RETRY_COUNT):
+            try:
+                return path.read_bytes()
+            except FileNotFoundError:
+                time.sleep(_RETRY_SLEEP_SEC)
+        return None
+
+    def read_merged_index(self) -> bytes:
+        """Merge index.json across root + subdirs.
+
+        Each row is tagged with its origin ``run_set``:
+        - rows from ``<root>/index.json`` → ``run_set: "."``
+        - rows from ``<root>/<sub>/index.json`` → ``run_set: "<sub>"``
+
+        Read uses the same retry loop as ``read_index`` so a run-set
+        whose index is mid-rewrite (visible to ``iterdir`` but momentarily
+        missing during ``read_bytes``) is not silently dropped. A run-set
+        published entirely after ``iterdir()`` is naturally missed —
+        callers needing absolute freshness should re-request. Subdirs without
+        index.json or with malformed JSON are silently skipped.
+        Empty result: ``{"schema_version":"0.1.0","runs":[]}``.
+
+        Row ordering: root rows first (run_set='.'), then subdirs in
+        ``sorted(iterdir())`` order, preserving on-disk row order within
+        each index. Frontend re-sorts by ``generated_at`` for display.
+
+        This is the read path for ``/api/runs/index.json`` without
+        ``?run_set=``. Write paths and ``?run_set=`` reads remain
+        per-run-set and are not affected.
+        """
+        merged: list[dict] = []
+
+        def _ingest(idx_path: Path, run_set: str) -> None:
+            raw = self._read_index_bytes(idx_path)
+            if raw is None:
+                return
+            try:
+                doc = json.loads(raw)
+            except json.JSONDecodeError:
+                return
+            for row in doc.get("runs", []):
+                if not isinstance(row, dict):
+                    continue
+                merged.append({**row, "run_set": run_set})
+
+        root_index = self.root / "index.json"
+        if root_index.exists():
+            _ingest(root_index, ".")
+
+        if self.root.is_dir():
+            for entry in sorted(self.root.iterdir()):
+                if not entry.is_dir():
+                    continue
+                sub_index = entry / "index.json"
+                if sub_index.exists():
+                    _ingest(sub_index, entry.name)
+
+        body = {"schema_version": "0.1.0", "runs": merged}
+        return json.dumps(body).encode("utf-8")
 
     # ---------- artifact ----------
 

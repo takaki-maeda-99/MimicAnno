@@ -38,9 +38,20 @@ def test_1_get_index_returns_200_json(tmp_runs_root: Path) -> None:
     assert r.headers["content-type"].startswith("application/json")
 
 
-def test_2_get_index_404_when_missing(runs_root_no_index: Path) -> None:
+def test_2_get_index_no_index_returns_200_empty(runs_root_no_index: Path) -> None:
+    """No ?run_set=: merged endpoint returns 200 + empty runs when nothing exists."""
     client = _make_client(runs_root_no_index)
     r = client.get("/api/runs/index.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["schema_version"] == "0.1.0"
+    assert body["runs"] == []
+
+
+def test_2b_get_index_404_when_missing_with_run_set(runs_root_no_index: Path) -> None:
+    """?run_set=. raw pass-through still 404s when no index.json exists."""
+    client = _make_client(runs_root_no_index)
+    r = client.get("/api/runs/index.json?run_set=.")
     assert r.status_code == 404
     assert r.json()["error"] == "index_missing"
 

@@ -1,6 +1,5 @@
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import RunList from "../RunList";
 import { ApiToggleProvider } from "../../lib/ApiToggleContext";
 
@@ -128,4 +127,55 @@ it("does not show run-set dropdown when apiEnabled=false", async () => {
   // In static mode: no /api/run-sets call, no dropdown.
   await waitFor(() => screen.getByText("ep0"));
   expect(screen.queryByRole("combobox", { name: /run.set/i })).toBeNull();
+});
+
+it("renders rows from a merged index with per-row run_set in nav links and a run_set column", async () => {
+  const MERGED_INDEX = {
+    schema_version: "0.1.0",
+    runs: [
+      {
+        episode_id: "ep0",
+        run_hash: "sha256:" + "a".repeat(64),
+        run_hash_short: "aaaaaaaa",
+        config_hash_short: "cfg00000",
+        input_hash_short: "inp00000",
+        manifest_url: "ep0__aaaaaaaa/manifest.json",
+        task_text: "task-A",
+        pipeline_phase: 4,
+        generated_at: "2026-01-01T00:00:00Z",
+        run_set: "so101_phase4_v5",
+      },
+      {
+        episode_id: "ep1",
+        run_hash: "sha256:" + "b".repeat(64),
+        run_hash_short: "bbbbbbbb",
+        config_hash_short: "cfg00001",
+        input_hash_short: "inp00001",
+        manifest_url: "ep1__bbbbbbbb/manifest.json",
+        task_text: "task-B",
+        pipeline_phase: 4,
+        generated_at: "2026-01-02T00:00:00Z",
+        run_set: "piper_phase4_v5",
+      },
+    ],
+  };
+  vi.spyOn(window, "fetch").mockImplementation(
+    vi.fn(async (url: string) => {
+      if (url.includes("/api/hands/index.json")) return jsonResp(HAND_INDEX);
+      if (url === "/api/run-sets") return jsonResp(RUN_SETS_MULTI);
+      return jsonResp(MERGED_INDEX);
+    }) as typeof fetch,
+  );
+
+  renderWithProvider();
+
+  const link0 = await screen.findByRole("link", { name: "ep0" });
+  expect(link0.getAttribute("href")).toContain("run_set=so101_phase4_v5");
+  const link1 = await screen.findByRole("link", { name: "ep1" });
+  expect(link1.getAttribute("href")).toContain("run_set=piper_phase4_v5");
+  // Column header present
+  expect(screen.getByRole("columnheader", { name: "run_set" })).toBeTruthy();
+  // Per-row run_set text shown (getAllByText because the value also appears in the dropdown)
+  expect(screen.getAllByText("so101_phase4_v5").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("piper_phase4_v5").length).toBeGreaterThan(0);
 });
