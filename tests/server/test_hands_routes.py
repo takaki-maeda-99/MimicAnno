@@ -184,3 +184,26 @@ def test_episode_empty_string_signals(client):
     # FastAPI won't match empty path segment to {episode}
     r = client.get("/api/hands//signals.json")
     assert r.status_code in (400, 404, 307, 422)
+
+
+# --- /depth_video --------------------------------------------------
+
+def test_depth_video_404_when_meta_lacks_depth_source(client):
+    r = client.get("/api/hands/GX010085/depth_video")
+    # current fixture meta lacks depth_source until Task 4
+    assert r.status_code in (400, 404)
+
+
+def test_depth_video_503_when_no_hands_root(client_no_hands):
+    r = client_no_hands.get("/api/hands/GX010085/depth_video")
+    assert r.status_code == 503
+
+
+def test_depth_video_400_on_path_traversal(client):
+    r = client.get("/api/hands/..%2F..%2Fetc/depth_video")
+    assert r.status_code in (400, 404)  # FastAPI may normalise path before routing
+
+
+def test_depth_video_404_when_episode_unknown(client):
+    r = client.get("/api/hands/DOES_NOT_EXIST/depth_video")
+    assert r.status_code == 404
