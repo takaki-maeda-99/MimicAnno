@@ -65,7 +65,7 @@ def make_hands_router(
             if signals_path.exists():
                 try:
                     sig = json.loads(signals_path.read_text())
-                    signals_ready = sig.get("schema_version") == 2
+                    signals_ready = sig.get("schema_version") == 3
                 except Exception:
                     signals_ready = False
             ep_id = ep_dir.name
