@@ -58,6 +58,7 @@ from mimicanno.object_tracker.planner import (
     EntityPlan,
     LocalGemmaTrackingPlanner,
 )
+from mimicanno.object_tracker.mask_cache import MaskCache
 from mimicanno.object_tracker.propagator import Propagator
 from mimicanno.object_tracker.signals import compute_object_signals
 from mimicanno.publish import PublishOutcome, PublishRequest, publish
@@ -938,6 +939,10 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         mask_image_size_px = (
             vlm_cfg.image_size_px if mask_overlay_enabled else None
         )
+        # adopted_frame_idx is None only on total-failure (zero objects), but
+        # that path already returned via the degrade gate above.  Assert so
+        # mypy can narrow int | None → int.
+        assert adopted_frame_idx is not None
         tracks, mask_cache = Propagator().run(
             runtime=sam3_runtime,
             plan=plan,
