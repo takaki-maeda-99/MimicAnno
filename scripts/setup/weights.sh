@@ -35,7 +35,7 @@ has_hf_auth() {
 }
 
 if ! has_hf_auth; then
-    warn "No HF auth detected. Set HF_TOKEN or run: huggingface-cli login"
+    warn "No HF auth detected. Set HF_TOKEN or run: hf auth login"
     warn "Skipping gated weight downloads (SAM3, Gemma)."
     exit "$STEP_USER"
 fi
@@ -45,7 +45,7 @@ if [[ -s "$SAM3_DIR/sam3.pt" && -s "$SAM3_DIR/model.safetensors" ]]; then
     skip "SAM3 snapshot already present at sam3/checkpoints/"
 else
     log "Downloading SAM3 snapshot from $SAM3_REPO…"
-    if uv run huggingface-cli download "$SAM3_REPO" --local-dir "$SAM3_DIR"; then
+    if uv run hf download "$SAM3_REPO" --local-dir "$SAM3_DIR"; then
         if [[ -s "$SAM3_DIR/sam3.pt" && -s "$SAM3_DIR/model.safetensors" ]]; then
             ok "SAM3 snapshot ready"
         else
@@ -70,7 +70,7 @@ if [[ -n "$GEMMA_CACHED" ]]; then
     skip "Gemma 4 weights cached at $GEMMA_CACHED"
 else
     log "Downloading Gemma 4 ($GEMMA_REPO) to HF cache…"
-    if uv run huggingface-cli download "$GEMMA_REPO"; then
+    if uv run hf download "$GEMMA_REPO"; then
         ok "Gemma 4 weights downloaded"
     else
         warn "Gemma 4 download failed (401? gated repo not granted?). See https://huggingface.co/$GEMMA_REPO"
