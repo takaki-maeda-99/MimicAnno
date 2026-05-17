@@ -1,240 +1,63 @@
-# TODO (2026-05-16 現在)
+# TODO (2026-05-17 現在)
 
-**Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green. 次窓を開ける場合はユーザー判断。
-
----
-
-## ✅ D r2 frontend timing — branch SHIPPED (本 worktree)
-
-**ブランチ**: `feat/phase5-d-r2-frontend-timing` (worktree `.claude/worktrees/d-r2-frontend-timing/`)
-**6 commits ahead of main** (a4ad6dc..191ab83)、**123 tests passing** (115 baseline + 8 new)
-**結果 note**: `docs/superpowers/notes/2026-05-17-phase5-d-r2-frontend-timing-results.md`
-
-修正済 3 regression:
-- #6 `Date.now()` non-monotonicity → `performance.now()` (T5)
-- #2 cross-input contamination → `useRef<Map<EditKind, number>>` + kind-aware onFocus + sync read-and-delete (T1, T6)
-- #5 focusout t0 discard → `onBlur={() => discardEdit(kind)}` on phase/reviewed (T2, T3)
-- 追加: T4 (labels sub-field) / I1 (phase e2e) / I2 (labels async-await boundary)
-
-**次ステップ**: PR open は user 判断。`superpowers:finishing-a-development-branch` skill 経由でマージ判定。
-**pre-existing 14 件の TS エラー**: baseline からの残留 (テスト fixtures が古い prop signature)、別チケットでクリーンアップ推奨 (Vitest は影響なし、`tsc -b` のみ fail)。
-
-### PR 作成 (手動・任意の方法で)
-
-- branch は `origin/feat/phase5-d-r2-frontend-timing` に push 済
-- 認証手段が本マシンに無い (gh CLI 未インストール / `GITHUB_TOKEN` 未設定 / `~/.netrc` なし) ため Claude 側から作成不可
-
-**方法 A: ブラウザで作成 (最短)**
-1. <https://github.com/takaki-maeda-99/MimicAnno/pull/new/feat/phase5-d-r2-frontend-timing> を開く
-2. Title:
-   ```
-   Phase 5 D r2: frontend timing regression fixes (3 regressions × 8 tests)
-   ```
-3. Body (以下を貼り付け):
-   ```markdown
-   ## Summary
-   Fixes 3 frontend timing regressions in Phase 5 D r1's `client_edit_duration_ms` instrumentation:
-
-   1. **#2 cross-input contamination** — Replace single `useRef<number|null>` with `useRef<Map<EditKind, number>>` keyed by `"phase"|"reviewed"|"labels"`. Each control's onFocus writes its own slot.
-   2. **#5 focusout t0 discard** — Add `onBlur={() => discardEdit(kind)}` on phase select + reviewed checkbox. Labels are covered by `handleLabelBlur`'s synchronous `consumeEdit("labels")` at function entry (before the no-change early-return and before the await).
-   3. **#6 Date.now non-monotonicity** — Migrate timing-path setter + consumers to `performance.now()` (monotonic DOMHighResTimeStamp).
-
-   Plus a structural refactor: move duration computation from `RunViewer` parent into `SegmentTable` child where focus/blur events fire. The 3 edit callback prop signatures (`onPhaseEdit`/`onReviewedToggle`/`onLabelsEdit`) gain a `clientEditDurationMs: number | null` trailing parameter; `RunViewer` becomes a pure forwarder.
-
-   **Scope: frontend only.** Backend D r2 (label_agreement rename, route schema_version upgrade, server-side duration clamp, EditEvent rich extension) is a separate spec.
-
-   Spec: `docs/superpowers/specs/2026-05-16-phase5-d-r2-frontend-timing-design.md` (rev2)
-   Plan: `docs/superpowers/plans/2026-05-17-phase5-d-r2-frontend-timing-plan.md`
-
-   ## Test plan
-   - [x] 6 new component tests (T1–T6 in `SegmentTable.test.tsx`)
-   - [x] 2 new integration tests (I1, I2 in `RunViewer.integration.test.tsx`) — I2 is load-bearing for the synchronous-capture-before-await contract
-   - [x] 3 existing test assertions updated for new callback arity (`SegmentTable.test.tsx:115`, `reviewed-toggle.test.tsx:95`, `labels-edit.test.tsx:98`)
-   - [x] Full suite: 123/123 passed (115 baseline + 8 new)
-   - [x] `grep -n Date.now` in `RunViewer.tsx` + `SegmentTable.tsx` returns zero hits in timing path
-   - [x] `editStartRef` only present in `SegmentTable.tsx` (the new Map ref); no residual in `RunViewer.tsx`
-   - [ ] Manual smoke: focus phase select → click away (no change) → wait 5s → focus → change → DevTools shows `client_edit_duration_ms` is sub-second, not 5000ms
-
-   ## Out of scope
-   - Boundary drag timing (remains untimed per spec §2.2)
-   - All backend D r2 items
-   - pre-existing 14 件の TS strict エラー (test fixtures の prop 不足、Vitest は通る)
-   ```
-
-**方法 B: Claude に作らせる場合の前準備**
-- 次セッション開始時に `! export GITHUB_TOKEN=ghp_...` で push できる token を渡す
-- または `! sudo apt install gh && gh auth login` で gh CLI を入れる
-- どちらも user 操作 (秘密情報・対話) が必要なので Claude からは起動不可
-
----
-
-## 残タスク (一覧)
-
-| 優先 | ID | 内容 | 状態・備考 |
-|---|---|---|---|
-| 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。frontend 3件は本 PR で main merge 済。残るは backend のみ。詳細: `2026-05-16-phase5-autonomy-exit-summary.md` |
-| 低 | **Phase 5 E (そのうち)** | MimicRec 統合は遅らせる方針 (2026-05-16 ユーザー判断)。MimicAnno 側だけで先行できる準備 3 件: (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs (parent §14 + Phase 5 A 現状を stable doc に切り出し)、(C) read-only Python client `mimicanno.client` (将来 MimicRec が import するための runs reader) | **そのうちやる**。MimicRec 本体 (`~/MimicRec` まだ未配置) への save_annotations swap-out + Replay page は MimicRec が手元に来てから別途 spec。本リポ内で完結する範囲のみ autonomy 窓不要 |
-| ~~中~~ | ~~**G1**~~ | ~~batch_annotate 実機 smoke (4B variant)~~ | ✅ **DONE 2026-05-17**。4B PASS (`2026-05-17-g1-batch-annotate-smoke-results.md`)。26B は VRAM 不足で skip 確定 |
-| 中 | **G3** | autonomy exit end-to-end 実データ sanity check (SO101 3-5 ep × rubric 妥当性) | ⏸ `.venv` torch 2.11.0+cu130 vs driver 12.6 mismatch で停止中。.venv は G1/G4 と共有のため独断で書き換えず、env 調整方針要 |
-| 中 | **G4** | gem4 新ロボット 3 dataset × 1 ep smoke (`batch_annotate_4B.py`) | ⏸ G3 と同じ env 問題で停止。SAM3 grounding cam 確認 + 1 ep ずつ実行 |
-| 低 | **G6** | Gemma 4B planner 単体 regression (1 ep) | 未着手。GPU 必須 |
-| 低 | **G7** | Hand pipeline + HAMER 実機 smoke (fisheye 投影 + 3軸 overlay + cam_t time-series) | 未着手。GPU 必須 |
-| 低 | **G8** | UniDAC `precompute_depth` / warp / fuse 1 ep 実機 | 未着手。`conda activate unidac` + GPU 必須 |
-| 低 | gem4 設定整理 | `mimicanno/configs/robot/gem4_*.yaml` x3 + run scripts の clean-up | 本体は main 済み。docs/別 PR で整理可 |
-
-### 後始末
-
-| 項目 | 状態 |
-|---|---|
-| ~~未 push 4 commits (`79bdbcd`/`ce678b4`/`0e45447`/`3b6899e`)~~ | ✅ 既に origin/main 反映済 (2026-05-17 確認) |
-| `feat/phase5-d-eval-harness` worktree 残骸 (`/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/` `node_modules/`) | git 認識外、ディスク上のゴミのみ、`rm -rf` でいつでも除去可 |
-| G1 別セッションプロセス静止 (2026-05-16 22:21 以降無音) | 4B smoke は完走済、出力 `/tmp/g1_smoke_4b/` 保持中。`mimicanno serve` (PID 1063745) は別件 (so101_phase4_v5 配信) で稼働継続中なので触らない |
-
-### 詳細 / 引継ぎ note
-
-- 全体サマリー: `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md`
-- D r1 結果詳細: `docs/superpowers/notes/2026-05-16-phase5-d-results.md`
-- 各 G タスクの詳細は本 file 下部 §"GPU 実機テスト未消化" 参照
-
----
-
-## 完了済み ✅
-
-| ストリーム | 内容 | コミット |
-|---|---|---|
-| Hand pipeline / HV | pinch distance、hand viewer T1-T5+axes、regen | main 済 |
-| S-RS | run-set switcher UI ドロップダウン | PR #9 (main) |
-| S-B2 | 境界ドラッグ PATCH + BoundaryDragLayer | `9c25b87` (main) |
-| S-UI | ダークテーマ + HandScrubBar + HandViewer サイドパネル | `68aafcf` (main) |
-| S-HG | HandSignalGraph — xyz cam_t 時系列グラフ + 外れ値ロバストレンジ | `3ae28bb` (main) |
-| S-B3 | reviewed 単独トグル — backend + frontend + tests | `14eb192` (main) |
-| origin push | 17 コミットを `origin/main` に push 済 | `041acdd..3a75cca` |
-| **S-D** | **Phase 5 D — EditEvent history + mimicanno eval CLI (minimal scope)** | **`3d8bb34` (main, PR D-merge)** |
-| **fix-boundary-route** | `patch_boundary_route` Depends(get_effective_root) 欠落修正 + regression test | **`679fbf9` (main, PR #10)** |
-| **test-fixtures** | **`tests/fixtures/loadable_run/` 凍結 + conftest 切替 (CI skip 解消、222 passed both with/without real run)** | **`cf05727`/`59b1151`/`8292811` (branch `test/loadable-run-fixture`)** |
+**Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green。次窓を開ける場合はユーザー判断。
 
 ---
 
 ## 残タスク
 
-### 1. S-D — Evaluation harness — `feat/phase5-d-eval-harness` ✅ DONE
+| 優先 | ID | 内容 | 状態・備考 |
+|---|---|---|---|
+| 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。詳細: `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md` |
+| 低 | **Phase 5 E (そのうち)** | (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs、(C) read-only Python client `mimicanno.client` | MimicRec 配置待ち。本リポ完結部分のみ着手可 |
+| 中 | **G3 再走** | autonomy exit e2e sanity (`.venv` torch vs driver mismatch で前回停止) | env 整合待ち。1 回回ったので緊急性は低 |
+| 低 | **G7 full-ep 再走** | G8 `--limit` 無しで全フレーム depth 生成 → HAMER 再走で `cam_t` metric anchoring 確認 | 初回 PARTIAL の follow-up。優先度低 |
+| 低 | **`_vlm_dumps` schema 変化対応** | per-call dir 構造化されたので SFT loader ([[project_gemma_ft_pipeline]]) が読めるか確認 | G6 で判明 |
+| 低 | **26B variant 別ホスト** | RTX A6000 48GB では VRAM 不足。VRAM 余裕ホスト確保後 | G1 残課題 |
+| 低 | gem4 設定整理 | `mimicanno/configs/robot/gem4_*.yaml` × 3 の clean-up | docs/別 PR |
 
-- [x] spec: `docs/superpowers/specs/2026-05-16-phase5-d-eval-harness-design.md` (rev1)
-- [x] plan: `docs/superpowers/plans/2026-05-16-phase5-d-eval-harness-plan.md` (rev1)
-- [x] **T1〜T3**: `EditEvent` dataclass + `AnnotationResult.history` + annotation schema 0.3.0
-- [x] **T4〜T7**: `event_builder.py` + 4 repo/route extensions + server tests
-- [x] **T8〜T10**: `mimicanno/eval/` package (`metrics.py` + `render.py` + CLI)
-- [x] **T11**: frontend timing hook (all 4 edit clients + SegmentTable onEditFocus + RunViewer editStartRef)
-- [x] **T12**: mypy --strict + 全 regression (10 new tests + 210 existing, all pass)
-- [x] **T13**: 手動 smoke (SO101 ep0 copy — PATCH reviewed 2500ms → history correct, eval CLI OK)
-- [x] **T14〜T15**: docs (`2026-05-16-phase5-d-results.md`) + memory + TODO
-- [x] **main にマージ** (`3d8bb34`)
+### 後始末
+
+- `/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/node_modules/` — git 認識外、`rm -rf` でいつでも除去可
+- `mimicanno serve` (PID 1063745) — so101_phase4_v5 配信で稼働継続中、別件なので触らない
+
+---
+
+## 未マージ PR 待ち
+
+| branch | 内容 | 状態 |
+|---|---|---|
+| `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
+| `docs/g4-gem4-smoke` | G4 gem4 smoke 結果 (commit `5f8faa2`) | 別セッション、status 確認要 |
 
 ---
 
-### 2. その他 (低優先度)
+## 完了済み ✅
 
-- **gem4 新ロボット設定**: `mimicanno/configs/robot/gem4_*.yaml` x3 + run scripts — 別 PR で整理
-- ~~**テストギャップ**: `tests/fixtures/loadable_run/` に合成固定データをコミット~~ → ✅ SHIPPED 2026-05-17 (branch `test/loadable-run-fixture`)
+| ストリーム | 内容 | コミット / PR |
+|---|---|---|
+| S-RS | run-set switcher UI ドロップダウン | PR #9 |
+| S-B2 | 境界ドラッグ PATCH + BoundaryDragLayer | `9c25b87` |
+| S-UI | ダークテーマ + HandScrubBar + HandViewer サイドパネル | `68aafcf` |
+| S-HG | HandSignalGraph (xyz cam_t 時系列) | `3ae28bb` |
+| S-B3 | reviewed 単独トグル | `14eb192` |
+| S-D | Phase 5 D EditEvent history + `mimicanno eval` CLI | `3d8bb34` |
+| fix-boundary-route | `patch_boundary_route` Depends 修正 | PR #10 (`679fbf9`) |
+| test-fixtures | `tests/fixtures/loadable_run/` 凍結 | `cf05727`/`59b1151`/`8292811` |
+| **D r2 frontend timing** | **3 regression 修正 (Date.now → performance.now / cross-input Map ref / focusout discard) + 8 new tests** | **merge `b5050cc` (main)** |
+| **G1** | batch_annotate 4B smoke (SAM3 runtime 共有 + `BATCH_RUNS_ROOT`) | `3b6899e` etc. (origin/main 済) |
+| **G2** | Phase 5 D SO101 v5 UI smoke (17 events × 4 edit types) | autonomy exit 内 |
+| **G3** | autonomy exit e2e sanity (SO101 3 ep) | `runs/g3_smoke_20260516_2252/` |
+| **G6** | Gemma 4B planner regression (`docs/g-smoke-results`) | `6ca0a43` |
+| **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 (`docs/g-smoke-results`) | `633ca13` |
+| **G8** | UniDAC precompute_depth (`docs/g-smoke-results`) | `158b647` |
 
----
+結果 note は `docs/superpowers/notes/2026-05-17-{g1,g6,g7,g8}-*-smoke-results.md` 等。各 G の詳細・surprise はそれぞれの note 参照。
 
 ---
 
 ## 推奨次ステップ
 
-```
-D r2 (frontend timing 先行 / backend は別 spec) → 完了後 D r2 backend
-Phase 5 E は MimicRec 配置待ちで優先度低 (そのうち)
-```
-
----
-
-## GPU 実機テスト未消化 (2026-05-16 棚卸し, rev1 review 反映)
-
-GPU が必須でまだ実機 smoke が通っていない項目。Phase 5 autonomy 窓を閉じるための実データ検証群。
-
-### 共通前提 (G1〜G4 を始める前に揃える)
-- Python/env: `hamer/.hamer/bin/python` + `PYTHONPATH=/home/gayagaya/MimicAnno:/home/gayagaya/MimicAnno/UniDAC` (depth/warp/fuse 単体は `conda activate unidac`)
-- データ: `~/MimicRec/datasets/SO101` (詳細は [[project_so101_dataset]])
-- SAM3 ckpt: 同 memory のパス
-- Gemma weights: HF cache symlink 済 ([[project_gemma4b_planner_smoke]])
-- 互いに干渉しないよう `nvidia-smi` で GPU 占有状況を先に確認
-
-### G1. batch_annotate 実機 smoke ✅ **DONE 2026-05-17 (4B)**
-- **結果 doc**: `docs/superpowers/notes/2026-05-17-g1-batch-annotate-smoke-results.md`
-- **判定**: 4B 全項目 PASS (ep0+ep1 連続完走、shared SAM3 runtime close 1 回、VRAM delta 0 MiB、`BATCH_RUNS_ROOT` override OK)。26B は VRAM 不足 (A6000 48GB) で skip 確定。
-- **コミット**: `3b6899e` / `0e45447` / `79bdbcd` / `ce678b4` 全て origin/main 取り込み済
-- **出力**: `/tmp/g1_smoke_4b/` (2 episode + `_vlm_dumps/` + `index.json`)
-- **26B 残課題**: VRAM 余裕のあるホスト確保後に別途実行
-
-### G2. Phase 5 D — SO101 v5 手動 smoke (T13) ⚠️ 別セッションの worktree が壊された — 要復旧
-- **🚨 2026-05-16 23:?? ハンドオフ警告 (本セッションからの誤操作)**: ユーザー指示により D ブランチ merge + push 後、`feat/phase5-d-eval-harness` の **remote 削除に同意 → local 片付け中に `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree を `rm -rf` してしまった**。`mimicanno serve` (PID 1460990) と `vite` (PID 1460389) はまだ動いているが、`.venv` / `node_modules` の中身は inode のみ生きている状態。**新しいファイルアクセス (server reload / import / hot reload) で fail する可能性**。
-  - **何が起きたか**: TODO G2 の「触らない」警告を見落とし、merge 後の cleanup として worktree 削除を試行。NFS busy file で削除は不完全、`frontend/` ディレクトリ残骸あり。git からの worktree 認識は消えた (`git worktree list` に出ない、local branch も削除済)。
-  - **D の中身は安全**: `feat/phase5-d-eval-harness` の全コミットは main の merge commit `3d8bb34` に統合済・origin push 済 (commit `3bdcb12..3d8bb34`)。remote D ブランチも削除済。**実装の loss はゼロ**。
-  - **影響範囲**: 別セッションが phase5d worktree 内で稼働させていた server/vite + 未コミット変更 (frontend 3 ファイル)。未コミット変更は失われた可能性 (git stash 等で退避していなければ復旧不可)。
-  - **復旧手順 (別セッション側で)**: (1) PID 1460990/1460389 を `kill`、(2) `rm -rf /misc/dl00/gayagaya/MimicAnno-phase5d` で残骸除去、(3) 必要なら `git worktree add ../MimicAnno-phase5d-new main` で新 worktree、(4) `uv sync` + `cd frontend && npm install` で env 再構築。
-  - **smoke 自体は main で実行可能**: D は merge 済なので `/misc/dl00/gayagaya/MimicAnno` (main) で `mimicanno eval` も `mimicanno serve` も使える。新 worktree 不要なら main でやり直しても OK。
-- **(古い状態) 2026-05-16 22:00 確認**: `/misc/dl00/gayagaya/MimicAnno-phase5d` worktree で別セッションが smoke 実行中。`mimicanno serve` (PID 1460990) + `vite` (PID 1460389) 稼働中、`/tmp/mimicanno-d-smoke.log` / `/tmp/vite-d-smoke.log` 出力中。frontend 3 ファイルに未コミット変更あり。
-- **状態の補足**: D r1 実装は main に merge 済 (`3d8bb34`, 2026-05-16 23:?? 本セッション)。`mimicanno eval` CLI は main で利用可能。
-- [x] 前提: `feat/phase5-d-eval-harness` を main に merge (S-D 実装と合流) → `mimicanno eval` が CLI に現れることを `mimicanno --help` で確認
-- [x] 新規 run を annotate → `mimicanno serve` 起動 → frontend で relabel/boundary/reviewed/labels 4 種を編集 (17 events × 4 edit types on SO101 v5, Sonnet session)
-- [x] `mimicanno eval <run>` で history が読まれ metrics + render が出ること
-- [x] phase `<select>` focusin/change hook の計測値が EditEvent に乗ること (history JSON を直接 grep して `dwell_ms` などのフィールド存在確認)
-- annotate 部分のみ GPU、eval/edit 自体は CPU
-- **G2: DONE** — 詳細は `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md`
-
-### G3. autonomy exit 用 end-to-end 実データ sanity check ✅ **完了 (2026-05-16 23:00, 本セッション)**
-- **結果 doc**: `docs/superpowers/notes/2026-05-16-g3-autonomy-exit-smoke-results.md`
-- **Run**: `runs/g3_smoke_20260516_2252/` (GPU=2、3 ep 全完走 5.5 min)
-- **Rubric**: ep0 全 PASS / ep1 R2 degenerate (Gemma 全セグ `approach_object`) / ep2 R3 FAIL (Gemma `white tape roll` 幻覚 → SAM3 0 検出 → tracks.json 欠損)。両 failure とも planner-side label 品質で pipeline bug ではなく、`_vlm_dumps` 13 segments が SFT 用に揃った ([[project_gemma_ft_pipeline]] 想定通り)。
-- **autonomy exit 評価**: (2) 実データ妥当性 PASS、(3) 書面ハンドオフ PASS。(1) Phase 5 sub-project は A/B/C/D main 済、E 未着手 → E を必須とするか **ユーザー判断待ち**。
-- **env 補足**: 前セッション blocker (`.venv` torch 2.11.0+cu130 vs driver 12.6 の `cuda_available=False`) は本セッション開始時に自然回復していた。原因特定はせず実行優先。
-- [x] SO101 から 3 ep を Gemma 4B planner + SAM3 + Phase 4 smoother v5 + 永続化を通しで実行
-- [x] 妥当性 rubric 検証 (`/tmp/g3_verify.py` scratch)
-- [x] `_vlm_dumps/*.jsonl` SFT 書き出し確認
-- [x] 「shipped・怪しかった・残課題」を書面でハンドオフ
-
-### G4. gem4 新ロボット 1 ep 通し  ⚠️ **本セッション作業中 (2026-05-16 後半・GPU7)・他セッションからは触らない**
-- **状態 (2026-05-16, このセッション 後半)**: GPU7 (46GB free) を確保し `batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 7 --start 0 --end 0` を `.venv/bin/python` 経由で実行中。BATCH_RUNS_ROOT=/tmp/g4_smoke_pick_up_bottle、ログ `/tmp/g4_smoke_logs/pick_up_bottle.log`。
-- **既知の env 問題 (調査中)**: ① hamer python (3.10) は `StrEnum` 不可 → `.venv` (3.11) 必須。② `.venv` の torch が「NVIDIA driver too old (found 12060)」で `cuda_init` 失敗 → driver vs torch wheel 不整合。解消手段を検討中 (CUDA wheel 差し替え or 別 env)。
-- **過去メモ (持ち越し参考)**: 計画は立てたが GPU が空いていなかったため実行に入る前に中止していた。yaml/データ/チェックボックスは未変更。
-- ~~別 PR 待ちなので優先度低~~ → 依存無し。yaml x3 は `71c9cd1` で main 済、データ `data/GEM4_*` 揃い、`batch_annotate*.py` DATASETS にも登録済 (so101 以外の 3 dataset)。「別 PR で整理」は運用上の話で実行ブロックではない。
-- 着手前に G3 (別セッション) と GPU 占有が衝突しないか確認 ([[feedback_handoff_conflict_check]])
-- [x] `mimicanno/configs/robot/gem4_*.yaml` x3 (`pick_up_bottle` / `replace_the_cookie` / `open_the_jar`) ※ 既存
-- [ ] SAM3 grounding cam を **overhead/external** に設定確認 ([[feedback_sam3_use_external_cam]]) — 3 yaml の mask 設定を読んで overhead 指定になっているか確認
-- [ ] 3 dataset 各 1 ep を `batch_annotate_4B.py` で annotate (`BATCH_RUNS_ROOT=/tmp/g4_smoke_*`、26B は VRAM 不足で skip)
-- [ ] それぞれ annotate が落ちずに通ること、SAM3 mask が 1 frame 以上検出されること
-- [ ] 結果サマリを `docs/superpowers/notes/2026-05-16-g4-gem4-smoke-results.md` に残す
-- **次回セッション再開手順**: (1) `nvidia-smi` で 1 GPU 以上空きを確認、(2) G3 (別セッション) との衝突有無確認、(3) 上記 yaml/mask 確認 → 4B smoke 3 並列 (空き GPU 数次第で逐次に切替)
-
-### G5. Phase 5 E
-- spec/plan 未着手なので GPU テスト以前。ここでは out of scope。
-
-### G6. Gemma 4B planner 単体 regression
-- 2026-05-15 の初回 smoke ([[project_gemma4b_planner_smoke]]) 以降、planner 単体での再現確認が無い
-- [ ] `vlm_labeler.py` を直叩きで 1 ep に当て、出力語彙と JSONL スキーマが当時と同等であることを確認
-
-### G7. Hand pipeline + HAMER 実機 smoke
-- 直近 (2026-05-16, `2307219`) で 3 軸 overlay が入った。HAMER は GPU 必須。
-- [ ] `scripts/run_hand_estimation.py` を SO101 1 ep に当て、fisheye 投影 (pinhole ではない、[[project_hand_pipeline_camera_model]]) で overlay が画像内に収まることを目視
-- [ ] `cam_t` 時系列が HandSignalGraph で表示されること (frontend と整合)
-
-### G8. precompute_depth / warp / fuse (UniDAC)
-- `conda activate unidac` 必須、GPU 必須 (CLAUDE.md 環境注記)
-- [ ] `scripts/precompute_depth.py` を SO101 1 ep に当て depth が生成されること
-- [ ] warp + fuse 後の出力が pipeline (hand/SAM3) 側で読み込めること
-
----
-
-### 実行順 (推奨, 2026-05-17 更新)
-
-- ~~G1~~ ✅ DONE (4B、26B は VRAM 不足で別ホスト)
-- ~~G2~~ ✅ DONE (Phase 5 D 手動 smoke)
-- ~~G3~~ ✅ DONE (autonomy exit e2e sanity)
-
-残り GPU smoke:
-
-1. **G4** (gem4 3 dataset × 1 ep) — `.venv` torch vs driver 整合の env 解消が前提
-2. **G6 / G7 / G8** — pipeline 構成要素ごとの regression。G3 で暗黙的にカバーされた部分が多いが、明示確認が必要なものは個別実施
-
+1. `docs/g-smoke-results` を PR 作成 → main マージ
+2. D r2 backend spec 起こし (高優先度の唯一の実装作業)
+3. Phase 5 E は MimicRec 配置待ちで保留
