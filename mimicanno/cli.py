@@ -318,6 +318,14 @@ def annotate(
             )
         )
         raise typer.Exit(code=3) from e
+    # U-A1 progress marker for single-episode annotate (job runner parseable).
+    # Derive episode index from the parquet filename (episode_000000.parquet).
+    _ep_stem = parquet.stem  # e.g. "episode_000003"
+    try:
+        _ep_idx = int(_ep_stem.split("_")[-1])
+    except (ValueError, IndexError):
+        _ep_idx = 0
+    print(f"[mimicanno-job-progress] ep={_ep_idx} finished=1/1", flush=True)
 
 
 @app.command("export")
@@ -529,6 +537,14 @@ def serve_cmd(
         None, "--hands-root",
         help="hand pipeline output root (data/hands/). Enables /api/hands/ routes.",
     ),
+    jobs_dir: Optional[Path] = typer.Option(
+        None, "--jobs-dir",
+        help=(
+            "Directory for job records + logs. "
+            "Defaults to <runs_root>/../.mimicanno-jobs. "
+            "Created on demand."
+        ),
+    ),
 ) -> None:
     """Start the Phase 5 A read-only HTTP server.
 
@@ -555,6 +571,7 @@ def serve_cmd(
         cors_origins=origins,
         reviewer=reviewer,
         hands_root=hands_root,
+        jobs_dir=jobs_dir,
     )
     uvicorn.run(fastapi_app, host=host, port=port, reload=reload)
 
