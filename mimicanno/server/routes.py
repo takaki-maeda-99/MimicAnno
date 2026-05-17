@@ -636,23 +636,27 @@ def make_router(
                     f"{run_set!r} index.json"
                 ),
             )
-        calls = read_vlm_dumps(run_set_root, episode_id)
-        payload = {
+        calls = read_vlm_dumps(run_set_root, episode_id, run_set=run_set)
+        payload: dict[str, Any] = {
             "canonical": canonical,
             "run_set": run_set,
             "episode_id": episode_id,
             "calls": [
+                # Rev3 shape (master §2.4 rev3)
                 {
-                    "call_id": c.call_id,
                     "kind": c.kind,
-                    "phase": c.phase,
-                    "segment_id": c.segment_id,
+                    "call_id": c.call_id,
+                    "attempt": c.attempt,
                     "prompt": c.prompt,
                     "raw_output": c.raw_output,
                     "parsed": c.parsed,
                     "failed": c.failed,
-                    "ms": c.ms,
-                    "model_variant": c.model_variant,
+                    # Planner-only (null for labeler)
+                    "frame_url": c.frame_url,
+                    # Labeler-only (null / [] for planner)
+                    "segment_ordinal": c.segment_ordinal,
+                    "request_json": c.request_json,
+                    "keyframe_urls": c.keyframe_urls,
                 }
                 for c in calls
             ],
