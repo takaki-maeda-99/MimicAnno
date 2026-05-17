@@ -13,7 +13,7 @@ class RunMetrics:
     client_coverage: float
     human_edited_segments: int
     total_segments: int
-    label_agreement: float
+    human_touched_fraction: float  # was: label_agreement (renamed in D r2 §2.3)
 
 
 def compute_metrics(annotation: AnnotationResult, run_name: str) -> RunMetrics:
@@ -28,7 +28,7 @@ def compute_metrics(annotation: AnnotationResult, run_name: str) -> RunMetrics:
         1 for s in annotation.segments if s.label_source == "human_edit"
     )
     total_segs = len(annotation.segments)
-    label_agreement = human_segs / total_segs if total_segs > 0 else 0.0
+    human_touched_fraction = human_segs / total_segs if total_segs > 0 else 0.0
     return RunMetrics(
         run_name=run_name,
         total_edits=total_edits,
@@ -36,7 +36,7 @@ def compute_metrics(annotation: AnnotationResult, run_name: str) -> RunMetrics:
         client_coverage=client_coverage,
         human_edited_segments=human_segs,
         total_segments=total_segs,
-        label_agreement=label_agreement,
+        human_touched_fraction=human_touched_fraction,
     )
 
 
@@ -49,7 +49,7 @@ def aggregate(runs: list[RunMetrics]) -> RunMetrics:
     client_coverage = timed_sum / total_edits if total_edits > 0 else 0.0
     human_segs = sum(r.human_edited_segments for r in runs)
     total_segs = sum(r.total_segments for r in runs)
-    label_agreement = human_segs / total_segs if total_segs > 0 else 0.0
+    human_touched_fraction = human_segs / total_segs if total_segs > 0 else 0.0
     return RunMetrics(
         "**total**",
         total_edits,
@@ -57,5 +57,5 @@ def aggregate(runs: list[RunMetrics]) -> RunMetrics:
         client_coverage,
         human_segs,
         total_segs,
-        label_agreement,
+        human_touched_fraction,
     )

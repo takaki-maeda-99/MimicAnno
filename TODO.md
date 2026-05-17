@@ -8,7 +8,7 @@
 
 | 優先 | ID | 内容 | 状態・備考 |
 |---|---|---|---|
-| 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。詳細: `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md` |
+| ~~高~~ | ~~**D r2 backend**~~ | ~~`label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap~~ | ✅ **SHIPPED 2026-05-17** (本 merge コミット参照、15 new tests / 252 passing / mypy --strict clean)。Phase 6 / eval v2 で扱う: 真の planner agreement (EditEvent old/new value 拡張) |
 | 低 | **Phase 5 E (そのうち)** | (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs、(C) read-only Python client `mimicanno.client` | MimicRec 配置待ち。本リポ完結部分のみ着手可 |
 | 低 | **G7 full-ep 再走** | G8 `--limit` 無しで全フレーム depth 生成 → HAMER 再走で `cam_t` metric anchoring 確認 | 初回 PARTIAL の follow-up。優先度低 |
 | 低 | **`_vlm_dumps` schema 変化対応** | per-call dir 構造化されたので SFT loader ([[project_gemma_ft_pipeline]]) が読めるか確認 | G6 で判明 |
@@ -62,5 +62,5 @@
 ## 推奨次ステップ
 
 1. `docs/g-smoke-results` を PR 作成 → main マージ
-2. D r2 backend spec 起こし (高優先度の唯一の実装作業)
+2. ~~D r2 backend spec 起こし~~ ✅ DONE — 本 merge で main に統合済
 3. Phase 5 E は MimicRec 配置待ちで保留
