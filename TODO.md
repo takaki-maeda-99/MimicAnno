@@ -19,7 +19,7 @@
 
 ### SAM3 grounding retry smoke (T13) — **別サーバーで実機実行待ち**
 
-**Branch**: `worktree-feat+sam3-grounding-retry` (実装 T1–T12 完了、unit 830 + integration 59 全 pass、mypy 新規エラー 0)
+**Status**: 実装 T1–T12 PR #26 `413bfd7` で main マージ済 (16 commits、unit 830 + integration 59 全 pass、mypy 新規エラー 0)
 
 **Spec**: `docs/superpowers/specs/2026-05-17-sam3-grounding-retry-design.md`
 **Plan**: `docs/superpowers/plans/2026-05-17-sam3-grounding-retry-plan.md` (T13 が smoke)
@@ -29,10 +29,9 @@
 2. 既存 success ep を 1 つ regression check: `episode_000000` (期待: `adopted_frame_index=0`、attempts=[1件]、回帰ゼロ)
 3. 結果を `docs/superpowers/notes/2026-05-17-sam3-grounding-retry-smoke.md` に記録 (ep ごとの adopted_frame_index、attempts 数、cluster 分類対照表)
 
-**実行コマンド例** (一台空けて):
+**実行コマンド例** (別サーバーで GPU 空き次第):
 ```bash
-cd /misc/dl00/gayagaya/MimicAnno
-git checkout worktree-feat+sam3-grounding-retry  # or merge to main first
+cd /misc/dl00/gayagaya/MimicAnno && git checkout main && git pull
 CUDA_VISIBLE_DEVICES=<gpu_idx> \
   uv run --extra sam3 mimicanno annotate \
   --episode ~/MimicRec/datasets/SO101/data/chunk-000/episode_000002.parquet \
@@ -43,9 +42,9 @@ CUDA_VISIBLE_DEVICES=<gpu_idx> \
 ```
 manifest 検査: `cat runs/_smoke_grounding_retry/episode_000002__*/manifest.json | jq .pipeline_status`
 
-**現在の本ホスト GPU**: 全 4 台 A6000 49GB が moriki さんの HSMR job で各 27GB 占有中 (空き 21GB 残り)。4B smoke は 21GB に載るが他ユーザー job と競合するため別サーバー実行が望ましい。
+**GPU 要件**: 4B model + SAM3 で約 12–15 GB。本ホストは全 4 台 A6000 49GB が他ユーザー job で占有されることが多いため、別サーバー実行が望ましい (memory `feedback_pause_when_gpu_unavailable` 参照)。
 
-**完了後**: smoke 結果次第で `grounding_retry_fractions=[0.5, 0.25, 0.75]` の見直し (m5 spec)、PR 提出、main merge。
+**完了後**: smoke 結果次第で `grounding_retry_fractions=[0.5, 0.25, 0.75]` の見直し (m5 spec)、必要なら追加 PR。
 
 **Final review nice-to-haves (deferred、smoke 後または PR 中に対応)**:
 - I1: `_count_missing_mask_frames` wire-up — 関数は `pipeline.py:319` に実装済だが call site (`pipeline.py:1135`) が hardcoded `0` のまま。`segment_keyframes` を manifest 構築点に通せば配線できる
