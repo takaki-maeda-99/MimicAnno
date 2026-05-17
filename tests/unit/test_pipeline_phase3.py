@@ -167,11 +167,11 @@ _PATCH_PLANNER = "mimicanno.pipeline.LocalGemmaTrackingPlanner"
 _PATCH_PROPAGATOR = "mimicanno.pipeline.Propagator"
 _PATCH_APPLY = "mimicanno.pipeline.apply_phase3_labeling"
 _PATCH_DEGRADE = "mimicanno.pipeline._degrade_to_phase3_objectless"
-_PATCH_GROUND = "mimicanno.pipeline.ground_initial_detections"
+_PATCH_GROUND = "mimicanno.pipeline.ground_initial_detections_with_retry"
 _PATCH_OBJ_SIGNALS = "mimicanno.pipeline.compute_object_signals"
 _PATCH_DETECTOR = "mimicanno.pipeline.Phase3BoundaryDetector"
 _PATCH_BRACKET = "mimicanno.pipeline.bracket_phase1_segments"
-_PATCH_INITIAL_FRAME = "mimicanno.pipeline._extract_initial_frame"
+_PATCH_INITIAL_FRAME = "mimicanno.pipeline._extract_frame_at"
 
 
 # ---------------------------------------------------------------------------
@@ -216,12 +216,13 @@ def test_happy_path_all_stages_succeed(tmp_path: Path) -> None:
     # apply_phase3_labeling returns ok outcome + coverage
     fake_run_outcome = RunOutcome(kind="ok", degrade_reason=None, underlying_error=None)
 
+    _fake_initial_frame = np.zeros((64, 64, 3), dtype=np.uint8)
     with (
-        patch(_PATCH_INITIAL_FRAME, return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+        patch(_PATCH_INITIAL_FRAME, return_value=_fake_initial_frame),
         patch(_PATCH_VLM) as mock_vlm_cls,
         patch(_PATCH_PLANNER) as mock_planner_cls,
         patch(_PATCH_SAM3) as mock_sam3_cls,
-        patch(_PATCH_GROUND, return_value=fake_plan),
+        patch(_PATCH_GROUND, return_value=(0, _fake_initial_frame, fake_plan, [])),
         patch(_PATCH_PROPAGATOR) as mock_prop_cls,
         patch(_PATCH_OBJ_SIGNALS, return_value=fake_object_signals),
         patch(_PATCH_DETECTOR, return_value=fake_detector),
@@ -285,12 +286,13 @@ def test_gemma_handle_shared(tmp_path: Path) -> None:
     fake_run_outcome = RunOutcome(kind="ok", degrade_reason=None, underlying_error=None)
     fake_segments = [_minimal_segment()]
 
+    _fake_frame = np.zeros((64, 64, 3), dtype=np.uint8)
     with (
-        patch(_PATCH_INITIAL_FRAME, return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+        patch(_PATCH_INITIAL_FRAME, return_value=_fake_frame),
         patch(_PATCH_VLM) as mock_vlm_cls,
         patch(_PATCH_PLANNER) as mock_planner_cls,
         patch(_PATCH_SAM3) as mock_sam3_cls,
-        patch(_PATCH_GROUND, return_value=fake_plan),
+        patch(_PATCH_GROUND, return_value=(0, _fake_frame, fake_plan, [])),
         patch(_PATCH_PROPAGATOR) as mock_prop_cls,
         patch(_PATCH_OBJ_SIGNALS, return_value=fake_object_signals),
         patch(_PATCH_DETECTOR, return_value=fake_detector),
@@ -353,12 +355,13 @@ def test_sam3_close_before_apply_phase3_labeling(tmp_path: Path) -> None:
         call_order.append("apply_phase3_labeling")
         return (fake_segments, [], fake_run_outcome, 0.5)
 
+    _fake_frame = np.zeros((64, 64, 3), dtype=np.uint8)
     with (
-        patch(_PATCH_INITIAL_FRAME, return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+        patch(_PATCH_INITIAL_FRAME, return_value=_fake_frame),
         patch(_PATCH_VLM) as mock_vlm_cls,
         patch(_PATCH_PLANNER) as mock_planner_cls,
         patch(_PATCH_SAM3) as mock_sam3_cls,
-        patch(_PATCH_GROUND, return_value=fake_plan),
+        patch(_PATCH_GROUND, return_value=(0, _fake_frame, fake_plan, [])),
         patch(_PATCH_PROPAGATOR) as mock_prop_cls,
         patch(_PATCH_OBJ_SIGNALS, return_value=fake_object_signals),
         patch(_PATCH_DETECTOR, return_value=fake_detector),
@@ -406,12 +409,13 @@ def test_finally_sam3_close_called_even_on_propagator_exception(tmp_path: Path) 
     fake_plan = MagicMock()
     fake_plan.initial_detections = {("object", "block"): BBox(0.1, 0.1, 0.2, 0.2)}
 
+    _fake_frame = np.zeros((64, 64, 3), dtype=np.uint8)
     with (
-        patch(_PATCH_INITIAL_FRAME, return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+        patch(_PATCH_INITIAL_FRAME, return_value=_fake_frame),
         patch(_PATCH_VLM) as mock_vlm_cls,
         patch(_PATCH_PLANNER) as mock_planner_cls,
         patch(_PATCH_SAM3) as mock_sam3_cls,
-        patch(_PATCH_GROUND, return_value=fake_plan),
+        patch(_PATCH_GROUND, return_value=(0, _fake_frame, fake_plan, [])),
         patch(_PATCH_PROPAGATOR) as mock_prop_cls,
     ):
         mock_vlm_instance = MagicMock()
@@ -579,12 +583,14 @@ def test_degrade_gate_sam3_no_initial_detection(tmp_path: Path) -> None:
     )
     fake_degrade_result = MagicMock()
 
+    _fake_frame = np.zeros((64, 64, 3), dtype=np.uint8)
     with (
-        patch(_PATCH_INITIAL_FRAME, return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+        patch(_PATCH_INITIAL_FRAME, return_value=_fake_frame),
         patch(_PATCH_VLM) as mock_vlm_cls,
         patch(_PATCH_PLANNER) as mock_planner_cls,
         patch(_PATCH_SAM3) as mock_sam3_cls,
-        patch(_PATCH_GROUND, return_value=empty_plan),
+        # ground_initial_detections_with_retry returns (adopted_idx, frame, plan, attempts)
+        patch(_PATCH_GROUND, return_value=(0, _fake_frame, empty_plan, [])),
         patch(_PATCH_DEGRADE, return_value=fake_degrade_result) as mock_degrade,
     ):
         mock_vlm_instance = MagicMock()
@@ -613,12 +619,12 @@ def test_degrade_gate_sam3_no_initial_detection(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_initial_frame_returns_array(tmp_path: Path) -> None:
-    """_extract_initial_frame returns a HxWx3 uint8 array for a real MP4."""
-    from mimicanno.pipeline import _extract_initial_frame
+def test_extract_frame_at_returns_array(tmp_path: Path) -> None:
+    """_extract_frame_at returns a HxWx3 uint8 array for a real MP4 (frame 0)."""
+    from mimicanno.pipeline import _extract_frame_at
 
     video = synthesize_aloha_episode(tmp_path / "data").video
-    frame = _extract_initial_frame(video, n_frames=120)
+    frame = _extract_frame_at(video, n_frames=120, frame_index=0)
     assert frame.dtype == np.uint8
     assert frame.ndim == 3
     assert frame.shape[2] == 3  # RGB

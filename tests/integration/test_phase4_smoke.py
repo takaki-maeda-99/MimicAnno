@@ -114,8 +114,9 @@ def test_phase4_happy_path_emits_smoothing_summary(
     assert summary["final_segment_count"] <= summary["initial_segment_count"]
 
     annotation = json.loads((run_dir / "annotation.json").read_text())
-    # Spec §4.4: annotation schema bumped to 0.2.0 for Phase 4.
-    assert annotation["schema_version"] == "0.2.0"
+    # Spec §4.4: annotation schema bumped to 0.2.0 for Phase 4; Phase 6
+    # further bumped to 0.4.0 (EditEvent gains old_value/new_value fields).
+    assert annotation["schema_version"] == "0.4.0"
     # Every segment carries smoothing_ops (possibly empty).
     for seg in annotation["segments"]:
         assert "smoothing_ops" in seg

@@ -140,12 +140,24 @@ def _segment_from_dict(d: dict[str, Any]) -> SubtaskSegment:
 
 
 def _pipeline_status_from_dict(d: dict[str, Any]) -> PipelineStatus:
-    return PipelineStatus(
-        object_state_available=bool(d["object_state_available"]),
-        degraded_from_phase=d.get("degraded_from_phase"),
-        degrade_reason=d.get("degrade_reason"),
-        object_state_segment_coverage=d.get("object_state_segment_coverage"),
-    )
+    kwargs: dict[str, Any] = {
+        "object_state_available": bool(d["object_state_available"]),
+        "degraded_from_phase": d.get("degraded_from_phase"),
+        "degrade_reason": d.get("degrade_reason"),
+        "object_state_segment_coverage": d.get("object_state_segment_coverage"),
+    }
+    # 2026-05-17 retry observability fields (spec §7.4).
+    # Only inject when the key is present so the _UNSET default_factory is
+    # preserved for Phase 1/2 manifests (keeps byte-identical post-edit).
+    if "adopted_frame_index" in d:
+        kwargs["adopted_frame_index"] = d["adopted_frame_index"]
+    if "grounding_attempts" in d:
+        # Stored as list[dict] on disk (PipelineStatus.grounding_attempts is
+        # typed Any / list[dict]); pass through without reconstruction.
+        kwargs["grounding_attempts"] = d["grounding_attempts"]
+    if "mask_overlay_unavailable_frames" in d:
+        kwargs["mask_overlay_unavailable_frames"] = d["mask_overlay_unavailable_frames"]
+    return PipelineStatus(**kwargs)
 
 
 def read_manifest(path: Path) -> Manifest:

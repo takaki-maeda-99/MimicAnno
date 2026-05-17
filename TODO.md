@@ -17,6 +17,47 @@
 
 ## 残タスク
 
+### SAM3 grounding retry smoke (T13) — **別サーバーで実機実行待ち**
+
+**Branch**: `worktree-feat+sam3-grounding-retry` (実装 T1–T12 完了、unit 830 + integration 59 全 pass、mypy 新規エラー 0)
+
+**Spec**: `docs/superpowers/specs/2026-05-17-sam3-grounding-retry-design.md`
+**Plan**: `docs/superpowers/plans/2026-05-17-sam3-grounding-retry-plan.md` (T13 が smoke)
+
+**実行内容**:
+1. `so101_4B` で degraded だった 5 ep を新 pipeline で再生成: `episode_000002, 000006, 000009, 000010, 000026` (cluster A 仮説では ep2/9/26 が `adopted_frame_index>0` で救済、ep6/10 は引き続き degrade)
+2. 既存 success ep を 1 つ regression check: `episode_000000` (期待: `adopted_frame_index=0`、attempts=[1件]、回帰ゼロ)
+3. 結果を `docs/superpowers/notes/2026-05-17-sam3-grounding-retry-smoke.md` に記録 (ep ごとの adopted_frame_index、attempts 数、cluster 分類対照表)
+
+**実行コマンド例** (一台空けて):
+```bash
+cd /misc/dl00/gayagaya/MimicAnno
+git checkout worktree-feat+sam3-grounding-retry  # or merge to main first
+CUDA_VISIBLE_DEVICES=<gpu_idx> \
+  uv run --extra sam3 mimicanno annotate \
+  --episode ~/MimicRec/datasets/SO101/data/chunk-000/episode_000002.parquet \
+  --task "Put the tape into the bottle" \
+  --vlm-model google/gemma-3-4b-it \
+  --sam3-checkpoint <path from memory project_so101_dataset> \
+  --runs-root runs/_smoke_grounding_retry/
+```
+manifest 検査: `cat runs/_smoke_grounding_retry/episode_000002__*/manifest.json | jq .pipeline_status`
+
+**現在の本ホスト GPU**: 全 4 台 A6000 49GB が moriki さんの HSMR job で各 27GB 占有中 (空き 21GB 残り)。4B smoke は 21GB に載るが他ユーザー job と競合するため別サーバー実行が望ましい。
+
+**完了後**: smoke 結果次第で `grounding_retry_fractions=[0.5, 0.25, 0.75]` の見直し (m5 spec)、PR 提出、main merge。
+
+**Final review nice-to-haves (deferred、smoke 後または PR 中に対応)**:
+- I1: `_count_missing_mask_frames` wire-up — 関数は `pipeline.py:319` に実装済だが call site (`pipeline.py:1135`) が hardcoded `0` のまま。`segment_keyframes` を manifest 構築点に通せば配線できる
+- M3: frame 0 success path で `propagation_direction="forward", anchor=0` を assert する integration test を追加 (現在は retry-success と degrade のみカバー、§6.1 invariant の forward 経路は未テスト)
+- I3: `mimicanno/schema.py` の `_UNSET: Any` sentinel — `Any` typing が mypy を defeat。`Sentinel = NewType(...)` 化または explicit subclass 化で型安全性向上
+- M1: 命名揺れ `adopted_frame_idx` (Python local) vs `adopted_frame_index` (manifest/dataclass) — search-and-replace で統一
+- M4: `fixtures.py:178` の `propagation_direction: str = "forward"` → `Literal["forward","both"]` で型整合
+- M5: `_extract_frame_at:293` の `except Exception` を I/O 例外限定に絞る
+- M6: `test_retry_total_failure_returns_none` が `[0,75,37,112]` ハードコード → default 変更時 brittle、parametrize 推奨
+
+---
+
 ### U-A: Dataset processing & visualization UI ✅ **完了 (2026-05-17)**
 
 **Master spec**: `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` (rev3、Opus 多段レビュー通過)

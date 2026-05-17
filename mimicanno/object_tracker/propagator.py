@@ -91,6 +91,36 @@ class GapEvent:
     reason: GapReason
 
 
+@dataclass(slots=True, frozen=True)
+class GroundingAttempt:
+    """One frame's grounding attempt during retry (spec §5.2).
+
+    Attributes:
+        frame_index: video frame index attempted
+        n_object_grounded: detections with role == "object"
+        n_total_grounded: objects + targets + tools
+        adopted: True on the attempt whose plan was returned; False otherwise.
+            On total failure (degrade), all attempts have adopted=False.
+        skipped_reason: "io_error" if frame read failed; else None
+    """
+
+    frame_index: int
+    n_object_grounded: int
+    n_total_grounded: int
+    adopted: bool
+    skipped_reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-serializable representation for manifest output."""
+        return {
+            "frame_index": self.frame_index,
+            "n_object_grounded": self.n_object_grounded,
+            "n_total_grounded": self.n_total_grounded,
+            "adopted": self.adopted,
+            "skipped_reason": self.skipped_reason,
+        }
+
+
 @dataclass(slots=True)
 class Track:
     """One propagated track for one (role, prompt) seed (spec §2.4)."""
@@ -124,28 +154,30 @@ def ground_initial_detections(
     runtime: SAM3Runtime,
     initial_frame: np.ndarray,
     entities: EntityPlan,
+    frame_index: int = 0,
 ) -> TrackingPlan:
     """Ground each (role, prompt) on the initial frame; take top-scoring bbox.
-
-    For each prompt in entities.all_prompts_with_role(), call
-    runtime.ground_on_frame(initial_frame, prompt). Takes the highest-scoring
-    bbox; empty result -> failed_prompts entry. Returns the full TrackingPlan
-    ready for Propagator.run (Step C).
 
     Args:
         runtime: SAM3Runtime or test double implementing ground_on_frame.
         initial_frame: The first frame (np.ndarray), used for grounding.
         entities: EntityPlan from Step A, containing prompts organized by role.
+        frame_index: video frame index that ``initial_frame`` came from.
+            Forwarded to ``runtime.ground_on_frame`` so frame-aware test
+            doubles (FixtureSAM3Tracker) can return frame-keyed canned
+            results. Real SAM3 ignores this — its sessions are
+            single-frame.
 
     Returns:
-        TrackingPlan with initial_detections (highest-score bbox per prompt)
-        and failed_prompts (prompts with no detection).
+        TrackingPlan with initial_detections + failed_prompts.
     """
     initial_detections: dict[tuple[ROLE, str], BBox] = {}
     failed_prompts: list[tuple[ROLE, str]] = []
 
     for role, prompt in entities.all_prompts_with_role():
-        results = runtime.ground_on_frame(initial_frame, prompt)
+        results = runtime.ground_on_frame(
+            initial_frame, prompt, frame_index=frame_index,
+        )
         if not results:
             failed_prompts.append((role, prompt))
             continue
@@ -162,8 +194,125 @@ def ground_initial_detections(
 
 
 # ---------------------------------------------------------------------------
+# Module-level frame-extractor injection point (spec §5.1)
+# ---------------------------------------------------------------------------
+
+# Module-level injection point — pipeline.py replaces this with its
+# `_extract_frame_at`. Tests monkey-patch it to inject canned frames.
+# Default raises so a missing wire-up is loud rather than silent.
+def _extract_frame_at(video_path: Path, n_frames: int, frame_index: int) -> np.ndarray:
+    raise NotImplementedError(
+        "_extract_frame_at must be wired up by pipeline.py before "
+        "ground_initial_detections_with_retry is called"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public retry helper (spec §5.1)
+# ---------------------------------------------------------------------------
+
+
+def ground_initial_detections_with_retry(
+    *,
+    runtime: "SAM3Runtime",
+    video_path: Path,
+    n_frames: int,
+    entities: EntityPlan,
+    retry_fractions: list[float],
+) -> "tuple[int | None, np.ndarray, TrackingPlan, list[GroundingAttempt]]":
+    """Ground on frame 0; retry on alternate frames if no object grounded.
+
+    See spec §5.1 for full contract. Behavior:
+      1. Always try frame 0 first.
+      2. If TrackingPlan has zero `object`-role detections, iterate
+         _compute_retry_frame_indices(n_frames, retry_fractions). For each
+         idx, call _extract_frame_at + ground_initial_detections.
+      3. Adopt the first attempt yielding >=1 object-role detection.
+      4. On total failure: return (None, last_frame, last_plan, attempts)
+         with all attempts.adopted=False so the caller's existing degrade
+         gate fires.
+
+    Frame-read I/O errors during retry mark that attempt skipped and continue.
+    Frame 0's I/O failure is the caller's responsibility (pipeline.py uses
+    `_extract_frame_at(video, n_frames, 0)` with its own 5% fallback).
+    """
+    attempts: list[GroundingAttempt] = []
+
+    # Always: frame 0
+    initial_frame = _extract_frame_at(video_path, n_frames, 0)
+    plan = ground_initial_detections(
+        runtime=runtime, initial_frame=initial_frame, entities=entities,
+        frame_index=0,
+    )
+    n_obj = _count_objects(plan)
+    n_total = len(plan.initial_detections)
+    if n_obj >= 1:
+        attempts.append(GroundingAttempt(0, n_obj, n_total, adopted=True))
+        return 0, initial_frame, plan, attempts
+    attempts.append(GroundingAttempt(0, 0, n_total, adopted=False))
+
+    # Retry frames
+    last_frame = initial_frame
+    last_plan = plan
+    for idx in _compute_retry_frame_indices(n_frames, retry_fractions):
+        try:
+            frame = _extract_frame_at(video_path, n_frames, idx)
+        except OSError:
+            attempts.append(
+                GroundingAttempt(idx, 0, 0, adopted=False, skipped_reason="io_error")
+            )
+            continue
+        plan = ground_initial_detections(
+            runtime=runtime, initial_frame=frame, entities=entities,
+            frame_index=idx,
+        )
+        n_obj = _count_objects(plan)
+        n_total = len(plan.initial_detections)
+        last_frame = frame
+        last_plan = plan
+        if n_obj >= 1:
+            attempts.append(GroundingAttempt(idx, n_obj, n_total, adopted=True))
+            return idx, frame, plan, attempts
+        attempts.append(GroundingAttempt(idx, 0, n_total, adopted=False))
+
+    return None, last_frame, last_plan, attempts
+
+
+def _count_objects(plan: TrackingPlan) -> int:
+    """Count detections with role == 'object' in a TrackingPlan."""
+    return sum(1 for (role, _prompt) in plan.initial_detections if role == "object")
+
+
+# ---------------------------------------------------------------------------
 # Private helpers (spec §2.4.1)
 # ---------------------------------------------------------------------------
+
+
+def _compute_retry_frame_indices(
+    n_frames: int, retry_fractions: list[float],
+) -> list[int]:
+    """Compute clamped, dedup'd retry frame indices (spec §5.3).
+
+    For each frac in retry_fractions:
+      idx = max(0, min(n_frames - 1, int(frac * n_frames)))
+    Filter out frame 0 (the initial attempt is always frame 0) and
+    dedup preserving order.
+
+    Returns [] when n_frames <= 1 (no alternative frames exist) or
+    when retry_fractions is empty.
+    """
+    if n_frames <= 1 or not retry_fractions:
+        return []
+    max_idx = n_frames - 1
+    out: list[int] = []
+    seen: set[int] = {0}  # frame 0 is the initial attempt, exclude
+    for frac in retry_fractions:
+        idx = max(0, min(max_idx, int(frac * n_frames)))
+        if idx in seen:
+            continue
+        seen.add(idx)
+        out.append(idx)
+    return out
 
 
 def _build_frame_iterator(n_frames: int, stride: int) -> list[int]:
@@ -376,6 +525,8 @@ class Propagator:
         stride: int,
         config: TrackingConfig,
         mask_image_size_px: int | None = None,
+        anchor_frame_index: int = 0,
+        propagation_direction: Literal["forward", "both"] = "forward",
     ) -> "tuple[list[Track], MaskCache | None]":
         """Execute propagation per spec §2.4.1.
 
@@ -446,6 +597,8 @@ class Propagator:
             prompts_with_initial_bbox=prompts_with_bbox,
             expected_frames=expected_frames,
             mask_size_hw=mask_size_hw,
+            anchor_frame_index=anchor_frame_index,
+            propagation_direction=propagation_direction,
         )
 
         # Initialize per-prompt state machines
