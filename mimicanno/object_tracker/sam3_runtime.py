@@ -33,7 +33,7 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -514,8 +514,16 @@ class SAM3Runtime:
         prompts_with_initial_bbox: list[tuple[str, BBox]],
         expected_frames: set[int],
         mask_size_hw: tuple[int, int] | None = None,
+        anchor_frame_index: int = 0,
+        propagation_direction: Literal["forward", "both"] = "forward",
     ) -> Iterator[FramePropagationResult]:
         """Propagate tracked objects across a video.
+
+        See spec §5.5 (2026-05-17 grounding retry). When ``anchor_frame_index>0``,
+        the caller has grounded objects at a non-zero video frame; SAM3 must
+        anchor its session there and propagate (typically bidirectionally) to
+        cover [0..N-1] of the video. ``propagation_direction='both'`` is the
+        canonical choice for non-zero anchors.
 
         One sam3 session per prompt — multiple visual bbox prompts in a
         single session would trip sam3's "visual prompt expects exactly one
@@ -525,20 +533,18 @@ class SAM3Runtime:
         single ``FramePropagationResult`` per expected frame.
 
         Args:
-            video_path: filesystem path to the source video (or JPEG dir).
-                sam3 owns the frame loader.
+            video_path: filesystem path to the video.
             prompts_with_initial_bbox: ``[(prompt, initial_bbox), ...]``.
-                The initial bbox seeds tracking at ``frame_index=0``.
-            expected_frames: integer frame indices the caller wants to
-                consume. Frames produced by sam3 outside this set are
-                silently dropped, so the runtime is responsible for
-                materialising every frame sam3 emits but the propagator
-                receives only the strided subset.
+                The bbox is the spatial seed AT ``anchor_frame_index``.
+            expected_frames: frame indices the caller wants emitted.
+            mask_size_hw: optional mask collection size.
+            anchor_frame_index: video frame index where the bbox seed lives.
+                Default 0 preserves pre-2026-05-17 behavior.
+            propagation_direction: "forward" propagates anchor → N-1 only;
+                "both" propagates anchor → N-1 AND anchor → 0.
 
         Yields:
-            ``FramePropagationResult`` for each frame in
-            ``sorted(expected_frames)`` that was reached. ``detections[prompt]``
-            is ``None`` if the tracker lost that prompt for that frame.
+            FramePropagationResult per expected frame reached.
         """
         if self._closed:
             raise RuntimeError("SAM3Runtime is closed")
@@ -568,7 +574,7 @@ class SAM3Runtime:
                 self._predictor.handle_request({
                     "type": "add_prompt",
                     "session_id": sid,
-                    "frame_index": 0,
+                    "frame_index": anchor_frame_index,
                     "obj_id": 0,
                     "text": prompt,
                     "bounding_boxes": [
@@ -580,7 +586,8 @@ class SAM3Runtime:
                 stream = iter(self._predictor.handle_stream_request({
                     "type": "propagate_in_video",
                     "session_id": sid,
-                    "propagation_direction": "forward",
+                    "propagation_direction": propagation_direction,
+                    "start_frame_index": anchor_frame_index,
                 }))
                 prompt_streams.append((prompt, sid, stream))
 

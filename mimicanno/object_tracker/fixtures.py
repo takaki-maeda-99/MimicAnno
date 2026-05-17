@@ -104,6 +104,8 @@ class FixtureSAM3Tracker:
         self.raise_with = raise_with
         self._closed = False
         self._propagate_call_count: int = 0
+        self.last_anchor_frame_index: int = 0
+        self.last_propagation_direction: str = "forward"
 
     @property
     def propagate_call_count(self) -> int:
@@ -172,6 +174,8 @@ class FixtureSAM3Tracker:
         prompts_with_initial_bbox: list[tuple[str, BBox]],
         expected_frames: set[int],
         mask_size_hw: tuple[int, int] | None = None,
+        anchor_frame_index: int = 0,  # accepted, recorded for assertions
+        propagation_direction: str = "forward",  # accepted, recorded
     ) -> Iterator[FramePropagationResult]:
         """Yield canned propagation results for each frame in expected_frames.
 
@@ -199,6 +203,9 @@ class FixtureSAM3Tracker:
             point predictable for tests.
         """
         self._propagate_call_count += 1
+        # Record for test assertions
+        self.last_anchor_frame_index = anchor_frame_index
+        self.last_propagation_direction = propagation_direction
         # documentation; not used. mask_size_hw is accepted to keep the
         # fixture signature in lock-step with SAM3Runtime — tests that
         # exercise mask collection should construct masks directly via
