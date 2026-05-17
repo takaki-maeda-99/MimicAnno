@@ -122,8 +122,8 @@ def run(args: argparse.Namespace) -> None:
         if cap:
             fps = cap.get(cv2.CAP_PROP_FPS) or fps
         fps = fps / max(args.stride, 1)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (out_w_total, out_h))
+        from mimicanno.hand_pipeline.h264_writer import H264VideoWriter
+        writer = H264VideoWriter(out_path, out_w_total, out_h, fps)
 
     try:
         for k, npy_path in enumerate(npy_files):

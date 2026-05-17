@@ -199,23 +199,22 @@ def precompute(args: argparse.Namespace) -> dict:
     if args.save_viz:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from mimicanno.hand_pipeline.pipeline import _back_warp_depth
+        from mimicanno.hand_pipeline.h264_writer import H264VideoWriter
 
         viz_dir = out_dir / "viz"
         viz_dir.mkdir(parents=True, exist_ok=True)
 
         fps_out = float(source_meta.get("fps", 29.97)) / max(args.stride, 1)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
         erp_h, erp_w = pipe.fwd_sz                                 # e.g. (512, 704)
-        erp_writer = cv2.VideoWriter(
-            str(viz_dir / "erp.mp4"), fourcc, fps_out, (erp_w, erp_h))
+        erp_writer = H264VideoWriter(viz_dir / "erp.mp4", erp_w, erp_h, fps_out)
 
         orig_h = int(source_meta.get("height", 1520))
         orig_w = int(source_meta.get("width", 2704))
         fish_w = int(orig_w * args.viz_scale)
         fish_h = int(orig_h * args.viz_scale)
-        fisheye_writer = cv2.VideoWriter(
-            str(viz_dir / "depth_fisheye.mp4"), fourcc, fps_out, (fish_w, fish_h))
+        fisheye_writer = H264VideoWriter(
+            viz_dir / "depth_fisheye.mp4", fish_w, fish_h, fps_out)
 
         vmin, vmax = args.viz_depth_range
         print(f"viz: erp.mp4={erp_w}x{erp_h}  depth_fisheye.mp4={fish_w}x{fish_h}  "
