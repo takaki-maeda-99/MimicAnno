@@ -19,7 +19,7 @@
 | 優先 | ID | 内容 | dispatch 順 | 状態 |
 |---|---|---|---|---|
 | 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | dispatched(`feat/ua-1-catalog-jobs`, base `70a61f2`, agent `aba3901c`, background, 2026-05-17) |
-| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/<episode_id>/` ツリーを RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | **branch pushed (b918c3e)**, PR 未作成 (gh CLI 無し) — master §2.4 を rev3 に書き換え済 (commander 承認、commit `3f484ad`)。code review pass (path-traversal fix 含む 17 件 backend + 12 frontend new test)。手動 PR open 要 |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/<episode_id>/` ツリーを RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | ✅ **merged** (PR #14 → `9cdce19`) — 下表 (完了済み ✅) 参照 |
 | 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 未 |
 | 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | U-A1 待ち |
 | 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | U-A1 待ち |
@@ -43,7 +43,7 @@ Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask 
 | 3. Bbox downgrade | mask やめて bbox 矩形を描く。spec §2.5 の「alpha = mask presence」を「bbox interior」に書き換え | **§2.5 contract 改訂** | 無し | 既存 run でそのまま動く | overlay の意味的価値が下がる (mask の精緻さが失われる) |
 
 **司令塔観点 cross-cut**:
-- **U-A3 も ESCALATED 中** ([[project_ua3_vlm_dumps_schema_drift]]、§2.4 の `*.jsonl` 記述が事実誤認)。master spec §2 / §3 / §6 にもう 1 ラウンド reviewer を入れて L272 + §2.4 + 他類似箇所をまとめて修正するのが効率的かもしれない
+- ~~U-A3 も ESCALATED 中~~ ✅ **解決済** (PR #14 merge `9cdce19`): §2.4 を rev3 に書き換え (commit `3f484ad`)、impl/test/review/merge 完了
 - U-A1 (catalog/jobs) は background 進行中・spec 整合は別問題
 - 選択 1 を採る場合: pipeline.py への追記は U-A1 / U-A2 の job runner / dataset summary territory と微妙に近いが、annotate path に sidecar emit を足すだけなので衝突は小さいはず
 
@@ -144,7 +144,6 @@ Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask 
 | `test/loadable-run-fixture` | `tests/fixtures/loadable_run/` 凍結 + conftest 切替 (5 commit、224 passed) | origin push 済、Opus レビュー APPROVED (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/test/loadable-run-fixture>)。Title `test(fixtures): freeze loadable_run for CI (no real-data dependency)`、body 雛形は `docs/superpowers/plans/2026-05-17-loadable-run-fixture-plan.md` の Summary/Exit criteria 抜粋で十分 |
 | `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
 | `docs/g4-gem4-smoke` | G4 gem4 smoke 結果 (commit `5f8faa2`) | 別セッション、status 確認要 |
-| `feat/ua-3-vlm-panel` | U-A3 VLM dumps viewer (7 commit 含 master §2.4 rev3 + code-review fix)。backend +17 test (254 pass)、frontend +12 vitest (135 pass)、mypy server clean | origin push 済 (`b918c3e`)、自己 code review APPROVED with fixes applied。**§2.4 rev3 を rewrite している点を PR body に明記要** (commander 承認済の commit `3f484ad`)。PR 作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/feat/ua-3-vlm-panel> |
 
 ---
 
@@ -170,6 +169,7 @@ Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask 
 | **G6** | Gemma 4B planner regression (`docs/g-smoke-results`) | `6ca0a43` |
 | **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 (`docs/g-smoke-results`) | `633ca13` |
 | **G8** | UniDAC precompute_depth (`docs/g-smoke-results`) | `158b647` |
+| **U-A3** (2026-05-17) | VLM dumps viewer e2e: backend reader (`mimicanno/server/vlm_dumps.py`) + `GET /api/runs/{c}/vlm_dumps.json` + frontend `VlmPanel` + RunViewer 右スロット統合。master §2.4 を rev3 に書き換え (`*.jsonl` flat 想定 → run-set 直下 `_planner/`+`s_NNN/attempt_M/` ツリー)。code review pass (path-traversal fix 含む)。+17 backend tests (254 pass) / +12 vitest (135 pass) / mypy server strict clean | PR #14 → merge `9cdce19` (main) / spec `docs/superpowers/specs/2026-05-17-ua-3-vlm-panel-design.md` |
 
 結果 note は `docs/superpowers/notes/2026-05-17-{g1,g6,g7,g8}-*-smoke-results.md` 等。各 G の詳細・surprise はそれぞれの note 参照。
 **本セッション D r2 全完了サマリー**: `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`
