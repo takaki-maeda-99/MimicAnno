@@ -19,6 +19,53 @@
 **次ステップ**: PR open は user 判断。`superpowers:finishing-a-development-branch` skill 経由でマージ判定。
 **pre-existing 14 件の TS エラー**: baseline からの残留 (テスト fixtures が古い prop signature)、別チケットでクリーンアップ推奨 (Vitest は影響なし、`tsc -b` のみ fail)。
 
+### PR 作成 (手動・任意の方法で)
+
+- branch は `origin/feat/phase5-d-r2-frontend-timing` に push 済
+- 認証手段が本マシンに無い (gh CLI 未インストール / `GITHUB_TOKEN` 未設定 / `~/.netrc` なし) ため Claude 側から作成不可
+
+**方法 A: ブラウザで作成 (最短)**
+1. <https://github.com/takaki-maeda-99/MimicAnno/pull/new/feat/phase5-d-r2-frontend-timing> を開く
+2. Title:
+   ```
+   Phase 5 D r2: frontend timing regression fixes (3 regressions × 8 tests)
+   ```
+3. Body (以下を貼り付け):
+   ```markdown
+   ## Summary
+   Fixes 3 frontend timing regressions in Phase 5 D r1's `client_edit_duration_ms` instrumentation:
+
+   1. **#2 cross-input contamination** — Replace single `useRef<number|null>` with `useRef<Map<EditKind, number>>` keyed by `"phase"|"reviewed"|"labels"`. Each control's onFocus writes its own slot.
+   2. **#5 focusout t0 discard** — Add `onBlur={() => discardEdit(kind)}` on phase select + reviewed checkbox. Labels are covered by `handleLabelBlur`'s synchronous `consumeEdit("labels")` at function entry (before the no-change early-return and before the await).
+   3. **#6 Date.now non-monotonicity** — Migrate timing-path setter + consumers to `performance.now()` (monotonic DOMHighResTimeStamp).
+
+   Plus a structural refactor: move duration computation from `RunViewer` parent into `SegmentTable` child where focus/blur events fire. The 3 edit callback prop signatures (`onPhaseEdit`/`onReviewedToggle`/`onLabelsEdit`) gain a `clientEditDurationMs: number | null` trailing parameter; `RunViewer` becomes a pure forwarder.
+
+   **Scope: frontend only.** Backend D r2 (label_agreement rename, route schema_version upgrade, server-side duration clamp, EditEvent rich extension) is a separate spec.
+
+   Spec: `docs/superpowers/specs/2026-05-16-phase5-d-r2-frontend-timing-design.md` (rev2)
+   Plan: `docs/superpowers/plans/2026-05-17-phase5-d-r2-frontend-timing-plan.md`
+
+   ## Test plan
+   - [x] 6 new component tests (T1–T6 in `SegmentTable.test.tsx`)
+   - [x] 2 new integration tests (I1, I2 in `RunViewer.integration.test.tsx`) — I2 is load-bearing for the synchronous-capture-before-await contract
+   - [x] 3 existing test assertions updated for new callback arity (`SegmentTable.test.tsx:115`, `reviewed-toggle.test.tsx:95`, `labels-edit.test.tsx:98`)
+   - [x] Full suite: 123/123 passed (115 baseline + 8 new)
+   - [x] `grep -n Date.now` in `RunViewer.tsx` + `SegmentTable.tsx` returns zero hits in timing path
+   - [x] `editStartRef` only present in `SegmentTable.tsx` (the new Map ref); no residual in `RunViewer.tsx`
+   - [ ] Manual smoke: focus phase select → click away (no change) → wait 5s → focus → change → DevTools shows `client_edit_duration_ms` is sub-second, not 5000ms
+
+   ## Out of scope
+   - Boundary drag timing (remains untimed per spec §2.2)
+   - All backend D r2 items
+   - pre-existing 14 件の TS strict エラー (test fixtures の prop 不足、Vitest は通る)
+   ```
+
+**方法 B: Claude に作らせる場合の前準備**
+- 次セッション開始時に `! export GITHUB_TOKEN=ghp_...` で push できる token を渡す
+- または `! sudo apt install gh && gh auth login` で gh CLI を入れる
+- どちらも user 操作 (秘密情報・対話) が必要なので Claude からは起動不可
+
 ---
 
 ## 残タスク (一覧)
