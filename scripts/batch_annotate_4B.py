@@ -141,8 +141,11 @@ def main() -> int:
     vlm_dump_root.mkdir(parents=True, exist_ok=True)
 
     n_ok, n_fail, n_skip = 0, 0, 0
+    # Determine total episode count for progress markers
+    episode_range = range(args.start, end + 1)
+    total_eps = len(episode_range)
     try:
-        for i in range(args.start, end + 1):
+        for i in episode_range:
             ep = f"episode_{i:06d}"
             video = video_dir / f"{ep}.mp4"
             parquet = parquet_dir / f"{ep}.parquet"
@@ -185,6 +188,11 @@ def main() -> int:
                 elapsed = time.time() - t_ep
                 log.info(f"{ep}: OK ({elapsed:.1f}s)")
                 n_ok += 1
+                # U-A1 progress marker — parsed by the job runner
+                print(
+                    f"[mimicanno-job-progress] ep={i} finished={n_ok}/{total_eps}",
+                    flush=True,
+                )
             except Exception as e:
                 log.exception(f"{ep}: FAIL — {e!r}")
                 n_fail += 1

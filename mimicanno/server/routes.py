@@ -38,6 +38,10 @@ from mimicanno.server.labelset import LabelSetCache
 from mimicanno.server.labels_repo import LabelsNoChange, patch_labels
 from mimicanno.server.reviewed_repo import ReviewedNoChange, patch_reviewed
 from mimicanno.server.runs_repo import RunsRepository, list_run_sets
+from mimicanno.server.vlm_dumps import (
+    read_vlm_dumps,
+    resolve_episode_id,
+)
 
 _LOG = logging.getLogger("mimicanno.server")
 
@@ -591,6 +595,72 @@ def make_router(
                 "ETag": f'"{new_run_hash}"',
                 "Cache-Control": "no-cache",
             },
+        )
+
+    # U-A3 — VLM dumps viewer route (master §2.4 rev3).
+    # MUST be registered BEFORE the /api/runs/{name}/{artifact} catch-all
+    # below; otherwise FastAPI's pattern matcher routes
+    # `vlm_dumps.json` through the catch-all and serves bytes from disk
+    # (or 404).
+    @router.get("/api/runs/{canonical}/vlm_dumps.json")
+    def get_vlm_dumps(
+        canonical: str,
+        run_set: str | None = Query(None, alias="run_set"),
+    ) -> Response:
+        if run_set is None:
+            raise MimicAnnoHTTPError(
+                status=400, code="run_set_required",
+                message="run_set query parameter is required",
+            )
+        # Reject "." / ".." explicitly: Path("..").name == ".." and
+        # Path(".").name == "" so the .name-comparison check below catches
+        # "." but NOT ".." (which would let `parent_root / ".."` resolve
+        # to the parent of runs_root and leak existence of files there).
+        if run_set in ("..", ".") or Path(run_set).name != run_set:
+            raise MimicAnnoHTTPError(
+                status=400, code="invalid_run_set",
+                message=f"run_set {run_set!r} is not a direct subdirectory",
+            )
+        run_set_root = parent_root / run_set
+        if not run_set_root.is_dir():
+            raise MimicAnnoHTTPError(
+                status=404, code="run_set_not_found",
+                message=f"run_set {run_set!r} not found",
+            )
+        episode_id = resolve_episode_id(run_set_root, canonical)
+        if episode_id is None:
+            raise MimicAnnoHTTPError(
+                status=404, code="canonical_not_found",
+                message=(
+                    f"canonical {canonical!r} not found in run-set "
+                    f"{run_set!r} index.json"
+                ),
+            )
+        calls = read_vlm_dumps(run_set_root, episode_id)
+        payload = {
+            "canonical": canonical,
+            "run_set": run_set,
+            "episode_id": episode_id,
+            "calls": [
+                {
+                    "call_id": c.call_id,
+                    "kind": c.kind,
+                    "phase": c.phase,
+                    "segment_id": c.segment_id,
+                    "prompt": c.prompt,
+                    "raw_output": c.raw_output,
+                    "parsed": c.parsed,
+                    "failed": c.failed,
+                    "ms": c.ms,
+                    "model_variant": c.model_variant,
+                }
+                for c in calls
+            ],
+        }
+        return Response(
+            content=json.dumps(payload),
+            media_type="application/json",
+            headers={"Cache-Control": "no-cache"},
         )
 
     @router.api_route("/api/runs/{name}/{artifact}", methods=["GET", "HEAD"])

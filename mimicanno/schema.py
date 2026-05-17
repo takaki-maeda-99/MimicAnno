@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 
 @dataclass(slots=True)
@@ -419,6 +419,32 @@ class Manifest:
 _VALID_EDIT_TYPES = frozenset({"relabel", "boundary", "reviewed", "labels"})
 
 
+class _RelabelValue(TypedDict):
+    kind: Literal["relabel"]
+    value: str
+
+
+class _ReviewedValue(TypedDict):
+    kind: Literal["reviewed"]
+    value: bool
+
+
+class _BoundaryValue(TypedDict):
+    kind: Literal["boundary"]
+    value: int
+
+
+class _LabelsValue(TypedDict):
+    kind: Literal["labels"]
+    verb: str | None
+    object: str | None
+    target: str | None
+    failure_flags: list[str]
+
+
+EditValue = _RelabelValue | _ReviewedValue | _BoundaryValue | _LabelsValue
+
+
 @dataclass(slots=True)
 class EditEvent:
     edit_type: str
@@ -426,6 +452,10 @@ class EditEvent:
     edited_at: str  # ISO-8601 UTC with Z
     client_edit_duration_ms: int | None
     reviewer: str | None
+    # Phase 6 additions (optional for back-compat with 0.3.0):
+    old_value: EditValue | None = None
+    new_value: EditValue | None = None
+    pre_edit_overall_confidence: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -436,6 +466,12 @@ class EditEvent:
         }
         if self.client_edit_duration_ms is not None:
             d["client_edit_duration_ms"] = self.client_edit_duration_ms
+        if self.old_value is not None:
+            d["old_value"] = dict(self.old_value)
+        if self.new_value is not None:
+            d["new_value"] = dict(self.new_value)
+        if self.pre_edit_overall_confidence is not None:
+            d["pre_edit_overall_confidence"] = self.pre_edit_overall_confidence
         return d
 
     @classmethod
@@ -453,6 +489,13 @@ class EditEvent:
                 else None
             ),
             reviewer=d.get("reviewer"),
+            old_value=d.get("old_value"),
+            new_value=d.get("new_value"),
+            pre_edit_overall_confidence=(
+                float(d["pre_edit_overall_confidence"])
+                if d.get("pre_edit_overall_confidence") is not None
+                else None
+            ),
         )
 
 

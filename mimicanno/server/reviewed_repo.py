@@ -26,6 +26,7 @@ from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
+from mimicanno.schema import EditValue
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.server.edit_repo import EtagMismatch, InvalidSegment, RunNotFound
 from mimicanno.server.event_builder import build_edit_event
@@ -126,6 +127,10 @@ def patch_reviewed(
         if seg.reviewed == reviewed:
             raise ReviewedNoChange(segment_id=segment_id, reviewed=reviewed)
 
+        # Capture pre-edit reviewed value BEFORE mutation (no-op raised above).
+        old_value: EditValue = {"kind": "reviewed", "value": seg.reviewed}
+        new_value: EditValue = {"kind": "reviewed", "value": reviewed}
+
         # Mutate: flip reviewed; reviewer_id tracks reviewer when marking True.
         new_reviewer_id = reviewer if reviewed else None
         segments[idx] = replace(seg, reviewed=reviewed, reviewer_id=new_reviewer_id)
@@ -140,6 +145,8 @@ def patch_reviewed(
             segment_id=segment_id,
             client_edit_duration_ms=client_edit_duration_ms,
             reviewer=reviewer,
+            old_value=old_value,
+            new_value=new_value,
         )
         new_history = [*annotation.history, event]
         new_annotation = replace(

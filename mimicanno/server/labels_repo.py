@@ -25,6 +25,7 @@ from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
+from mimicanno.schema import EditValue
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.server.edit_repo import EtagMismatch, InvalidSegment, RunNotFound
 from mimicanno.server.event_builder import build_edit_event
@@ -144,6 +145,22 @@ def patch_labels(
         ):
             raise LabelsNoChange(segment_id=segment_id)
 
+        # Capture full 4-field tuple BEFORE mutation (P3: always record all fields).
+        old_value: EditValue = {
+            "kind": "labels",
+            "verb": seg.verb,
+            "object": seg.object,
+            "target": seg.target,
+            "failure_flags": list(seg.failure_flags),
+        }
+        new_value: EditValue = {
+            "kind": "labels",
+            "verb": verb,
+            "object": object_,
+            "target": target,
+            "failure_flags": list(failure_flags),
+        }
+
         # Mutate: update label fields; set label_source, reviewed, reviewer_id.
         segments[idx] = replace(
             seg,
@@ -166,6 +183,8 @@ def patch_labels(
             segment_id=segment_id,
             client_edit_duration_ms=client_edit_duration_ms,
             reviewer=reviewer,
+            old_value=old_value,
+            new_value=new_value,
         )
         new_history = [*annotation.history, event]
         new_annotation = replace(

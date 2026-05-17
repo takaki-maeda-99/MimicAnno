@@ -25,7 +25,7 @@ from mimicanno.io import read_annotation_result, read_manifest
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
-from mimicanno.schema import BoundaryRef
+from mimicanno.schema import BoundaryRef, EditValue
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.smoother import _dedup_consecutive, _recompute_confidence
 from mimicanno.server.boundary_lookup import (
@@ -122,6 +122,11 @@ def patch_boundary(
         n_frames = derive_n_frames(segments)
         validate_new_frame(left, right, new_frame, n_frames)
 
+        # Capture pre-edit canonical boundary frame BEFORE mutation.
+        old_seam_frame = left.end_frame + 1  # invariant: == right.start_frame
+        old_value: EditValue = {"kind": "boundary", "value": old_seam_frame}
+        new_value: EditValue = {"kind": "boundary", "value": new_frame}
+
         # Mutate both segments (spec §3.4).
         fps: float = manifest.fps
         new_end_time = (new_frame - 1) / fps
@@ -168,6 +173,8 @@ def patch_boundary(
             segment_id=boundary_id,
             client_edit_duration_ms=client_edit_duration_ms,
             reviewer=reviewer,
+            old_value=old_value,
+            new_value=new_value,
         )
         new_history = [*annotation.history, event]
         new_annotation = replace(

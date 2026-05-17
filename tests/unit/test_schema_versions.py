@@ -14,11 +14,15 @@ def test_artifact_versions_present():
         "boundaries",
         "signals",
     }
-    # Phase 4 bump: annotation 0.1.0 -> 0.2.0; Phase 5 D bump: 0.2.0 -> 0.3.0.
+    # Phase 4 bump: annotation 0.1.0 -> 0.2.0; Phase 5 D: -> 0.3.0; Phase 6: -> 0.4.0.
+    # Track via constant rather than hardcode to avoid future drift.
     assert ARTIFACT_SCHEMA_VERSIONS["manifest"] == "0.1.0"
-    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.3.0"
+    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.4.0"
     assert ARTIFACT_SCHEMA_VERSIONS["boundaries"] == "0.1.0"
     assert ARTIFACT_SCHEMA_VERSIONS["signals"] == "0.1.0"
+    # Ensure annotation is at least 0.4.0.
+    major, minor, patch = ARTIFACT_SCHEMA_VERSIONS["annotation"].split(".")
+    assert (int(major), int(minor), int(patch)) >= (0, 4, 0)
     for version in ARTIFACT_SCHEMA_VERSIONS.values():
         assert parse_major(version) == 0
 

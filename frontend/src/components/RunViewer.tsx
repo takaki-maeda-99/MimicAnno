@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   artifactUrl,
   assertArtifactSelfConsistent,
@@ -30,6 +30,21 @@ import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import TimelineRuler from "./TimelineRuler";
 import WaveformView from "./WaveformView";
+import VlmPanel from "./VlmPanel";
+import type { SubtaskSegment } from "../lib/manifest";
+
+/** U-A3 — derive the segment containing the given playback time. */
+export function selectSegmentIdByTime(
+  segments: readonly SubtaskSegment[],
+  timeSec: number,
+): string | null {
+  for (const s of segments) {
+    if (timeSec >= s.start_time && timeSec < s.end_time) {
+      return s.segment_id;
+    }
+  }
+  return null;
+}
 
 type ArtifactSlot<T> =
   | { kind: "loading" }
@@ -671,7 +686,45 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           toast={toast}
         />
       )}
+      {apiEnabled && state.data.annotation.kind === "ok" && (
+        <VlmPanelHost
+          apiBase={apiBase}
+          manifestUrl={state.data.manifestUrl}
+          runSet={runSet ?? null}
+          segments={state.data.annotation.data.segments}
+          currentTimeSec={currentTimeSec}
+        />
+      )}
     </div>
+  );
+}
+
+/** U-A3 — memoized wrapper that derives canonical + selectedSegmentId
+ *  once per relevant input change, so VlmPanel does not re-render on
+ *  every playback tick when nothing it cares about has changed. */
+function VlmPanelHost(props: {
+  apiBase: string;
+  manifestUrl: string;
+  runSet: string | null;
+  segments: readonly SubtaskSegment[];
+  currentTimeSec: number;
+}): React.JSX.Element {
+  const { apiBase, manifestUrl, runSet, segments, currentTimeSec } = props;
+  const canonical = useMemo(
+    () => runNameFromManifestUrl(manifestUrl),
+    [manifestUrl],
+  );
+  const selectedSegmentId = useMemo(
+    () => selectSegmentIdByTime(segments, currentTimeSec),
+    [segments, currentTimeSec],
+  );
+  return (
+    <VlmPanel
+      apiBase={apiBase}
+      canonical={canonical}
+      runSet={runSet}
+      selectedSegmentId={selectedSegmentId}
+    />
   );
 }
 
