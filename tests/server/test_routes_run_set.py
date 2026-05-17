@@ -65,18 +65,26 @@ def test_get_index_with_run_set(tmp_parent_runs_root: Path) -> None:
     assert data["schema_version"] == "0.1.0"
 
 
-def test_get_index_no_run_set_legacy(tmp_runs_root: Path) -> None:
-    """Existing legacy behaviour: no ?run_set= still works."""
+def test_get_index_no_run_set_legacy_still_works(tmp_runs_root: Path) -> None:
+    """Legacy: root index.json present → merged response includes its rows tagged '.'."""
     client = _make_client(tmp_runs_root)
     r = client.get("/api/runs/index.json")
     assert r.status_code == 200
+    doc = r.json()
+    # Every row from root index gets run_set='.' in the merged response.
+    for row in doc["runs"]:
+        assert row.get("run_set") == "."
 
 
 def test_get_index_dot_run_set(tmp_runs_root: Path) -> None:
-    """`?run_set=.` is treated as legacy root."""
+    """`?run_set=.` is raw pass-through (legacy clients bookmark stability)."""
     client = _make_client(tmp_runs_root)
     r = client.get("/api/runs/index.json?run_set=.")
     assert r.status_code == 200
+    doc = r.json()
+    # raw pass-through: rows do NOT carry the merge-only run_set field.
+    for row in doc["runs"]:
+        assert "run_set" not in row
 
 
 # ----- T4: GET /api/runs/{name}/{artifact}?run_set= -----
@@ -190,3 +198,46 @@ def test_patch_boundary_with_run_set(
     new_run_hash = r.headers.get("ETag", "").strip('"')
     assert new_run_hash.startswith("sha256:")
     assert new_run_hash != run_hash
+
+
+# ----- T?: merged index for run_set-less requests -----
+
+def test_get_index_no_run_set_multi_mode_merges(
+    tmp_parent_runs_root: Path,
+) -> None:
+    """No ?run_set= in multi-mode → merged response with run_set per row."""
+    for name in ("so101_phase4_v5", "piper_phase4_v5"):
+        idx = tmp_parent_runs_root / name / "index.json"
+        idx.write_text(json.dumps({
+            "schema_version": "0.1.0",
+            "runs": [{
+                "episode_id": "episode_000000",
+                "run_hash": f"sha256:{name[0] * 64}",
+                "run_hash_short": name[0] * 12,
+                "manifest_url": f"episode_000000__{name[0] * 12}/manifest.json",
+                "config_hash_short": "1",
+                "input_hash_short": "2",
+                "task_text": f"task-{name}",
+                "pipeline_phase": 4,
+                "generated_at": "2026-01-01T00:00:00Z",
+            }],
+        }))
+    client = _make_client(tmp_parent_runs_root)
+    r = client.get("/api/runs/index.json")
+    assert r.status_code == 200
+    doc = r.json()
+    by_set = {row["run_set"]: row["task_text"] for row in doc["runs"]}
+    assert by_set == {
+        "so101_phase4_v5": "task-so101_phase4_v5",
+        "piper_phase4_v5": "task-piper_phase4_v5",
+    }
+
+
+def test_get_index_no_run_set_multi_mode_empty(
+    tmp_parent_runs_root: Path,
+) -> None:
+    """Multi-mode with empty per-set indexes still returns 200 + empty runs."""
+    client = _make_client(tmp_parent_runs_root)
+    r = client.get("/api/runs/index.json")
+    assert r.status_code == 200
+    assert r.json() == {"schema_version": "0.1.0", "runs": []}
