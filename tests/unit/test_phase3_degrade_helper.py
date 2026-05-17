@@ -397,3 +397,32 @@ def test_phase3_degrade_pipeline_status_coverage_is_zero() -> None:
     )
     d = ps.to_dict()
     assert d["object_state_segment_coverage"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 9: new 2026-05-17 manifest fields present with default null/empty values
+# ---------------------------------------------------------------------------
+
+
+def test_degrade_manifest_includes_new_fields(tmp_path: Path) -> None:
+    """The 2026-05-17 manifest fields appear with default null/empty values."""
+    episode = synthesize_aloha_episode(tmp_path / "data")
+    result = _call_degrade(episode, tmp_path / "runs", degrade_reason="sam3_init_failed")
+
+    import json
+    manifest = json.loads((result.run_dir / "manifest.json").read_text())
+    ps = manifest["pipeline_status"]
+
+    # adopted_frame_index: None  (no frame adopted on degrade path)
+    assert "adopted_frame_index" in ps, f"adopted_frame_index missing; keys={list(ps)}"
+    assert ps["adopted_frame_index"] is None
+
+    # grounding_attempts: []  (no attempts on pre-grounding degrade)
+    assert "grounding_attempts" in ps, f"grounding_attempts missing; keys={list(ps)}"
+    assert ps["grounding_attempts"] == []
+
+    # mask_overlay_unavailable_frames: 0  (no SAM3 tracking happened)
+    assert "mask_overlay_unavailable_frames" in ps, (
+        f"mask_overlay_unavailable_frames missing; keys={list(ps)}"
+    )
+    assert ps["mask_overlay_unavailable_frames"] == 0

@@ -49,8 +49,10 @@ from mimicanno.io_parquet import (
 from mimicanno.io_video import VideoProbe, materialize_video, probe_video
 from mimicanno.labelset import default_labels_path, load_label_set
 from mimicanno.object_tracker import (
+    GroundingAttempt,
     SAM3Runtime,
     ground_initial_detections,
+    ground_initial_detections_with_retry,
 )
 from mimicanno.object_tracker.planner import (
     EntityPlan,
@@ -263,11 +265,16 @@ def _select_adapter(name: str, config_path: Path | None) -> RobotAdapter:
 # Phase 3 helpers
 # ---------------------------------------------------------------------------
 
-def _extract_initial_frame(video_path: Path, n_frames: int) -> np.ndarray:
-    """Extract frame 0 (with @5% retry) as HxWx3 RGB uint8.
+def _extract_frame_at(
+    video_path: Path, n_frames: int, frame_index: int,
+) -> np.ndarray:
+    """Extract a specific video frame as HxWx3 RGB uint8.
 
-    Per spec §11: try frame 0 first; if read fails, fall back to
-    ``int(0.05 * n_frames)``. Final failure raises MimicAnnoError.
+    For frame_index == 0 only, falls back to ``int(0.05 * n_frames)`` if
+    the read fails (preserving the pre-2026-05-17 frame-0 I/O fallback).
+    For frame_index > 0, a read failure raises ``OSError`` so the retry
+    helper (``ground_initial_detections_with_retry``) can mark the
+    attempt as skipped and continue.
     """
     import imageio_ffmpeg as _iio  # type: ignore[import-untyped]
 
@@ -278,24 +285,48 @@ def _extract_initial_frame(video_path: Path, n_frames: int) -> np.ndarray:
         for i, frame_bytes in enumerate(reader):
             if i == target_index:
                 return np.frombuffer(frame_bytes, dtype=np.uint8).reshape(h, w, 3)
-        raise MimicAnnoError(
-            "video.read_failed",
-            f"no frame at index {target_index}",
-            {"video_path": str(video_path), "target_frame": target_index},
-        )
+        raise OSError(f"no frame at index {target_index}")
 
     try:
-        return _read_frame(0)
-    except Exception:
-        target = int(0.05 * n_frames)
-        try:
-            return _read_frame(target)
-        except Exception as e2:
-            raise MimicAnnoError(
-                "video.initial_frame_failed",
-                f"failed to read frame 0 + 5% fallback: {e2!r}",
-                {"video_path": str(video_path)},
-            ) from e2
+        return _read_frame(frame_index)
+    except Exception as exc:
+        if frame_index == 0:
+            # Preserve the legacy 5% fallback for frame 0 only.
+            target = int(0.05 * n_frames)
+            try:
+                return _read_frame(target)
+            except Exception as e2:
+                raise MimicAnnoError(
+                    "video.initial_frame_failed",
+                    f"failed to read frame 0 + 5% fallback: {e2!r}",
+                    {"video_path": str(video_path)},
+                ) from e2
+        # For retry frames: raise OSError so the caller skips this attempt.
+        raise OSError(
+            f"failed to read frame {frame_index} of {video_path}: {exc!r}"
+        ) from exc
+
+
+# Wire pipeline.py's _extract_frame_at into the object_tracker module so
+# ground_initial_detections_with_retry can call it via monkey-patchable
+# injection. (Avoids a circular import: propagator.py mustn't import
+# pipeline.py directly.)
+import mimicanno.object_tracker.propagator as _propagator_mod
+_propagator_mod._extract_frame_at = _extract_frame_at
+
+
+def _count_missing_mask_frames(
+    mask_cache: "MaskCache | None",
+    segment_keyframes: list[int],
+) -> int:
+    """Count segment keyframes whose mask is missing from the cache.
+
+    Returns 0 when mask_cache is None (overlay not requested) or when all
+    segment keyframes have an entry in mask_cache.by_frame.
+    """
+    if mask_cache is None or not segment_keyframes:
+        return 0
+    return sum(1 for k in segment_keyframes if k not in mask_cache.by_frame)
 
 
 def _compute_image_aspect_ratio(probe: VideoProbe, tracking_config: TrackingConfig) -> float:
@@ -334,6 +365,8 @@ def _degrade_to_phase3_objectless(
         "gemma_no_object_prompts", "sam3_no_initial_detection", "sam3_init_failed",
     ],
     underlying_log: str | None = None,
+    grounding_attempts: list[GroundingAttempt] | None = None,  # NEW
+    adopted_frame_index: int | None = None,  # NEW (degrade → always None)
 ) -> AnnotateResult:
     """Phase 3 whole-run degrade — produces a Phase 3 objectless run (spec §7.2).
 
@@ -450,6 +483,14 @@ def _degrade_to_phase3_objectless(
         degraded_from_phase=3,
         degrade_reason=degrade_reason,
         object_state_segment_coverage=0.0,
+        adopted_frame_index=adopted_frame_index,
+        grounding_attempts=(
+            [a.to_dict() for a in grounding_attempts]
+            if grounding_attempts else []
+        ),
+        # mask_overlay_unavailable_frames is irrelevant in degrade (no
+        # SAM3 tracking happened), but write 0 for schema uniformity.
+        mask_overlay_unavailable_frames=0,
     )
 
     # 9) annotation.notes — exact canonical message, NO underlying_log (PII rule §7.2/§8).
@@ -786,7 +827,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
     # Stage 1b: tracking — Step A → SAM3 load → Step B → Step C
 
     # Extract initial frame (frame 0 with @5% retry)
-    initial_frame = _extract_initial_frame(req.video, n_frames)
+    initial_frame = _extract_frame_at(req.video, n_frames, 0)
 
     # Load shared Gemma instance (バッチモードでは事前ロード済みを再利用)
     vlm_cfg = req.config.vlm
@@ -815,6 +856,7 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             vel_s=vel_s, accel_s=accel_s, action_s=action_s,
             has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
             degrade_reason="gemma_no_object_prompts",
+            grounding_attempts=None, adopted_frame_index=None,
         )
 
     # Step B + C with try/finally for SAM3.close
@@ -848,14 +890,22 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
                 has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
                 degrade_reason="sam3_init_failed",
                 underlying_log=repr(e),
+                grounding_attempts=None, adopted_frame_index=None,
             )
         _owns_sam3_runtime = True
 
     try:
-        plan = ground_initial_detections(
+        (
+            adopted_frame_idx,
+            initial_frame_used,
+            plan,
+            grounding_attempts,
+        ) = ground_initial_detections_with_retry(
             runtime=sam3_runtime,
-            initial_frame=initial_frame,
+            video_path=req.video,
+            n_frames=n_frames,
             entities=entities,
+            retry_fractions=tracking_cfg.grounding_retry_fractions,
         )
         # Check that at least one "object" role was grounded
         object_grounded = [
@@ -875,6 +925,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
                 vel_s=vel_s, accel_s=accel_s, action_s=action_s,
                 has_eef=has_eef, disabled_sources_phase1=disabled_phase1,
                 degrade_reason="sam3_no_initial_detection",
+                grounding_attempts=grounding_attempts,  # NEW
+                adopted_frame_index=None,  # NEW (degrade → no adoption)
             )
         # Task 8 (vlm-mask-overlay): collect SAM3 masks at the keyframe
         # resolution when overlay is enabled so Stage 3 can paint them onto
@@ -895,6 +947,8 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
             stride=stride,
             config=tracking_cfg,
             mask_image_size_px=mask_image_size_px,
+            anchor_frame_index=adopted_frame_idx,
+            propagation_direction="both" if adopted_frame_idx > 0 else "forward",
         )
     finally:
         if _owns_sam3_runtime:
@@ -1071,6 +1125,10 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         degraded_from_phase=(req.config.target_phase if _degraded else None),
         degrade_reason=phase3_outcome.degrade_reason if _degraded else None,
         object_state_segment_coverage=object_state_coverage,
+        adopted_frame_index=adopted_frame_idx,
+        grounding_attempts=[a.to_dict() for a in grounding_attempts],
+        # TODO: count missing mask frames (spec §7.4)
+        mask_overlay_unavailable_frames=0,
     )
     task_info = TaskInfo(text=req.task, version=None)
     generator = GeneratorInfo(

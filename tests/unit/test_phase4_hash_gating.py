@@ -37,8 +37,10 @@ PINNED_PHASE1_HASH = (
 PINNED_PHASE2_HASH = (
     "sha256:6acaaa0420e80822752dbea05b5993f668e3c60de9ec53f1861343b6dc9be182"
 )
+# Phase 3 hash bumped 2026-05-17: TrackingConfig.grounding_retry_fractions added
+# to to_dict() (spec §5.2 / feat+sam3-grounding-retry T1).
 PINNED_PHASE3_HASH = (
-    "sha256:e83f9b9530b95bbfe67fa209dd2c7e30b7f4bf132ce61a3b8301289ef5b30dc9"
+    "sha256:387434f893fb17e27f0caac7ace5db8ed6fb84babec771a39045f885a5b43932"
 )
 
 

@@ -15,6 +15,10 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
+# Sentinel for PipelineStatus fields that are absent on Phase 1/2 manifests.
+# Using a module-level object so it survives pickling and identity checks.
+_UNSET: Any = object()
+
 
 @dataclass(slots=True)
 class TaskInfo:
@@ -64,6 +68,11 @@ class PipelineStatus:
     degraded_from_phase: int | None
     degrade_reason: str | None
     object_state_segment_coverage: float | None = None  # Phase 3 only; absent for Phase 1/2 (§6.3)
+    # 2026-05-17 grounding-retry observability fields (spec §7.4).
+    # Default is _UNSET (absent from to_dict); Phase 3 callers must pass explicit values.
+    adopted_frame_index: Any = field(default_factory=lambda: _UNSET)  # int | None; _UNSET → absent
+    grounding_attempts: Any = field(default_factory=lambda: _UNSET)  # list[dict]; _UNSET → absent
+    mask_overlay_unavailable_frames: Any = field(default_factory=lambda: _UNSET)  # int; _UNSET → absent
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -73,6 +82,12 @@ class PipelineStatus:
         }
         if self.object_state_segment_coverage is not None:
             d["object_state_segment_coverage"] = self.object_state_segment_coverage
+        if self.adopted_frame_index is not _UNSET:
+            d["adopted_frame_index"] = self.adopted_frame_index
+        if self.grounding_attempts is not _UNSET:
+            d["grounding_attempts"] = self.grounding_attempts
+        if self.mask_overlay_unavailable_frames is not _UNSET:
+            d["mask_overlay_unavailable_frames"] = self.mask_overlay_unavailable_frames
         return d
 
 
