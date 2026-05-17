@@ -1,6 +1,7 @@
 import RunList from "./components/RunList";
 import RunViewer from "./components/RunViewer";
 import HandViewer from "./components/HandViewer";
+import JobsBadge from "./components/JobsBadge";
 import DatasetsPage from "./pages/DatasetsPage";
 import JobsPage from "./pages/JobsPage";
 import { ApiToggleProvider } from "./lib/ApiToggleContext";
@@ -30,5 +31,24 @@ export default function App() {
     ) : (
       <RunList runSet={runSet} />
     );
-  return <ApiToggleProvider apiEnabled={apiEnabled}>{inner}</ApiToggleProvider>;
+  return (
+    <ApiToggleProvider apiEnabled={apiEnabled}>
+      <div data-testid="app-root">
+        <header
+          data-testid="app-header"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            padding: "4px 12px",
+            borderBottom: "1px solid #dee2e6",
+            minHeight: 36,
+          }}
+        >
+          <JobsBadge />
+        </header>
+        <main>{inner}</main>
+      </div>
+    </ApiToggleProvider>
+  );
 }
