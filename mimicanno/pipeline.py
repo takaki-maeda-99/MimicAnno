@@ -51,7 +51,6 @@ from mimicanno.labelset import default_labels_path, load_label_set
 from mimicanno.object_tracker import (
     GroundingAttempt,
     SAM3Runtime,
-    ground_initial_detections,
     ground_initial_detections_with_retry,
 )
 from mimicanno.object_tracker.planner import (
