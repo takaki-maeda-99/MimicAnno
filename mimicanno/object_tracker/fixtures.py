@@ -88,12 +88,16 @@ class FixtureSAM3Tracker:
         self,
         *,
         initial_detections: dict[str, list[tuple[BBox, float]]] | None = None,
+        initial_detections_by_frame: dict[
+            int, dict[str, list[tuple[BBox, float]]]
+        ] | None = None,
         propagation_results: dict[int, dict[str, tuple[BBox, float] | None]] | None = None,
         raise_on_load: Exception | None = None,
         raise_on_propagate_at_frame: int | None = None,
         raise_with: Exception | None = None,
     ) -> None:
         self.initial_detections = initial_detections or {}
+        self.initial_detections_by_frame = initial_detections_by_frame or {}
         self.propagation_results = propagation_results or {}
         self.raise_on_load = raise_on_load
         self.raise_on_propagate_at_frame = raise_on_propagate_at_frame
@@ -138,16 +142,27 @@ class FixtureSAM3Tracker:
         self,
         frame: np.ndarray,
         prompt: str,
+        *,
+        frame_index: int | None = None,
     ) -> list[tuple[BBox, float]]:
         """Return canned detections for a prompt on the given frame.
 
+        When ``frame_index`` is provided and ``initial_detections_by_frame``
+        has an entry for that frame, look up there. Otherwise fall back to
+        the legacy ``initial_detections`` dict (treated as frame-agnostic).
+
         Args:
             frame: ignored (test double does not process images)
-            prompt: the prompt string (used as dict key in initial_detections)
+            prompt: the prompt string (used as dict key)
+            frame_index: optional; if provided, look up by frame
 
         Returns:
-            list of (BBox, score) tuples, or empty list if prompt not found.
+            list of (BBox, score) tuples, or empty list if not found.
         """
+        if frame_index is not None and self.initial_detections_by_frame:
+            return self.initial_detections_by_frame.get(frame_index, {}).get(
+                prompt, []
+            )
         return self.initial_detections.get(prompt, [])
 
     def propagate(  # type: ignore[override]
