@@ -661,3 +661,47 @@ describe("D r2 timing — performance.now() migration", () => {
     dateSpy.mockRestore();
   });
 });
+
+describe("RunViewer merged-mode reload (no ?run_set= in URL)", () => {
+  it("uses selected entry's run_set for manifest + artifact fetches", async () => {
+    // Reload at /?api=1&run=ep0&hash=aaaaaaaa (no &run_set=).
+    // Backend returns a merged index where the entry has run_set='so101_phase4_v5'.
+    // Manifest + artifact fetches must thread that run_set, not the (absent) URL one.
+    const MERGED_INDEX = {
+      ...INDEX_DOC,
+      runs: [{ ...INDEX_DOC.runs[0], run_set: "so101_phase4_v5" }],
+    };
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url ?? input.toString();
+      if (url.endsWith("/api/runs/index.json")) return jsonResp(MERGED_INDEX);
+      if (url.includes("/manifest.json")) return jsonResp(MANIFEST);
+      if (url.includes("/annotation.json")) return jsonResp(ANNOTATION);
+      if (url.includes("/boundaries.json")) return jsonResp(BOUNDARIES);
+      if (url.includes("/signals.json")) return jsonResp(SIGNALS);
+      if (url.endsWith("/api/labelset")) return jsonResp(LABELSET);
+      if (url.includes("/vlm_dumps.json")) return jsonResp({ calls: [] });
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    render(
+      <ApiToggleProvider apiEnabled={true}>
+        <RunViewer episodeId="ep0" runHashShort="aaaaaaaa" />
+      </ApiToggleProvider>,
+    );
+
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([u]) =>
+        typeof u === "string" ? u : (u as Request).url ?? u.toString(),
+      );
+      // Manifest fetch carries run_set from the entry (not from URL).
+      const manifestCall = urls.find((u) => u.includes("manifest.json"));
+      expect(manifestCall).toBeDefined();
+      expect(manifestCall).toContain("run_set=so101_phase4_v5");
+      // Annotation fetch likewise threaded.
+      const annotationCall = urls.find((u) => u.includes("annotation.json"));
+      expect(annotationCall).toBeDefined();
+      expect(annotationCall).toContain("run_set=so101_phase4_v5");
+    });
+  });
+});

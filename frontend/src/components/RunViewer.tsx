@@ -55,6 +55,7 @@ type Loaded = {
   selection: RunSelection;
   manifest: Manifest;
   manifestUrl: string;
+  runSet: string | undefined;
   annotation: ArtifactSlot<AnnotationResult>;
   boundaries: ArtifactSlot<BoundariesDoc>;
   signals: ArtifactSlot<SignalsDoc>;
@@ -146,6 +147,10 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
       };
     }
     const data = state.data;
+    const dataRunSetQs =
+      data.runSet && data.runSet !== "."
+        ? `?run_set=${encodeURIComponent(data.runSet)}`
+        : "";
     const durationMs = clientEditDurationMs;
     setEditInFlight(true);
     setToast(undefined);
@@ -158,7 +163,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         segmentId,
         newPhase,
         ifMatchRunHash: data.manifest.run_hash,
-        runSet,
+        runSet: data.runSet,
         clientEditDurationMs: durationMs,
       });
       if (result.kind === "ok") {
@@ -194,7 +199,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          ) + runSetQs;
+          ) + dataRunSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -271,6 +276,10 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ): Promise<void> => {
     if (state.kind !== "loaded") return;
     const data = state.data;
+    const dataRunSetQs =
+      data.runSet && data.runSet !== "."
+        ? `?run_set=${encodeURIComponent(data.runSet)}`
+        : "";
     setBoundaryPatchInFlight(true);
     setToast(undefined);
     try {
@@ -281,7 +290,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         boundaryId,
         newFrame,
         ifMatchRunHash: data.manifest.run_hash,
-        runSet,
+        runSet: data.runSet,
       });
       if (result.kind === "ok") {
         const newManifest = { ...data.manifest, run_hash: result.runHash };
@@ -306,7 +315,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          ) + runSetQs;
+          ) + dataRunSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -346,6 +355,10 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
+    const dataRunSetQs =
+      data.runSet && data.runSet !== "."
+        ? `?run_set=${encodeURIComponent(data.runSet)}`
+        : "";
     const reviewedDurationMs = clientEditDurationMs;
     setReviewedPatchInFlight(true);
     setToast(undefined);
@@ -358,7 +371,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         segmentId,
         reviewed: newReviewed,
         ifMatchRunHash: data.manifest.run_hash,
-        runSet,
+        runSet: data.runSet,
         clientEditDurationMs: reviewedDurationMs,
       });
       if (result.kind === "ok") {
@@ -372,7 +385,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          ) + runSetQs;
+          ) + dataRunSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -414,6 +427,10 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
+    const dataRunSetQs =
+      data.runSet && data.runSet !== "."
+        ? `?run_set=${encodeURIComponent(data.runSet)}`
+        : "";
     const labelsDurationMs = clientEditDurationMs;
     setLabelsPatchInFlight(true);
     setToast(undefined);
@@ -429,7 +446,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         target: labels.target,
         failure_flags: labels.failure_flags,
         ifMatchRunHash: data.manifest.run_hash,
-        runSet,
+        runSet: data.runSet,
         clientEditDurationMs: labelsDurationMs,
       });
       if (result.kind === "ok") {
@@ -455,7 +472,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           const annUrl = resolveUrl(
             data.manifestUrl,
             artifactUrl(newManifest, "annotation"),
-          ) + runSetQs;
+          ) + dataRunSetQs;
           const r = await fetchRetry(annUrl);
           if (r.ok) {
             const ann = (await r.json()) as AnnotationResult;
@@ -518,11 +535,20 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         }
         const entry = selection.kind === "single" ? selection.entry : selection.chosen;
 
+        // Prefer per-entry run_set (merged-mode response); fall back to URL ?run_set=.
+        // This is what makes artifact fetches resolve to the right run-set subdir
+        // when the user reloads at /?api=1&run=...&hash=... without &run_set=.
+        const effectiveRunSet = entry.run_set ?? runSet;
+        const effectiveRunSetQs =
+          effectiveRunSet && effectiveRunSet !== "."
+            ? `?run_set=${encodeURIComponent(effectiveRunSet)}`
+            : "";
+
         const manifestUrl = resolveUrl(
           new URL(`${apiBase}index.json`, window.location.origin).toString(),
           entry.manifest_url,
         );
-        const manifestResp = await fetchRetry(manifestUrl + runSetQs, { signal: controller.signal });
+        const manifestResp = await fetchRetry(manifestUrl + effectiveRunSetQs, { signal: controller.signal });
         const manifest = (await manifestResp.json()) as Manifest;
 
         assertConsumerCapability(manifest, SUPPORTED_MAJORS);
@@ -532,6 +558,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           selection,
           manifest,
           manifestUrl,
+          runSet: effectiveRunSet,
           annotation: { kind: "loading" },
           boundaries: { kind: "loading" },
           signals: { kind: "loading" },
@@ -553,7 +580,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           role: "annotation" | "boundaries" | "signals",
         ) => {
           try {
-            const url = resolveUrl(manifestUrl, artifactUrl(manifest, role)) + runSetQs;
+            const url = resolveUrl(manifestUrl, artifactUrl(manifest, role)) + effectiveRunSetQs;
             const r = await fetch(url, { signal: controller.signal });
             if (!r.ok) {
               updateSlot(role, { kind: "error", message: `failed to load ${role}: HTTP ${r.status}` });
@@ -591,7 +618,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     })();
 
     return () => controller.abort();
-  }, [episodeId, runHashShort, apiBase, runSetQs]);
+  }, [episodeId, runHashShort, apiBase, runSetQs, runSet]);
 
   if (state.kind === "loading") return <div>loading…</div>;
   if (state.kind === "error") return <div className="error">{state.message}</div>;
@@ -613,6 +640,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
     );
   }
   const { selection, manifest } = state.data;
+  // Per-entry run_set drives artifact URLs in the loaded state (merged-mode reload).
+  const dataRunSetQs =
+    state.data.runSet && state.data.runSet !== "."
+      ? `?run_set=${encodeURIComponent(state.data.runSet)}`
+      : "";
   return (
     <div className="run-viewer">
       <div className="back-link">
@@ -630,7 +662,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         {state.data.videoError !== null
           ? <div className="error">{state.data.videoError}</div>
           : <VideoPlayer
-              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video")) + runSetQs}
+              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video")) + dataRunSetQs}
               currentTimeSec={currentTimeSec}
               onTimeChange={setCurrentTimeSec}
               onError={setVideoError}
@@ -690,7 +722,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         <VlmPanelHost
           apiBase={apiBase}
           manifestUrl={state.data.manifestUrl}
-          runSet={runSet ?? null}
+          runSet={state.data.runSet ?? null}
           segments={state.data.annotation.data.segments}
           currentTimeSec={currentTimeSec}
         />
