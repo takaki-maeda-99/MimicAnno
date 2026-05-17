@@ -36,6 +36,7 @@ from mimicanno.labelset import LabelSet
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
+from mimicanno.schema import EditValue
 from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.smoother import _recompute_confidence
 from mimicanno.server.event_builder import build_edit_event
@@ -201,11 +202,16 @@ def apply_edit(
         annotation.segments[idx] = new_seg
 
         # Step 6-8: write annotation → manifest → index atomically.
+        old_value: EditValue = {"kind": "relabel", "value": old_seg.phase}
+        new_value: EditValue = {"kind": "relabel", "value": new_seg.phase}
         event = build_edit_event(
             edit_type="relabel",
             segment_id=segment_id,
             client_edit_duration_ms=client_edit_duration_ms,
             reviewer=reviewer,
+            old_value=old_value,
+            new_value=new_value,
+            pre_edit_overall_confidence=old_seg.overall_confidence,
         )
         new_history = [*annotation.history, event]
         annotation = replace(
