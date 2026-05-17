@@ -118,7 +118,7 @@ def _capture_reviewer(monkeypatch: pytest.MonkeyPatch) -> dict:
     can read after invoking the CLI."""
     captured: dict = {}
 
-    def fake_create_app(*, runs_root, cors_origins, reviewer=None, labelset=None, hands_root=None, repo_root=None):
+    def fake_create_app(*, runs_root, cors_origins, reviewer=None, labelset=None, hands_root=None, repo_root=None, jobs_dir=None, data_root=None, num_gpus=1):
         captured["reviewer"] = reviewer
         return "fake_app"
 

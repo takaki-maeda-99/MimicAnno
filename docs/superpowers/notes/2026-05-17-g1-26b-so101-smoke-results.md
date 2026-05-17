@@ -78,3 +78,127 @@ VLM segment 推論 (`s_001/attempt_1/response.txt`) も `{"phase": "idle", "verb
 - **G1 26B SO101 PASS (実機 mechanics)** — 80GB GPU で 26B variant が end-to-end で動作することを実機確認。前回 TODO の「26B は VRAM 不足で別ホスト」は「80GB GPU が必要、本ホスト GPU 1 で OK」に更新。
 - 4B vs 26B の **annotation richness 比較は config gap で incomplete** — `run_26B_so101.sh` 修正後に再走で fair compare 可能。
 - planner 出力 (`tracking_plan` レベル) のみで見ると **26B は slot 振り分け+語彙具体性で 4B より良い** 兆候あり (1 サンプル所見、gem4 chain で再評価)。
+
+---
+
+## 2026-05-17 追記: config gap fix (Python side) shipped
+
+**Branch**: `fix/26b-config-gap` (worktree `.claude/worktrees/26b-config-gap/`)
+**Commit**: `b17dd21 fix(batch_annotate): load per-dataset boundary/smoother YAML via existing CLI loaders`
+
+### 変更内容
+
+`scripts/batch_annotate.py` の `BoundaryConfig.with_defaults()` / `SmootherConfig()` を per-dataset YAML 読み込みに切替。SO101 entry に 2 YAML 指定 (sibling shell `run_26B_so101.sh` 同等)。gem4 は None で default fallback (現走行影響なし)。
+
+5 unit tests (`tests/test_batch_annotate_yaml_loading.py`):
+- SO101 entry が両 YAML を declare
+- gem4 entries は None 維持
+- `load_boundary_config_yaml` が `zero_crossing.enabled=True` を返す (default は False)
+- `load_smoother_config_yaml` が `gripper_zero_crossing` を preserve_sources に持つ (default は持たない)
+- `main()` の config 構築 snippet 等価 path で同等値が AnnotationConfig に届く
+
+TDD red 確認: fix なしで 4/5 fail、ありで 5/5 pass。
+
+### End-to-end 26B SO101 smoke は GPU 制約で deferred
+
+本セッション時点で全 4 GPU が RTX A6000 49 GiB。26B は ~52 GiB 必要 → どの GPU でも OOM。検証 run (`/tmp/g1_smoke_26b_v2/`, GPU=3) は load 中で kill (exit 143)。
+
+**次に検証する条件**:
+- 80GB GPU (A100 等) 確保時、または
+- gem4 26B chain 完了後にいずれかの A6000 が空き、かつ 26B が他経路 (例: 4B でも段組検証として) で代替可能なら 4B vs 4B+YAML 比較として実施
+
+**Logical 検証は完了**: 4B 経路 (`scripts/batch_so101_phase4_v5.sh`) が同じ `load_*_yaml` を経由して proven に segments を生成しているため、YAML が AnnotationConfig まで届けば downstream pipeline は identical に振る舞う (本テストで届くこと verify 済)。
+
+### gem4 への波及
+
+gem4 boundary/smoother YAML はまだ書かれていないため、gem4 entries は None のまま (default fallback)。gem4 出力が degenerate に見える場合は別途 gem4-specific YAML を author する必要がある (将来 task)。
+
+---
+
+## 2026-05-17 追記: Re-run (GPU 0, config fix 効果検証) ✅
+
+**Branch**: main (commit `7625a05` の `scripts/run_26B_so101.sh` 修正で十分、batch_annotate.py 側 fix は不要)
+**Run root**: `/tmp/g1_smoke_26b_v2/`
+**GPU**: 0 (A100 80GB)、別 GPU 上の gem4 chain と完全独立
+**Wall clock**: ep0=286s (load 込み), ep1=172s, total **458s (~7.6 min)** for 2 ep
+**VRAM peak**: ep0=55,177 MiB / ep1=55,056 MiB (90% threshold 73,728 まで余裕 18 GiB、watchdog kill 発火せず)
+
+### 結果サマリ
+
+| 指標 | v1 (config gap) | v2 (config fix) | 4B G3 比較 |
+|---|---|---|---|
+| ep0 segments | **1** (idle) | **5** | 4B 5 と一致 ✅ |
+| ep0 boundaries | 0 | 4 | 4B 4 と一致 ✅ |
+| ep1 segments | **1** (idle) | **4** | 4B 4 と一致 ✅ |
+| ep1 boundaries | 0 | 3 | 4B 3 と一致 ✅ |
+
+**config fix で boundary detector が正しく working、segments 数は 4B と完全一致** (boundary は VLM 非依存、signals 由来なので)。
+
+### 4B vs 26B label 品質比較 (ep0)
+
+| frame range | 4B phase | 4B verb | 26B v2 phase | 26B v2 verb |
+|---|---|---|---|---|
+| [0-19] | approach_object | None | **idle** | None |
+| [20-49] | approach_object | None | approach_object | **approach** |
+| [50-87] | approach_object | None | **grasp_object** | **grasp** |
+| [88-98] | approach_object | None | **align_to_target** | **align** |
+| [99-150] | place_object | place | **release_object** | **release** |
+
+→ 26B は **(a) verb 全付き、(b) 物理的に正しい phase 順序 (idle→approach→grasp→align→release)、(c) "release_object" vs "place_object" でより具体的**。4B は 4 セグ全て `approach_object` で潰す傾向 (G3 ep1 R2_DEGENERATE と同じ問題)。
+
+### ep1 (4B も degenerate なケース)
+
+| frame range | 4B phase | 26B v2 phase | 26B v2 verb |
+|---|---|---|---|
+| [0-29] | approach_object | align_to_target | align |
+| [30-55] | approach_object | align_to_target | align |
+| [56-90] | approach_object | align_to_target | align |
+| [91-150] | approach_object | release_object | release |
+
+→ 4B は完全 degenerate (4 セグ全 `approach_object` verb=None)。26B も 3 セグ同一 (`align`) だが、最後 `release` で動作変化を検出 + verb 全付き。**26B 6 セグ中 26B のほうが degenerate 度低い**。
+
+### 結論
+
+- `scripts/run_26B_so101.sh` の boundary/smoother config 追加 (commit `7625a05`) は **期待通り効いた** — segment 数は 4B と完全一致、label 品質は明確に向上。
+- v1 で観察された 「segments=1 idle」は config gap が単独原因で、26B planner 自体は健全 (本 v2 で実証)。
+- 別セッション (b17dd21) の `batch_annotate.py` 側 YAML loader fix は **SO101 検証には不要だった** (shell script fix で十分)。ただし将来 gem4 用 boundary/smoother YAML を書いたとき、batch_annotate.py 経由でも届くようになる前置き fix として価値あり。
+- TODO の「`run_26B_so101.sh` config gap」中優先タスクは本検証で **完了済へ移動可能**。
+
+---
+
+## 2026-05-17 追記 (3): batch_annotate.py 経路 E2E smoke ✅
+
+**Branch**: `fix/26b-config-gap` (worktree `.claude/worktrees/26b-config-gap/`, commit `b17dd21`)
+**Run root**: `/tmp/fix-26bcg-smoke/`
+**GPU**: 0 (A100 80GB)
+**Wall clock**: ~4 min (load+ep0 ~2.5 min, ep1 OK at +90.7s)
+**VRAM peak**: 66,421 MiB (v2 per-ep 55 GiB より +11 GiB、Unsloth long-lived state 由来、73,728 threshold 余裕)
+
+### 結果
+
+| 指標 | v2 (run_26B_so101.sh, per-ep restart) | v3 (batch_annotate.py, long-lived) |
+|---|---|---|
+| ep0 segments | 5 | **5** ✅ |
+| ep0 boundaries | 4 | **4** ✅ |
+| ep1 segments | 4 | **4** ✅ |
+| ep1 boundaries | 3 | **3** ✅ |
+| VRAM peak | 55,177 MiB | 66,421 MiB |
+| Wall (2 ep) | 7.6 min | ~4 min (load 1 回のみ) |
+
+### 4B vs 26B v3 ep1 比較 (v2 ep1 がやや degenerate だった ep)
+
+| frame range | 4B G3 phase | 26B v3 phase | 26B v3 verb |
+|---|---|---|---|
+| [0-29] | approach_object | approach_object | approach |
+| [30-55] | approach_object | align_gripper | align |
+| [56-90] | approach_object | move_to_target | move |
+| [91-150] | approach_object | **place_object** | place |
+
+→ **v3 ep1 は v2 ep1 より意味的に良い** (approach→align→move→place の物理的に正しい順序)。planner non-determinism のため per-call で品質に揺れあり。
+
+### 結論
+
+- `fix/26b-config-gap` branch (b17dd21) の `batch_annotate.py` 修正は **期待通り動作** — boundary/smoother YAML が AnnotationConfig まで届き、`run_26B_so101.sh` 経路と segment/boundary 数が完全一致。
+- batch_annotate.py 経路は **モデル load 1 回**で複数 ep を回せるので、chain run (gem4 26B 728 ep 等) で wall clock メリット大 (4 min/2ep vs 7.6 min/2ep)。
+- **merge ready**: branch を origin にプッシュ + PR 作成可能。本 smoke が exit criteria を満たした。
+- gem4 entries は依然 `boundary_config=None` (default fallback) — gem4 専用 YAML 作成は別 task (TODO 残)。
