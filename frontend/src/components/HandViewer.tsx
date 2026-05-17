@@ -8,6 +8,7 @@ import type {
 import { projectHandAxes, drawAxes } from "../lib/handAxes";
 import HandScrubBar from "./HandScrubBar";
 import HandSignalGraph from "./HandSignalGraph";
+import DepthWithKeypoints from "./DepthWithKeypoints";
 
 const AXIS_LENGTH_M = 0.05;
 
@@ -127,6 +128,7 @@ function formatTime(sec: number): string {
 type LoadedState = {
   meta: HandMetaDoc;
   signals: HandSignalsDoc;
+  depthVideoReady: boolean;
 };
 
 type State =
@@ -279,12 +281,16 @@ export default function HandViewer({ episodeId }: Props) {
         const meta = (await metaR.json()) as HandMetaDoc;
         const signals = (await sigR.json()) as HandSignalsDoc;
 
-        if (signals.schema_version !== 2) {
+        if (signals.schema_version !== 3) {
           if (!cancelled) setState({ kind: "signals-bad-version" });
           return;
         }
 
-        if (!cancelled) setState({ kind: "loaded", data: { meta, signals } });
+        if (!cancelled)
+          setState({
+            kind: "loaded",
+            data: { meta, signals, depthVideoReady: !!epEntry.depth_video_ready },
+          });
       } catch (err) {
         if (!cancelled)
           setState({
@@ -313,7 +319,7 @@ export default function HandViewer({ episodeId }: Props) {
     );
   if (state.kind === "error") return <div className="error">{state.message}</div>;
 
-  const { meta, signals } = state.data;
+  const { meta, signals, depthVideoReady } = state.data;
   const fps = meta.video_fps;
   const totalFrames = meta.video_total_frames;
   const currentFrame = Math.min(
@@ -350,7 +356,7 @@ export default function HandViewer({ episodeId }: Props) {
         <a href="/">← runs</a>
       </div>
       <div className="hand-viewer-layout">
-        <div className="hand-viewer-video" ref={rowRef}>
+        <div className="hand-viewer-left" ref={rowRef}>
           <VideoWithAxes
             videoUrl={`${HANDS_API_BASE}${episodeId}/video`}
             currentTimeSec={currentTimeSec}
@@ -389,7 +395,21 @@ export default function HandViewer({ episodeId }: Props) {
             onSeek={(f) => fps > 0 && setCurrentTimeSec(f / fps)}
           />
         </div>
-        <div className="hand-viewer-data">
+        <div className="hand-viewer-right">
+          {depthVideoReady ? (
+            <DepthWithKeypoints
+              videoUrl={`${HANDS_API_BASE}${episodeId}/depth_video`}
+              currentTimeSec={currentTimeSec}
+              onTimeChange={setCurrentTimeSec}
+              onError={setVideoError}
+              videoWidth={videoW}
+              videoHeight={videoH}
+              rightHand={rightHand}
+              leftHand={leftHand}
+            />
+          ) : (
+            <div className="depth-unavailable">深度動画が見つかりません</div>
+          )}
           <HandDataPanel frameKey={frameKey} signals={signals} />
         </div>
       </div>

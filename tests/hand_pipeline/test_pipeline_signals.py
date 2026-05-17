@@ -1,4 +1,4 @@
-"""Tests for _generate_signals() v2 format (--full-signals)."""
+"""Tests for _generate_signals() v3 format (--full-signals)."""
 from __future__ import annotations
 
 import json
@@ -29,6 +29,7 @@ class _FakeHandEstimate:
     wrist_depth_m: Optional[float]
     pinch_distance_m: Optional[float]
     depth_interpolated: bool = False
+    joints_2d: np.ndarray = field(default_factory=lambda: np.zeros((21, 2), dtype=np.float32))
 
 
 def _identity_orient() -> np.ndarray:
@@ -72,14 +73,30 @@ def _make_frame_results(
 
 
 # ---------------------------------------------------------------------------
-# v2 tests
+# v3 tests
 
-def test_v2_schema_version(tmp_path):
+def test_v3_schema_version_and_joints_2d(tmp_path):
     results = _make_frame_results(3)
     out = tmp_path / "signals.json"
     _generate_signals(list(range(3)), results, out, sigma=0.0, full=True)
     data = json.loads(out.read_text())
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
+    # Verify joints_2d is present and well-formed in the first non-null hand entry
+    for k, v in data.items():
+        if not k.startswith("frame_"):
+            continue
+        for side in ("right", "left"):
+            h = v.get(side)
+            if h is None:
+                continue
+            assert "joints_2d" in h
+            j = h["joints_2d"]
+            assert isinstance(j, list) and len(j) == 21
+            for pt in j:
+                assert isinstance(pt, list) and len(pt) == 2
+                assert all(isinstance(x, (int, float)) for x in pt)
+            return
+    raise AssertionError("no non-null hand entry found")
 
 
 def test_v2_cam_t_shape(tmp_path):
@@ -191,7 +208,7 @@ def test_v1_both_undetected_drops_key(tmp_path):
 # --signals-only integration
 
 def test_signals_only_cli(tmp_path):
-    """run_signals_only reads existing pkls and writes v2 signals.json."""
+    """run_signals_only reads existing pkls and writes v3 signals.json."""
     from scripts.run_hand_estimation import run_signals_only
 
     frames_dir = tmp_path / "frames"
@@ -215,7 +232,7 @@ def test_signals_only_cli(tmp_path):
     run_signals_only(args)
 
     data = json.loads((tmp_path / "signals.json").read_text())
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert "frame_000000" in data
 
 

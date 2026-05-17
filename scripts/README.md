@@ -107,7 +107,7 @@ hamer/.hamer/bin/python scripts/run_hand_estimation.py \
 | `--rescale-factor` | 2.0 | HaMeR ViTDet bbox expansion factor |
 | `--batch-size` | 8 | HaMeR DataLoader batch size |
 | `--pinch-smooth-sigma` | 2.0 | Gaussian smoothing sigma [frames] for `signals.json` |
-| `--full-signals` | off | Write schema_version 2 `signals.json` with `cam_t` + `euler_deg` |
+| `--full-signals` | off | Write schema_version 3 `signals.json` with `cam_t` + `euler_deg` + `joints_2d` |
 | `--signals-only` | off | Skip HaMeR; regenerate `signals.json` from existing `.pkl` files |
 
 Runs are resumable: `.pkl` files that already exist are loaded and skipped in Pass 1 (depth interpolation is skipped for those frames since raw HaMeR output is not cached).
@@ -124,7 +124,7 @@ Runs are resumable: `.pkl` files that already exist are loaded and skipped in Pa
 }
 ```
 
-`value` is the Gaussian-smoothed `pinch_distance_m` in metres. `depth_ok` is `true` when `wrist_depth_m` is available. Frames where neither hand was detected are omitted. With `--full-signals`, schema_version 2 adds `cam_t` and `euler_deg` per hand.
+`value` is the Gaussian-smoothed `pinch_distance_m` in metres. `depth_ok` is `true` when `wrist_depth_m` is available. Frames where neither hand was detected are omitted. With `--full-signals`, schema_version 3 adds `cam_t`, `euler_deg`, and `joints_2d` (21 keypoints in source-image pixel coords) per hand.
 
 ---
 

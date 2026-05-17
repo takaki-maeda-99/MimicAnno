@@ -210,7 +210,7 @@ def _generate_signals(
     """Write signals.json.
 
     full=False (default): schema_version 1 — pinch distance only (key "value").
-    full=True: schema_version 2 — pinch_m, cam_t, euler_deg, depth_ok per hand.
+    full=True: schema_version 3 — pinch_m, cam_t, euler_deg, depth_ok, joints_2d per hand.
       - All frames where a hand is detected are written; both-hands-undetected
         frames emit {"right": null, "left": null} (key is NOT dropped).
       - cam_t and euler_deg are present for every detected hand regardless of
@@ -255,7 +255,7 @@ def _generate_signals(
 
     if full:
         from scipy.spatial.transform import Rotation
-        out: dict = {"schema_version": 2}
+        out: dict = {"schema_version": 3}
         for i, fi in enumerate(frame_indices):
             key = f"frame_{fi:06d}"
             hands = frame_results.get(fi, [])
@@ -268,6 +268,8 @@ def _generate_signals(
                 if h is None:
                     return None
                 arr = Rotation.from_matrix(h.global_orient.astype(float)).as_euler("ZYX", degrees=True)
+                j2d = h.joints_2d  # (21, 2) float ndarray in source-image px
+                joints_2d = [[round(float(j2d[i, 0]), 1), round(float(j2d[i, 1]), 1)] for i in range(21)]
                 return {
                     "pinch_m": round(float(pinch_smooth), 6) if np.isfinite(pinch_smooth) else None,
                     "cam_t": [round(float(v), 6) for v in h.cam_t],
@@ -277,6 +279,7 @@ def _generate_signals(
                         "roll": round(float(arr[2]), 3),
                     },
                     "depth_ok": h.wrist_depth_m is not None,
+                    "joints_2d": joints_2d,
                 }
 
             out[key] = {
@@ -699,7 +702,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--signals-only", action="store_true",
                     help="skip HaMeR estimation; regenerate signals.json from existing frames/*.pkl")
     ap.add_argument("--full-signals", action="store_true",
-                    help="write schema_version 2 signals.json with cam_t + euler_deg (default: v1 pinch-only)")
+                    help="write schema_version 3 signals.json with cam_t + euler_deg + joints_2d (default: v1 pinch-only)")
     ap.set_defaults(save_viz=True)
     return ap
 
