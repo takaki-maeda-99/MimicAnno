@@ -49,7 +49,7 @@ Non-goals:
        └─ stdout/stderr → .mimicanno-jobs/<id>.log    │
                           ┌───────────────────────────┘
                           │
-   runs/<rs>/<can>/_vlm_dumps/*.jsonl ──▶ GET /api/runs/{canonical}/vlm_dumps.json     (U-A3)
+   runs/<rs>/_vlm_dumps/<episode_id>/  ──▶ GET /api/runs/{canonical}/vlm_dumps.json     (U-A3)
    runs/<rs>/<can>/tracks.json (+masks) ──▶ GET /api/runs/{canonical}/masks/{frame}.png (U-A4)
 ```
 
@@ -218,24 +218,38 @@ DELETE /api/jobs/{job_id}
 
 ### 2.4 VLM dumps (U-A3)
 
+> **rev3 (2026-05-17)** — §2.4 was rewritten after on-disk inspection during U-A3 dispatch (commander-approved). The original spec assumed a flat `*.jsonl` layout under each canonical; reality is a directory tree under the **run-set** keyed by source `episode_id`. See U-A3 sub-spec for full reconciliation notes.
+
 FastAPI's `{artifact}` in the catch-all `GET /api/runs/{name}/{artifact}` (at `mimicanno/server/routes.py` — grep `\"/api/runs/{name}/{artifact}\"` since line numbers drift) matches *any* string including `vlm_dumps.json`. The `.json` / `.png` suffix is for human readability; **disambiguation is purely by router registration order**. U-A3 backend MUST register this route **before** the catch-all.
 
 ```
 GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (see §2.0)
 → 200 application/json
 {
-  "canonical": "episode_000000__...",
+  "canonical": "episode_000000__e35061106394",
   "run_set": "so101_phase4_v5",
+  "episode_id": "episode_000000",
   "calls": [
-    { "call_id": "call_0001",
-      "phase": "approach_object",
-      "segment_id": 0,
-      "prompt": "Describe the action ...",
-      "raw_output": "{\"verb\": \"approach\", ...}",
-      "parsed": { "verb": "approach", "object": "tape_roll", ... },
+    { "call_id": "_planner/call_000",
+      "kind": "planner",
+      "phase": null,
+      "segment_id": null,
+      "prompt": "...",
+      "raw_output": "{\"objects\": [\"tape\", \"bottle\"], ...}",
+      "parsed": { "objects": ["tape", "bottle"], "targets": [], "tools": [] },
       "failed": false,
-      "ms": 1240,
-      "model_variant": "4B" },
+      "ms": null,
+      "model_variant": null },
+    { "call_id": "s_001/attempt_1",
+      "kind": "segment",
+      "phase": "approach_object",
+      "segment_id": "s_001",
+      "prompt": "...",
+      "raw_output": "{\"phase\":\"approach_object\",\"vlm_confidence\":0.9,...}",
+      "parsed": { "phase": "approach_object", "verb": null, "object": "tape", "target": null, "vlm_confidence": 0.9, "evidence": "..." },
+      "failed": false,
+      "ms": null,
+      "model_variant": null },
     ...
   ]
 }
@@ -243,7 +257,19 @@ GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (
 → 404 if (run_set, canonical) does not resolve to a run dir
 ```
 
-Reads `runs/<rs>/<canonical>/_vlm_dumps/*.jsonl`. Missing dir (`_vlm_dumps/` not present, but run dir is) → empty `calls`.
+**Path resolution:** the dumps live at the **run-set** level, NOT under each canonical. To find them:
+
+1. Read `runs/<rs>/index.json`; find the entry whose `manifest_url` is `<canonical>/manifest.json` and read its `episode_id` field.
+2. Walk `runs/<rs>/_vlm_dumps/<episode_id>/`. Two kinds of subdirs:
+   - `_planner/call_NNN/` — emit one Call with `kind="planner"`, `segment_id=null`, `phase=null`. Files: `prompt.txt`, `response.txt` (JSON), `frame.png`.
+   - `s_NNN/attempt_M/` — emit one Call per **highest-numbered** `attempt_M` directory (earlier attempts are retries; expose only the final one). `kind="segment"`, `segment_id="s_NNN"`, `phase=parsed["phase"]` if parseable else `null`. Files: `prompt.txt`, `request.json`, `response.txt`, `keyframe_*.png`.
+3. Missing `_vlm_dumps/<episode_id>/` dir → empty `calls` (200, not 404).
+4. `parsed` is `json.loads(response.txt)` if it parses, else `null`. `failed` is `true` if `response.txt` is missing OR `parsed is null` for a segment call.
+5. `ms` and `model_variant` are nullable — neither is stored on disk in the current pipeline. Reserved for a future writer-side enrichment.
+
+Call list ordering: planner calls first (sorted by call_NNN), then segment calls (sorted by segment_id then attempt_M). The frontend uses `segment_id` for highlight match against the selected segment.
+
+**Image bytes (frame.png / keyframe_*.png) are NOT served by this endpoint** in rev3. A follow-up endpoint may be added; for now the panel renders text-only.
 
 ### 2.5 SAM3 masks (U-A4)
 
@@ -304,7 +330,7 @@ Each sub-project below is a separate scope. The first row of each lists who depe
 - **Depends on:** §2.4 (independent of jobs / catalog).
 - **Owns:** `/api/runs/{canonical}/vlm_dumps` backend; RunViewer right side-panel "VLM" tab.
 - **In scope:**
-  - Read `_vlm_dumps/*.jsonl`, return as JSON.
+  - Walk run-set-scoped `_vlm_dumps/<episode_id>/` tree (see §2.4 rev3), aggregate planner + segment calls into JSON.
   - Frontend tab inside RunViewer that lists calls, highlights the one matching the currently selected segment, shows prompt + raw + parsed.
 - **Out of scope:** editing the dumps, re-running the planner. Read-only.
 - **Size:** small. Fully parallel with U-A1.
