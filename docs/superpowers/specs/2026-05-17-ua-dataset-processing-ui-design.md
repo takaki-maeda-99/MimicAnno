@@ -49,8 +49,10 @@ Non-goals:
        └─ stdout/stderr → .mimicanno-jobs/<id>.log    │
                           ┌───────────────────────────┘
                           │
-   runs/<rs>/<can>/_vlm_dumps/*.jsonl ──▶ GET /api/runs/{canonical}/vlm_dumps.json     (U-A3)
-   runs/<rs>/<can>/tracks.json (+masks) ──▶ GET /api/runs/{canonical}/masks/{frame}.png (U-A4)
+   runs/<rs>/_vlm_dumps/<episode_id>/{_planner/call_NNN, s_NNN/attempt_M}/ ──▶
+                                          GET /api/runs/{canonical}/vlm_dumps.json     (U-A3)
+   runs/<rs>/<can>/_masks/<frame>.png ──▶ GET /api/runs/{canonical}/masks/{frame}.png (U-A4)
+   (_masks/ is a pre-baked sidecar written at annotate time; rev3 §3.4)
 ```
 
 Job submission and progress are the only stateful additions. Catalog, summary, vlm_dumps, and masks are pure read-side over existing filesystem artifacts.
@@ -216,9 +218,28 @@ DELETE /api/jobs/{job_id}
 → 204     // cancels if running; deletes record if done. SIGTERM the subprocess.
 ```
 
-### 2.4 VLM dumps (U-A3)
+### 2.4 VLM dumps (U-A3) — rev3 (corrected to match on-disk reality)
 
 FastAPI's `{artifact}` in the catch-all `GET /api/runs/{name}/{artifact}` (at `mimicanno/server/routes.py` — grep `\"/api/runs/{name}/{artifact}\"` since line numbers drift) matches *any* string including `vlm_dumps.json`. The `.json` / `.png` suffix is for human readability; **disambiguation is purely by router registration order**. U-A3 backend MUST register this route **before** the catch-all.
+
+**On-disk reality (NOT `*.jsonl` files — rev2 was wrong):**
+
+```
+runs/<rs>/_vlm_dumps/<episode_id>/
+├── _planner/
+│   └── call_NNN/                          # planner = one call per episode that proposes objects/targets
+│       ├── prompt.txt
+│       ├── response.txt                   # JSON: {"objects":[...],"targets":[...],"tools":[...]}
+│       └── frame.png                      # single keyframe used as visual context
+└── s_NNN/                                 # labeler = one segment, N=ordinal (0-based, ints zero-padded)
+    └── attempt_M/                         # M >= 1, retries when last attempt rejected
+        ├── prompt.txt
+        ├── request.json                   # rich context: task_text, allowed_labels, segment_id, robot_state_summary, last_reject_reason, ...
+        ├── response.txt                   # JSON: {"phase","verb","object","target","vlm_confidence","evidence"}
+        └── keyframe_NN.png                # one to multiple keyframes (NN = 00..03 typical)
+```
+
+**Important: dumps are keyed by `episode_id`, NOT canonical hash dir.** Multiple canonical runs of the same episode (e.g., re-annotates with different config_hash) within one run_set share the same `_vlm_dumps/<episode_id>/` tree, and **the latest annotate overwrites earlier dumps**. Backend resolves canonical → episode_id via that canonical's `manifest.json` (`episode_id` field).
 
 ```
 GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (see §2.0)
@@ -226,35 +247,60 @@ GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (
 {
   "canonical": "episode_000000__...",
   "run_set": "so101_phase4_v5",
+  "episode_id": "episode_000000",
   "calls": [
-    { "call_id": "call_0001",
-      "phase": "approach_object",
-      "segment_id": 0,
-      "prompt": "Describe the action ...",
-      "raw_output": "{\"verb\": \"approach\", ...}",
-      "parsed": { "verb": "approach", "object": "tape_roll", ... },
-      "failed": false,
-      "ms": 1240,
-      "model_variant": "4B" },
+    { "kind": "planner",
+      "call_id": "call_001",
+      "attempt": 1,
+      "prompt": "...",                     // prompt.txt contents
+      "raw_output": "{\"objects\":[...],\"targets\":[...],\"tools\":[...]}",  // response.txt contents
+      "parsed": { "objects": [...], "targets": [...], "tools": [...] },       // parsed if JSON valid, else null
+      "failed": false,                     // planner never has multi-attempt; always false
+      "frame_url": "/runs/<rs>/_vlm_dumps/<episode_id>/_planner/call_001/frame.png" },
+    { "kind": "labeler",
+      "call_id": "s_000__attempt_1",       // composite of segment ordinal + attempt
+      "segment_ordinal": 0,                // int derived from "s_NNN" dir name (0-based); maps to annotation.segments[ordinal]
+      "attempt": 1,
+      "prompt": "...",
+      "request_json": { ... },             // request.json contents (parsed)
+      "raw_output": "{\"phase\":\"approach_object\",\"verb\":\"approach\",...}",
+      "parsed": { "phase": "approach_object", "verb": "approach", "object": "tape_roll", "vlm_confidence": 0.87, "evidence": "..." },
+      "failed": false,                     // true iff there exists a later attempt_M+1 dir for same s_NNN
+      "keyframe_urls": ["/runs/<rs>/_vlm_dumps/<episode_id>/s_000/attempt_1/keyframe_00.png",
+                        "/runs/<rs>/_vlm_dumps/<episode_id>/s_000/attempt_1/keyframe_01.png"] },
     ...
   ]
 }
 → 400 if run_set query param is missing
 → 404 if (run_set, canonical) does not resolve to a run dir
+→ 200 with empty `calls` if `_vlm_dumps/<episode_id>/` is absent (run was annotated without VLM dump capture)
 ```
 
-Reads `runs/<rs>/<canonical>/_vlm_dumps/*.jsonl`. Missing dir (`_vlm_dumps/` not present, but run dir is) → empty `calls`.
+**Field derivation notes:**
 
-### 2.5 SAM3 masks (U-A4)
+- `segment_ordinal = int(s_NNN_dir_name.split("_")[1])` (zero-padded ints). Maps to `annotation.segments[ordinal]` order — this is the in-memory order at planner time, NOT the same as `segment_id` after later smoother / human edits (which can reorder via splits/merges). Frontend MUST cross-reference by matching the segment's `phase`/`verb`/timing rather than relying on `segment_ordinal == segment_id` blindly.
+- `failed` for labeler: `True` iff a later `attempt_(M+1)/` exists for the same `s_NNN`. Backend sorts attempts numerically and sets `failed=True` on all but the highest-numbered.
+- `request_json` for labeler is the parsed `request.json` content. Optional (omit on planner kind).
+- Removed from rev2: `ms`, `model_variant`, `phase` (as top-level field), `segment_id` (as raw int). `parsed.phase` and `parsed.verb` for labeler calls expose the same info.
+
+Backend reader walks `runs/<rs>/_vlm_dumps/<episode_id>/`. Reads each `prompt.txt`/`response.txt`/`request.json` (best-effort: malformed JSON → `parsed: null`, missing file → empty string). Sorts planner calls by `call_id` numeric, then labeler entries by `(segment_ordinal, attempt)`.
+
+### 2.5 SAM3 masks (U-A4) — rev3 (pre-bake confirmed; 204 semantics unified)
 
 Same situation as §2.4: catch-all matches anything, so U-A4 backend MUST register these routes **before** the catch-all. The `.png` / `.json` suffixes are for human readability only.
+
+**On-disk reality:** `tracks.json.samples[]` contains only `{bbox, frame, score, time_sec}` — **no RLE / polygon**. Per-frame masks DO exist in code (`mimicanno/object_tracker/propagator.py` populates `MaskCache.by_frame` during annotate) but are transient and discarded after `vlm_overlay` consumption. Rev3 mandates **pre-baking**: U-A4 amends the annotate pipeline to persist the masks as a sidecar PNG dir (see §3.4).
+
+**Sidecar location:** `runs/<rs>/<canonical>/_masks/<frame>.png` (per-canonical, NOT shared like `_vlm_dumps/`).
 
 ```
 GET /api/runs/{canonical}/masks/{frame}.png?run_set=<rs>   // run_set REQUIRED
 → 200 image/png         (RGBA, alpha = mask presence × per-track color)
 → 400 if run_set query param is missing or frame is not a non-negative int
-→ 404 if (run_set, canonical) does not resolve, or no tracks.json
-→ 204 if frame is in range but has no tracked objects
+→ 404 if (run_set, canonical) does not resolve to a run dir
+→ 204 if (a) run dir has no `_masks/` sidecar (pre-rev3 / non-pre-baked run), OR
+            (b) frame is in range but has no tracked objects in that frame.
+            (i.e., 204 always means "valid query but no overlay content"; 404 only for path-resolution errors.)
 ```
 
 ```
@@ -262,14 +308,17 @@ GET /api/runs/{canonical}/masks/meta.json?run_set=<rs>     // run_set REQUIRED
 → 200 application/json
 { "canonical": "episode_000000__...",
   "run_set": "so101_phase4_v5",
-  "frame_count": 151,
+  "frame_count": 151,                       // 0 if `_masks/` absent (legacy run)
   "tracks": [{ "track_id": "t0", "label": "tape_roll", "color": "#ff8800",
-               "first_frame": 12, "last_frame": 140 }] }
+               "first_frame": 12, "last_frame": 140 }] }   // [] if `_masks/` absent
 → 400 if run_set query param is missing
 → 404 if (run_set, canonical) does not resolve to a run dir
+                                          // NOTE: legacy runs without `_masks/` return 200 with empty fields
+                                          // (consistent with §2.4 empty-`calls` behavior). Frontend can branch on
+                                          // `frame_count == 0` to disable the overlay control.
 ```
 
-Implementation detail (U-A4 decides): on-the-fly rasterization from `tracks.json` polygons / RLE, or pre-bake to a sidecar PNG dir at annotate time. The contract is the same either way. If pre-bake is chosen, the sidecar location is `runs/<rs>/<canonical>/_masks/<frame>.png` and U-A4 amends the annotate pipeline to write it.
+**Backfill**: existing runs (annotated before rev3) lack `_masks/`. The contract gracefully returns 204 / empty-meta for those. A backfill CLI is a follow-up TODO (see §5).
 
 ## 3. Sub-projects
 
@@ -302,22 +351,24 @@ Each sub-project below is a separate scope. The first row of each lists who depe
 ### 3.3 U-A3. VLM dumps viewer
 
 - **Depends on:** §2.4 (independent of jobs / catalog).
-- **Owns:** `/api/runs/{canonical}/vlm_dumps` backend; RunViewer right side-panel "VLM" tab.
+- **Owns:** `/api/runs/{canonical}/vlm_dumps.json` backend; RunViewer right side-panel "VLM" tab.
 - **In scope:**
-  - Read `_vlm_dumps/*.jsonl`, return as JSON.
-  - Frontend tab inside RunViewer that lists calls, highlights the one matching the currently selected segment, shows prompt + raw + parsed.
-- **Out of scope:** editing the dumps, re-running the planner. Read-only.
-- **Size:** small. Fully parallel with U-A1.
+  - Walk `runs/<rs>/_vlm_dumps/<episode_id>/` tree (resolving canonical → episode_id via the canonical's `manifest.json`), parse each `_planner/call_NNN/` and `s_NNN/attempt_M/` directory per §2.4, return the assembled `calls[]`. Static `.png` file paths under `_vlm_dumps/` are served by the existing run-artifact route or a sibling static handler — U-A3 chooses (no new HTTP surface beyond §2.4).
+  - Frontend tab inside RunViewer that lists calls, highlights the labeler call whose parsed phase/verb matches the currently selected segment (NOT by raw `segment_ordinal`; see §2.4 derivation note), shows prompt + raw + parsed + keyframe thumbnails.
+- **Out of scope:** editing the dumps, re-running the planner. Read-only. Image serving may be deferred to a follow-up if the existing static route doesn't cover `_vlm_dumps/*.png`.
+- **Size:** small-medium. Fully parallel with U-A1.
 
-### 3.4 U-A4. SAM3 mask overlay
+### 3.4 U-A4. SAM3 mask overlay — rev3 (pre-bake confirmed)
 
 - **Depends on:** §2.5 (independent).
-- **Owns:** `/api/runs/{canonical}/masks` (+ `/masks/meta`) backend; canvas overlay component inside VideoPlayer.
-- **In scope:**
-  - Decide and implement: rasterize-on-the-fly OR pre-bake at annotate-time. The contract returns PNGs either way; if pre-bake is chosen, also amend the annotate pipeline to write the sidecar.
-  - Frontend: track-color legend, per-track toggle, alpha control.
-- **Out of scope:** editing masks. Read-only.
-- **Size:** medium (rasterization design judgment required). Fully parallel with U-A1.
+- **Owns:** `/api/runs/{canonical}/masks/{frame}.png` + `/masks/meta.json` backend; canvas overlay component inside `VideoPlayer.tsx` (child slot only).
+- **In scope (mandatory):**
+  - **Annotate-pipeline amendment**: persist `MaskCache.by_frame` (populated in `mimicanno/object_tracker/propagator.py`, currently transient and consumed by `mimicanno/pipeline.py:881-998` `vlm_labeler` overlay) as `<canonical>/_masks/<frame>.png` (RGBA, alpha = mask presence × per-track palette color). Write site: post-mask_cache collection, pre-Stage 3 return. **Writes MUST go through the existing atomic-publish flow in `mimicanno/publish.py`** (write into temp scratch, then move into the published rundir) — never stream PNGs into the live dir.
+  - Backend route reads `_masks/<frame>.png` directly (no on-the-fly rasterization).
+  - `meta.json` derived from `tracks.json` (track ids + labels + first_frame/last_frame) plus enumeration of `_masks/*.png` for `frame_count`.
+  - Frontend: track-color legend, per-track toggle, alpha control. Canvas overlay child of `VideoPlayer.tsx`.
+- **Out of scope:** editing masks. On-the-fly rasterization (rev2 alternative dropped). Backfill of legacy runs (separate follow-up; see §5).
+- **Size:** medium. The pipeline amendment is the bulk of the work; legacy runs return 204 / empty-meta (§2.5) so frontend degrades gracefully.
 
 ### 3.5 U-A5. Site-wide progress indicator
 
@@ -354,13 +405,14 @@ U-A3 and U-A4 can technically start before U-A1 finishes (they only depend on th
 - **Re-annotate guard:** `POST /api/jobs` rejects (409 Conflict) when the target `(run_set, canonical)` already exists on disk and the existing manifest's `run_hash` would match. To re-annotate, the user picks a different `run_set`. This prevents races with PATCH writers on the existing run.
 - **Log size:** subprocess output is appended to `.mimicanno-jobs/<id>.log`. `log_tail` returns last 200 lines; full log via `/log` route.
 - **Test strategy:** backend uses existing `tests/server/conftest.py::tmp_runs_root_loadable` + new tmp `data/` fixtures. Frontend follows D r2 timing-test pattern (vitest + jsdom workarounds where needed).
-- **Schema:** none of §2.1–§2.5 introduces new on-disk schema fields. If U-A4 chooses pre-bake, sidecar directory `_masks/` is documented at sub-project time.
+- **Schema (rev3):** `_masks/<frame>.png` sidecar is the only new on-disk artifact (added by U-A4 to the annotate pipeline; no annotation.json / manifest.json field added). `_vlm_dumps/` layout is unchanged — rev3 only corrects the spec's description to match what the planner has been writing all along.
+- **Legacy-run backfill (follow-up TODO, not blocking U-A4):** a `mimicanno backfill-masks <run>` CLI to retroactively populate `_masks/` for runs annotated before rev3. Without it, the mask overlay silently degrades to 204 / empty-meta on pre-rev3 runs (graceful per §2.5). Track this as `U-A4-followup-backfill` in the project TODO; the U-A4 sub-Claude does NOT need to ship it.
 
 ## 6. Exit criteria (overall U-A initiative)
 
 1. From `/datasets` a user can pick a dataset, click "Annotate", select robot+pipeline+ep subset, submit, and watch the job complete in `/jobs`.
 2. After the job finishes, the resulting runs show up under `/runs` immediately.
-3. From RunViewer the user sees the VLM panel (U-A3) and the SAM3 mask overlay (U-A4) for the current ep. (Mechanism: VLM panel fetches on segment selection change; mask overlay fetches per frame on time cursor change. No global push needed — each sub-spec pins its own trigger.)
+3. From RunViewer the user sees the VLM panel (U-A3) and the SAM3 mask overlay (U-A4) for the current ep. (Mechanism: VLM panel fetches on segment selection change; mask overlay fetches per frame on time cursor change. Legacy pre-rev3 runs degrade gracefully — VLM empty `calls` if `_vlm_dumps/` absent, mask 204 / empty-meta if `_masks/` absent.)
 4. `/datasets/<name>` shows the dataset summary dashboard (U-A2).
 5. The header badge (U-A5) reflects running-job count at most a few seconds out of date.
 6. No regression in existing GET / PATCH routes or RunViewer behavior.
