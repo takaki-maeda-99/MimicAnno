@@ -36,6 +36,7 @@ from mimicanno.labelset import LabelSet
 from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
+from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.smoother import _recompute_confidence
 from mimicanno.server.event_builder import build_edit_event
 from mimicanno.server.write_txn import write_run_atomically
@@ -207,7 +208,12 @@ def apply_edit(
             reviewer=reviewer,
         )
         new_history = [*annotation.history, event]
-        annotation = replace(annotation, run_hash=new_run_hash, history=new_history)
+        annotation = replace(
+            annotation,
+            run_hash=new_run_hash,
+            history=new_history,
+            schema_version=ARTIFACT_SCHEMA_VERSIONS["annotation"],
+        )
         manifest = replace(
             manifest,
             run_hash=new_run_hash,

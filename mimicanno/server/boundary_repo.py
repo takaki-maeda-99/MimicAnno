@@ -26,6 +26,7 @@ from mimicanno.locks import file_lock
 from mimicanno.rundir import CANONICAL_SEPARATOR
 from mimicanno.runindex import IndexRow
 from mimicanno.schema import BoundaryRef
+from mimicanno.schema_versions import ARTIFACT_SCHEMA_VERSIONS
 from mimicanno.smoother import _dedup_consecutive, _recompute_confidence
 from mimicanno.server.boundary_lookup import (
     BoundaryIsTimelineEdge,
@@ -169,7 +170,13 @@ def patch_boundary(
             reviewer=reviewer,
         )
         new_history = [*annotation.history, event]
-        new_annotation = replace(annotation, segments=segments, run_hash=new_run_hash, history=new_history)
+        new_annotation = replace(
+            annotation,
+            segments=segments,
+            run_hash=new_run_hash,
+            history=new_history,
+            schema_version=ARTIFACT_SCHEMA_VERSIONS["annotation"],
+        )
         new_manifest = replace(manifest, run_hash=new_run_hash, edited_at=_now_iso())
 
         suffix_len = len(name) - len(manifest.episode_id) - len(CANONICAL_SEPARATOR)
