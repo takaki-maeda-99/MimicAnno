@@ -46,6 +46,8 @@ for i in $(seq "$START" "$END"); do
         --target-phase 4 --offline \
         --vlm-model "$VLM_MODEL" --vlm-device cuda \
         --sam3-checkpoint "$SAM3" --runs-root "$RUNS_ROOT" --force \
+        --boundary-config "$REPO/mimicanno/configs/boundary/so101_zero_crossing.yaml" \
+        --smoother-config "$REPO/mimicanno/configs/smoother/so101_zc_preserve.yaml" \
         > "$LOG" 2>&1; then
         echo "[gpu=$GPU] $EP: OK $(date +%H:%M:%S)"
     else

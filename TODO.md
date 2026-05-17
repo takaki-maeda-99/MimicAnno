@@ -1,4 +1,4 @@
-# TODO (2026-05-17 現在)
+# TODO (2026-05-17 14:15 現在)
 
 **Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green。次窓を開ける場合はユーザー判断。
 
@@ -10,10 +10,10 @@
 |---|---|---|---|
 | 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。詳細: `docs/superpowers/notes/2026-05-16-phase5-autonomy-exit-summary.md` |
 | 低 | **Phase 5 E (そのうち)** | (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs、(C) read-only Python client `mimicanno.client` | MimicRec 配置待ち。本リポ完結部分のみ着手可 |
-| 中 | **G3 再走** | autonomy exit e2e sanity (`.venv` torch vs driver mismatch で前回停止) | env 整合待ち。1 回回ったので緊急性は低 |
 | 低 | **G7 full-ep 再走** | G8 `--limit` 無しで全フレーム depth 生成 → HAMER 再走で `cam_t` metric anchoring 確認 | 初回 PARTIAL の follow-up。優先度低 |
 | 低 | **`_vlm_dumps` schema 変化対応** | per-call dir 構造化されたので SFT loader ([[project_gemma_ft_pipeline]]) が読めるか確認 | G6 で判明 |
-| 低 | **26B variant 別ホスト** | RTX A6000 48GB では VRAM 不足。VRAM 余裕ホスト確保後 | G1 残課題 |
+| 中 | **`run_26B_so101.sh` config gap** | `--boundary-config so101_zero_crossing.yaml` + `--smoother-config so101_zc_preserve.yaml` を追加 → 26B vs 4B annotation richness fair compare | G1 26B SO101 再走で boundaries=0 → segments=1 idle が判明 (planner 品質ではなく config gap)。詳細: `docs/superpowers/notes/2026-05-17-g1-26b-so101-smoke-results.md` |
+| 中 | **gem4 26B chain 結果検証** | pick_up_bottle / replace_the_cookie / open_the_jar (PID 82185, GPU 1) 完了後に 4B (`runs/gem4_*_4B/`) と比較 | 実行中。`scripts/batch_annotate.py` 側も boundary-config gap がないか要確認 |
 | 低 | gem4 設定整理 | `mimicanno/configs/robot/gem4_*.yaml` × 3 の clean-up | docs/別 PR |
 
 ### 後始末
@@ -27,6 +27,7 @@
 
 | branch | 内容 | 状態 |
 |---|---|---|
+| `test/loadable-run-fixture` | `tests/fixtures/loadable_run/` 凍結 + conftest 切替 (5 commit、224 passed) | origin push 済、Opus レビュー APPROVED (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/test/loadable-run-fixture>)。Title `test(fixtures): freeze loadable_run for CI (no real-data dependency)`、body 雛形は `docs/superpowers/plans/2026-05-17-loadable-run-fixture-plan.md` の Summary/Exit criteria 抜粋で十分 |
 | `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
 | `docs/g4-gem4-smoke` | G4 gem4 smoke 結果 (commit `5f8faa2`) | 別セッション、status 確認要 |
 
@@ -48,6 +49,8 @@
 | **G1** | batch_annotate 4B smoke (SAM3 runtime 共有 + `BATCH_RUNS_ROOT`) | `3b6899e` etc. (origin/main 済) |
 | **G2** | Phase 5 D SO101 v5 UI smoke (17 events × 4 edit types) | autonomy exit 内 |
 | **G3** | autonomy exit e2e sanity (SO101 3 ep) | `runs/g3_smoke_20260516_2252/` |
+| **G3 再走** (2026-05-17) | 同条件再現性 PASS、wall 4.5 min (前回 5.5 min)、planner 出力 deterministic 一致 | `runs/g3_smoke_20260517_1353/` / note `2026-05-17-g3-rerun-results.md` |
+| **G1 26B SO101** (2026-05-17) | A100 80GB で 26B mechanics PASS (VRAM 52 GiB)、2 ep × 7 min。planner 品質は 4B より良い兆候 (bottle→targets, gripper 具体化) | `/tmp/g1_smoke_26b/` / note `2026-05-17-g1-26b-so101-smoke-results.md` |
 | **G6** | Gemma 4B planner regression (`docs/g-smoke-results`) | `6ca0a43` |
 | **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 (`docs/g-smoke-results`) | `633ca13` |
 | **G8** | UniDAC precompute_depth (`docs/g-smoke-results`) | `158b647` |
