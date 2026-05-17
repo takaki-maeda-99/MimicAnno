@@ -88,9 +88,6 @@ export default function RunList({ runSet }: Props = {}) {
     };
   }, []);
 
-  // run-set param for navigation links — preserves current run_set selection.
-  const runSetNav = runSet && runSet !== "." ? `&run_set=${encodeURIComponent(runSet)}` : "";
-
   const showSwitcher = apiEnabled && runSets.length > 1;
 
   if (state.kind === "loading") return <div>loading…</div>;
@@ -133,24 +130,34 @@ export default function RunList({ runSet }: Props = {}) {
         <thead>
           <tr>
             <th>episode</th>
+            <th>run_set</th>
             <th>run_hash</th>
             <th>generated_at</th>
             <th>task</th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((e) => (
-            <tr key={`${e.episode_id}__${e.run_hash}`}>
-              <td>
-                <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}${apiSuffix}${runSetNav}`}>
-                  {e.episode_id}
-                </a>
-              </td>
-              <td><code>{e.run_hash_short}</code></td>
-              <td>{e.generated_at}</td>
-              <td>{e.task_text}</td>
-            </tr>
-          ))}
+          {sorted.map((e) => {
+            // Prefer row-level run_set (merged-mode); fall back to global runSet.
+            const rowRunSet = e.run_set ?? runSet;
+            const rowRunSetNav =
+              rowRunSet && rowRunSet !== "."
+                ? `&run_set=${encodeURIComponent(rowRunSet)}`
+                : "";
+            return (
+              <tr key={`${e.episode_id}__${e.run_hash}`}>
+                <td>
+                  <a href={`?run=${encodeURIComponent(e.episode_id)}&hash=${e.run_hash_short}${apiSuffix}${rowRunSetNav}`}>
+                    {e.episode_id}
+                  </a>
+                </td>
+                <td>{e.run_set ?? "—"}</td>
+                <td><code>{e.run_hash_short}</code></td>
+                <td>{e.generated_at}</td>
+                <td>{e.task_text}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {handState.kind === "ok" && handState.doc.episodes.length > 0 && (

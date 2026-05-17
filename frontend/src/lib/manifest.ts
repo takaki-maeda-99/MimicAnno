@@ -56,6 +56,7 @@ export interface IndexEntry {
   task_text: string;
   pipeline_phase: number;
   generated_at: string;
+  run_set?: string;
 }
 
 export interface IndexDoc {
