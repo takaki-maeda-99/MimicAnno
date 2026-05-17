@@ -170,6 +170,11 @@ def make_router(
                     status=400, code="invalid_body",
                     message="client_edit_duration_ms must be non-negative int",
                 )
+            if raw_ms_r > 600_000:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms exceeds 600000ms (10 min) cap",
+                )
         client_ms_r: int | None = raw_ms_r
 
         try:
@@ -302,6 +307,11 @@ def make_router(
                     status=400, code="invalid_body",
                     message="client_edit_duration_ms must be non-negative int",
                 )
+            if raw_ms_l > 600_000:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms exceeds 600000ms (10 min) cap",
+                )
         client_ms_l: int | None = raw_ms_l
 
         try:
@@ -416,6 +426,11 @@ def make_router(
                     status=400, code="invalid_body",
                     message="client_edit_duration_ms must be non-negative int",
                 )
+            if raw_ms > 600_000:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms exceeds 600000ms (10 min) cap",
+                )
         client_ms: int | None = raw_ms
 
         # Step 4: edit_repo.apply_edit + EditError → HTTP mapping.
@@ -520,6 +535,11 @@ def make_router(
                 raise MimicAnnoHTTPError(
                     status=400, code="invalid_body",
                     message="client_edit_duration_ms must be non-negative int",
+                )
+            if raw_ms_b > 600_000:
+                raise MimicAnnoHTTPError(
+                    status=400, code="invalid_body",
+                    message="client_edit_duration_ms exceeds 600000ms (10 min) cap",
                 )
         client_ms_b: int | None = raw_ms_b
 
