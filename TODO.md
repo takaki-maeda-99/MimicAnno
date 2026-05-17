@@ -11,7 +11,7 @@
 | 優先 | ID | 内容 | 状態・備考 |
 |---|---|---|---|
 | 低 | **Phase 5 E (そのうち)** | (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs、(C) read-only Python client `mimicanno.client` | MimicRec 配置待ち。本リポ完結部分のみ着手可 |
-| 低 | **Phase 6 / eval v2** | 真の planner agreement metric — `EditEvent.old_value` / `new_value` 拡張、per-edit-type type union、confusion matrix render | D r2 backend で B3 を rename に留めた YAGNI 判断の延長。planner SFT loop が稼働する時に着手 |
+| ✅ | **Phase 6 core (eval v2)** | true planner_agreement metric + confusion matrix + by_source/confidence/phase + schema 0.4.0 | branch `worktree-phase6-eval-v2` (origin push 済、PR TBD)。詳細: `docs/superpowers/notes/2026-05-17-phase6-eval-v2-results.md`。残: Phase 6+ A (auth) / B (Replay UI + boundary timing) / C (multi-reviewer) は別 spec |
 | 低 | **G7 full-ep 再走** | G8 `--limit` 無しで全フレーム depth 生成 → HAMER 再走で `cam_t` metric anchoring 確認 | 初回 PARTIAL の follow-up。優先度低 |
 | 低 | **`_vlm_dumps` schema 変化対応** | per-call dir 構造化されたので SFT loader ([[project_gemma_ft_pipeline]]) が読めるか確認 | G6 で判明 |
 | 中 | **`run_26B_so101.sh` config gap** | `--boundary-config so101_zero_crossing.yaml` + `--smoother-config so101_zc_preserve.yaml` を追加 → 26B vs 4B annotation richness fair compare | G1 26B SO101 再走で boundaries=0 → segments=1 idle が判明 (planner 品質ではなく config gap)。詳細: `docs/superpowers/notes/2026-05-17-g1-26b-so101-smoke-results.md` |
