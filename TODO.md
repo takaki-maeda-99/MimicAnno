@@ -18,11 +18,47 @@
 
 | 優先 | ID | 内容 | dispatch 順 | 状態 |
 |---|---|---|---|---|
-| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | dispatched(`feat/ua-1-catalog-jobs`, base `70a61f2`, agent `aba3901c`, background, 2026-05-17) |
-| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | 未 |
-| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 未 |
+| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | **PR-pending** — branch `feat/ua-1-catalog-jobs` @ `5e3bda9` push 済、PR 本文 `docs/superpowers/dispatch/2026-05-17-ua-1-pr-body.md`、ユーザーが browser で create |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | **ESCALATED** — `_vlm_dumps/` layout が spec rev2 §2.4 と食い違い (`runs/<rs>/_vlm_dumps/<episode_id>/` ツリー)。rev3 master spec 修正待ち。memory `project_ua3_vlm_dumps_schema_drift` |
+| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | **ESCALATED** (agent `a3924de4`, 2026-05-17) — tracks.json に RLE 無し。rev3 で option 1 (pre-bake) 採用方針、Opus rev3 review **APPROVED WITH FIXES**。dispatch prompt `docs/superpowers/dispatch/2026-05-17-ua-4-dispatch-prompt.md` (rev3 後に書き直し要)。詳細は下記「U-A4 escalation」節 |
 | 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | U-A1 待ち |
 | 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | U-A1 待ち |
+
+#### U-A4 escalation (2026-05-17, agent `a3924de4`) — 司令塔判断待ち
+
+Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask データ無ければ escalate」の明示指示通りに止まった。**code / branch / spec / plan いずれも未着手**。
+
+**事実関係**:
+- `tracks.json` の `samples[]` は `{bbox, frame, score, time_sec}` **のみ** — RLE / polygon 無し (例: `runs/so101_phase4_v5/episode_000021__b7d99709c19d/tracks.json`)
+- **master spec L272「on-the-fly from tracks.json polygons/RLE」は disk reality と食い違い** — spec の事実誤認
+- mask 自体は存在: `mimicanno/object_tracker/propagator.py:486-493` で `mask_image_size_px` set 時に per-frame RLE を `MaskCache` に集める → `mimicanno/pipeline.py:881-998` で `vlm_labeler` overlay 描画に消費 → **discard** (disk に書かれない transient)
+- HTTP contract (§2.5: paths / 200/204/400/404 / RGBA PNG / meta.json shape) は **どの実装でも変わらない** → §2 改訂は不要
+
+**3 択 (司令塔決定)**:
+
+| | アプローチ | spec 変更 | pipeline 変更 | 既存 run の挙動 | コスト |
+|---|---|---|---|---|---|
+| **1. Pre-bake** (agent 推奨、§3.4 既 authorize) | `pipeline.py` を改修して MaskCache を `runs/<rs>/<canonical>/_masks/<frame>.png` に書き出す。spec L272 の文言だけ修正 (RLE/polygon → pre-baked PNG sidecar) | L272 のみ wording fix (§2 contract は不変) | あり (annotate path に sidecar emit 追加) | 再 annotate するまで 204 / 空 meta。one-shot backfill CLI を別途用意可 | annotate 再走必要 |
+| 2. Spec 改訂 (tracks.json に RLE 追加) | §2.5 / §6 schema に RLE field 追加、on-the-fly 路線堅持 | **§2.5 / §6 改訂** (autonomy 閉じてるので要承認) | あり (propagator → tracks.json writer に RLE 追記) | 同じく再 annotate 要 | tracks.json ファイルサイズ増、schema 変更が U-A3 等他 sub-project に波及するか要確認 |
+| 3. Bbox downgrade | mask やめて bbox 矩形を描く。spec §2.5 の「alpha = mask presence」を「bbox interior」に書き換え | **§2.5 contract 改訂** | 無し | 既存 run でそのまま動く | overlay の意味的価値が下がる (mask の精緻さが失われる) |
+
+**司令塔観点 cross-cut**:
+- **U-A3 も ESCALATED 中** ([[project_ua3_vlm_dumps_schema_drift]]、§2.4 の `*.jsonl` 記述が事実誤認)。master spec §2 / §3 / §6 にもう 1 ラウンド reviewer を入れて L272 + §2.4 + 他類似箇所をまとめて修正するのが効率的かもしれない
+- U-A1 (catalog/jobs) は background 進行中・spec 整合は別問題
+- 選択 1 を採る場合: pipeline.py への追記は U-A1 / U-A2 の job runner / dataset summary territory と微妙に近いが、annotate path に sidecar emit を足すだけなので衝突は小さいはず
+
+**次アクション (司令塔)**:
+1. 3 択から決める (推奨: 1)
+2. master spec L272 (および §2.4 if pre-bake) を rev3 として修正コミット → SHA を新 dispatch prompt に書く
+3. agent `a3924de4` に SendMessage で「option X で続行、spec rev3 SHA は ...」と渡せば context 維持で resume 可能 (新 worktree 不要)。あるいは escalation 結果を踏まえた新 dispatch prompt を書き直して別 agent で start over
+
+**深掘り済みファイル参照** (再調査不要):
+- `mimicanno/object_tracker/propagator.py:486-493` — MaskCache 生成箇所
+- `mimicanno/pipeline.py:881-998` — vlm_labeler への受け渡し
+- `mimicanno/vlm_overlay.py` — mask 消費後 discard
+- `runs/so101_phase4_v5/episode_000021__b7d99709c19d/tracks.json` — schema 実例
+
+---
 
 #### Dispatch 時に司令塔が sub-Claude に渡すもの (zero-context 想定の完全 brief)
 
