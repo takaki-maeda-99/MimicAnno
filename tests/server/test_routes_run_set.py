@@ -200,7 +200,7 @@ def test_patch_boundary_with_run_set(
     assert new_run_hash != run_hash
 
 
-# ----- T?: merged index for run_set-less requests -----
+# ----- T6: merged index for run_set-less requests -----
 
 def test_get_index_no_run_set_multi_mode_merges(
     tmp_parent_runs_root: Path,
