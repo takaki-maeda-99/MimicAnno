@@ -30,6 +30,21 @@ import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import TimelineRuler from "./TimelineRuler";
 import WaveformView from "./WaveformView";
+import VlmPanel from "./VlmPanel";
+import type { SubtaskSegment } from "../lib/manifest";
+
+/** U-A3 — derive the segment containing the given playback time. */
+export function selectSegmentIdByTime(
+  segments: readonly SubtaskSegment[],
+  timeSec: number,
+): string | null {
+  for (const s of segments) {
+    if (timeSec >= s.start_time && timeSec < s.end_time) {
+      return s.segment_id;
+    }
+  }
+  return null;
+}
 
 type ArtifactSlot<T> =
   | { kind: "loading" }
@@ -669,6 +684,17 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           editInFlight={editInFlight || boundaryPatchInFlight || reviewedPatchInFlight || labelsPatchInFlight}
           staleRun={staleRun}
           toast={toast}
+        />
+      )}
+      {apiEnabled && state.data.annotation.kind === "ok" && (
+        <VlmPanel
+          apiBase={apiBase}
+          canonical={runNameFromManifestUrl(state.data.manifestUrl)}
+          runSet={runSet ?? null}
+          selectedSegmentId={selectSegmentIdByTime(
+            state.data.annotation.data.segments,
+            currentTimeSec,
+          )}
         />
       )}
     </div>
