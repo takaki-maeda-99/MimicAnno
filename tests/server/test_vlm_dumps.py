@@ -189,3 +189,134 @@ def test_resolve_episode_id_miss(run_set_root: Path) -> None:
 def test_resolve_episode_id_no_index_returns_none(run_set_root: Path) -> None:
     run_set_root.mkdir(parents=True)
     assert resolve_episode_id(run_set_root, "episode_000000__abc") is None
+
+
+# ---------------------------------------------------------------------------
+# HTTP route — GET /api/runs/{canonical}/vlm_dumps.json
+# ---------------------------------------------------------------------------
+
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+
+def _make_client(runs_root: Path) -> TestClient:
+    from mimicanno.server.app import create_app
+    return TestClient(create_app(runs_root=runs_root, cors_origins=[]))
+
+
+def _setup_run_set(runs_root: Path, run_set: str, canonical: str,
+                   episode_id: str) -> Path:
+    rs_root = runs_root / run_set
+    rs_root.mkdir(parents=True)
+    (rs_root / "index.json").write_text(json.dumps({
+        "schema_version": "0.1.0",
+        "runs": [
+            {"manifest_url": f"{canonical}/manifest.json",
+             "episode_id": episode_id},
+        ],
+    }))
+    # Stub run dir so a future canonical existence check could be added
+    (rs_root / canonical).mkdir()
+    return rs_root
+
+
+def test_route_400_when_run_set_missing(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    client = _make_client(runs_root)
+    r = client.get("/api/runs/episode_000000__abc/vlm_dumps.json")
+    assert r.status_code == 400
+    body = r.json()
+    assert body["error"] == "run_set_required"
+
+
+def test_route_404_when_canonical_not_in_index(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    rs = _setup_run_set(runs_root, "rs1", "episode_000000__abc",
+                        "episode_000000")
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/unknown__deadbeef/vlm_dumps.json?run_set=rs1",
+    )
+    assert r.status_code == 404
+    assert r.json()["error"] == "canonical_not_found"
+    _ = rs  # silence unused
+
+
+def test_route_404_when_run_set_missing_dir(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/episode_000000__abc/vlm_dumps.json?run_set=nope",
+    )
+    assert r.status_code == 404
+    assert r.json()["error"] == "run_set_not_found"
+
+
+def test_route_200_empty_calls_when_no_dump_dir(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    _setup_run_set(runs_root, "rs1", "episode_000000__abc",
+                   "episode_000000")
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/episode_000000__abc/vlm_dumps.json?run_set=rs1",
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "canonical": "episode_000000__abc",
+        "run_set": "rs1",
+        "episode_id": "episode_000000",
+        "calls": [],
+    }
+
+
+def test_route_200_happy_path_with_dumps(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    rs = _setup_run_set(runs_root, "rs1", "episode_000000__abc",
+                        "episode_000000")
+    ep_dir = rs / "_vlm_dumps" / "episode_000000"
+    ep_dir.mkdir(parents=True)
+    _write_planner(ep_dir, 0, json.dumps({"objects": ["tape"]}))
+    _write_segment(ep_dir, "s_001", 1, json.dumps(
+        {"phase": "approach_object", "vlm_confidence": 0.9},
+    ))
+
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/episode_000000__abc/vlm_dumps.json?run_set=rs1",
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["canonical"] == "episode_000000__abc"
+    assert body["run_set"] == "rs1"
+    assert body["episode_id"] == "episode_000000"
+    assert len(body["calls"]) == 2
+    planner = body["calls"][0]
+    assert planner["kind"] == "planner"
+    assert planner["call_id"] == "_planner/call_000"
+    assert planner["parsed"] == {"objects": ["tape"]}
+    seg = body["calls"][1]
+    assert seg["kind"] == "segment"
+    assert seg["segment_id"] == "s_001"
+    assert seg["phase"] == "approach_object"
+    assert seg["failed"] is False
+    assert seg["ms"] is None
+    assert seg["model_variant"] is None
+
+
+def test_route_registered_before_catch_all(tmp_path: Path) -> None:
+    """Registration-order regression: vlm_dumps.json must not be served by
+    the /api/runs/{name}/{artifact} catch-all (which would return a
+    404 ``artifact_not_found`` or similar, NOT the vlm_dumps shape)."""
+    runs_root = tmp_path / "runs"
+    _setup_run_set(runs_root, "rs1", "episode_000000__abc",
+                   "episode_000000")
+    client = _make_client(runs_root)
+    r = client.get(
+        "/api/runs/episode_000000__abc/vlm_dumps.json?run_set=rs1",
+    )
+    assert r.status_code == 200
+    # If the catch-all matched, body would not have "calls" key.
+    assert "calls" in r.json()
