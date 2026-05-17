@@ -19,6 +19,7 @@ from mimicanno.schema import (
     PipelineStatus,
     SubtaskSegment,
     TaskInfo,
+    _UNSET,
 )
 from mimicanno.writers import write_annotation_json, write_manifest_json
 
@@ -188,6 +189,71 @@ def test_read_annotation_result_round_trip(tmp_path: Path) -> None:
     assert seg.phase == "unlabeled"
     assert seg.start_frame == 0
     assert seg.end_frame == 99
+
+
+def test_pipeline_status_retry_fields_round_trip_manifest(tmp_path: Path) -> None:
+    """The 3 Phase 3 retry observability fields survive write→read on manifest.json."""
+    from dataclasses import replace
+    grounding_attempts = [
+        {"attempt": 0, "prompt": "tape", "frame": 0, "score": 0.93, "adopted": True},
+        {"attempt": 1, "prompt": "tape", "frame": 5, "score": 0.45, "adopted": False},
+    ]
+    ps = PipelineStatus(
+        object_state_available=True,
+        degraded_from_phase=None,
+        degrade_reason=None,
+        object_state_segment_coverage=0.87,
+        adopted_frame_index=75,
+        grounding_attempts=grounding_attempts,
+        mask_overlay_unavailable_frames=2,
+    )
+    m = replace(_manifest(), pipeline_status=ps)
+    p = tmp_path / "manifest.json"
+    write_manifest_json(p, m)
+
+    loaded = read_manifest(p)
+    lps = loaded.pipeline_status
+    assert lps.adopted_frame_index == 75
+    assert lps.grounding_attempts == grounding_attempts
+    assert lps.mask_overlay_unavailable_frames == 2
+
+
+def test_pipeline_status_retry_fields_absent_on_phase12_manifest(tmp_path: Path) -> None:
+    """Phase 1/2 manifests (no retry fields on disk) preserve _UNSET after read."""
+    p = tmp_path / "manifest.json"
+    write_manifest_json(p, _manifest())  # default PipelineStatus: _UNSET for all 3
+
+    loaded = read_manifest(p)
+    lps = loaded.pipeline_status
+    assert lps.adopted_frame_index is _UNSET
+    assert lps.grounding_attempts is _UNSET
+    assert lps.mask_overlay_unavailable_frames is _UNSET
+
+
+def test_pipeline_status_retry_fields_round_trip_annotation(tmp_path: Path) -> None:
+    """The 3 Phase 3 retry observability fields survive write→read on annotation.json."""
+    from dataclasses import replace
+    grounding_attempts = [
+        {"attempt": 0, "prompt": "marker", "frame": 10, "score": 0.88, "adopted": True},
+    ]
+    ps = PipelineStatus(
+        object_state_available=True,
+        degraded_from_phase=None,
+        degrade_reason=None,
+        object_state_segment_coverage=0.72,
+        adopted_frame_index=10,
+        grounding_attempts=grounding_attempts,
+        mask_overlay_unavailable_frames=0,
+    )
+    a = replace(_annotation(), pipeline_status=ps)
+    p = tmp_path / "annotation.json"
+    write_annotation_json(p, a)
+
+    loaded = read_annotation_result(p)
+    lps = loaded.pipeline_status
+    assert lps.adopted_frame_index == 10
+    assert lps.grounding_attempts == grounding_attempts
+    assert lps.mask_overlay_unavailable_frames == 0
 
 
 def test_read_manifest_rejects_schema_violation(tmp_path: Path) -> None:
