@@ -194,6 +194,96 @@ def ground_initial_detections(
 
 
 # ---------------------------------------------------------------------------
+# Module-level frame-extractor injection point (spec §5.1)
+# ---------------------------------------------------------------------------
+
+# Module-level injection point — pipeline.py replaces this with its
+# `_extract_frame_at`. Tests monkey-patch it to inject canned frames.
+# Default raises so a missing wire-up is loud rather than silent.
+def _extract_frame_at(video_path: Path, n_frames: int, frame_index: int) -> np.ndarray:
+    raise NotImplementedError(
+        "_extract_frame_at must be wired up by pipeline.py before "
+        "ground_initial_detections_with_retry is called"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public retry helper (spec §5.1)
+# ---------------------------------------------------------------------------
+
+
+def ground_initial_detections_with_retry(
+    *,
+    runtime: "SAM3Runtime",
+    video_path: Path,
+    n_frames: int,
+    entities: EntityPlan,
+    retry_fractions: list[float],
+) -> "tuple[int | None, np.ndarray, TrackingPlan, list[GroundingAttempt]]":
+    """Ground on frame 0; retry on alternate frames if no object grounded.
+
+    See spec §5.1 for full contract. Behavior:
+      1. Always try frame 0 first.
+      2. If TrackingPlan has zero `object`-role detections, iterate
+         _compute_retry_frame_indices(n_frames, retry_fractions). For each
+         idx, call _extract_frame_at + ground_initial_detections.
+      3. Adopt the first attempt yielding >=1 object-role detection.
+      4. On total failure: return (None, last_frame, last_plan, attempts)
+         with all attempts.adopted=False so the caller's existing degrade
+         gate fires.
+
+    Frame-read I/O errors during retry mark that attempt skipped and continue.
+    Frame 0's I/O failure is the caller's responsibility (pipeline.py uses
+    `_extract_frame_at(video, n_frames, 0)` with its own 5% fallback).
+    """
+    attempts: list[GroundingAttempt] = []
+
+    # Always: frame 0
+    initial_frame = _extract_frame_at(video_path, n_frames, 0)
+    plan = ground_initial_detections(
+        runtime=runtime, initial_frame=initial_frame, entities=entities,
+        frame_index=0,
+    )
+    n_obj = _count_objects(plan)
+    n_total = len(plan.initial_detections)
+    if n_obj >= 1:
+        attempts.append(GroundingAttempt(0, n_obj, n_total, adopted=True))
+        return 0, initial_frame, plan, attempts
+    attempts.append(GroundingAttempt(0, 0, n_total, adopted=False))
+
+    # Retry frames
+    last_frame = initial_frame
+    last_plan = plan
+    for idx in _compute_retry_frame_indices(n_frames, retry_fractions):
+        try:
+            frame = _extract_frame_at(video_path, n_frames, idx)
+        except OSError:
+            attempts.append(
+                GroundingAttempt(idx, 0, 0, adopted=False, skipped_reason="io_error")
+            )
+            continue
+        plan = ground_initial_detections(
+            runtime=runtime, initial_frame=frame, entities=entities,
+            frame_index=idx,
+        )
+        n_obj = _count_objects(plan)
+        n_total = len(plan.initial_detections)
+        last_frame = frame
+        last_plan = plan
+        if n_obj >= 1:
+            attempts.append(GroundingAttempt(idx, n_obj, n_total, adopted=True))
+            return idx, frame, plan, attempts
+        attempts.append(GroundingAttempt(idx, 0, n_total, adopted=False))
+
+    return None, last_frame, last_plan, attempts
+
+
+def _count_objects(plan: TrackingPlan) -> int:
+    """Count detections with role == 'object' in a TrackingPlan."""
+    return sum(1 for (role, _prompt) in plan.initial_detections if role == "object")
+
+
+# ---------------------------------------------------------------------------
 # Private helpers (spec §2.4.1)
 # ---------------------------------------------------------------------------
 
