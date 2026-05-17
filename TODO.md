@@ -2,16 +2,13 @@
 
 **Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green。次窓を開ける場合はユーザー判断。
 
-**Major shipments (2026-05-17)**:
+**Major shipments (2026-05-17、夕方時点で計 14 PRs landed)**:
 - Phase 5 D r2: frontend (`b5050cc`) + backend (`a7d5283`) — summary `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`
 - Phase 6 core (eval v2): PR #13 (`d2facf1`) — true planner_agreement + confusion matrix + schema 0.4.0
 - **U-A initiative**: 7 PRs (#12, #14-#18, #20) — dataset processing & visualization UI、下表参照
-- **26B config gap fix**: PR #19 (`0d65616`) — `scripts/batch_annotate.py` boundary/smoother YAML passthrough。本セッションで GPU 0 (A100 80GB) で E2E smoke proven (commit `869be5b`)、26B SO101 で segments=5/4 と 4B 一致
-- **G7 full-ep 再走 ✅ FULL PASS** (`37b5964`, GPU 1+3): cam_t metric anchoring 検証通過 — UniDAC anchored 0.14-0.27 m (21/23 frame)、wrist_depth_m 0.37-0.51 m。これで **以下が gated 解除**:
-  - Phase 5+ Replay UI で手の 3D 位置を mm 単位で可視化
-  - MimicRec で metric pose を使った hand mimicry
-  - HandSignalGraph (commit `3ae28bb`) の xyz cam_t グラフが意味ある値で表示 (前は HaMeR fallback 13 m scale で無意味)
-  - 詳細: `docs/superpowers/notes/2026-05-17-g7-full-ep-rerun-results.md`
+- **26B config gap fix**: PR #19 (`0d65616`) — `scripts/batch_annotate.py` boundary/smoother YAML passthrough。GPU 0 (A100 80GB) で E2E smoke proven、26B SO101 で segments=5/4 と 4B 一致
+- **G7 full-ep 再走 ✅ FULL PASS** (`37b5964`, GPU 1+3): cam_t metric anchoring 検証通過 — UniDAC anchored 0.14-0.27 m (21/23 frame)、wrist_depth_m 0.37-0.51 m。Phase 5+ Replay UI / MimicRec hand mimicry / HandSignalGraph (`3ae28bb`) の metric 表示が gated 解除。詳細: `docs/superpowers/notes/2026-05-17-g7-full-ep-rerun-results.md`
+- **後続 PRs** (本セッション関与外): PR #21 i18n hand viewer (en)、PR #22 batch_annotate_4B yaml override、PR #23 API default-on (frontend flip)、PR #24 G6/G7/G8 docs、PR #25 h264 viz writer clean、PR #26 SAM3 grounding retry T1-T12 (T13 smoke は別サーバー待ち、下記)
 
 ---
 
@@ -97,10 +94,15 @@ manifest 検査: `cat runs/_smoke_grounding_retry/episode_000002__*/manifest.jso
 
 ### 後始末
 
-- `/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/node_modules/` — git 認識外、`rm -rf` でいつでも除去可
-- `mimicanno serve` (PID 1063745) — so101_phase4_v5 配信で稼働継続中、別件なので触らない
-- agent-locked worktrees `.claude/worktrees/agent-a8b2893e*` / `agent-ae08b633*` — sub-agent 由来、本体 PR は merged 済、解放手続きは agent ツール経由 (commander touch しない)
-- `fix/26b-config-gap` worktree — PR #19 で別経路 merged、本 branch は redundant、いつでも削除可
+- ✅ agent-locked worktrees (`agent-a8b2893e*` / `agent-ae08b633*`) — unlock + force-remove 済
+- ✅ `fix/26b-config-gap` worktree — 削除済
+- ✅ commander 用 cleanup worktrees (`ua-3-rev3` / `ua-4-clean` / `ua-5-clean` / `g-smoke-clean`) — 全削除済
+- ✅ backup tags (6 件) — 全削除済
+- ✅ merged local branches (`feat/ua-*`、`docs/g-smoke-results`) — 全削除済
+- `/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/node_modules/` — git 認識外、`rm -rf` でいつでも除去可 (まだ残ってる、稼働 server 無いので無害)
+- `mimicanno serve` (PID 1063745) — 停止済 (本セッション中に再起動 → multi-mode、その後の状態は不定)
+
+**現在の worktree state**: main 1 個のみ (`git worktree list` で確認済)
 
 ---
 
