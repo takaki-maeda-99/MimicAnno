@@ -16,7 +16,7 @@ def parse_major(version: str) -> int:
 
 ARTIFACT_SCHEMA_VERSIONS: dict[str, str] = {
     "manifest": "0.1.0",
-    "annotation": "0.3.0",   # Phase 5 D bump: adds AnnotationResult.history (EditEvent list)
+    "annotation": "0.4.0",   # Phase 6 bump: EditEvent gains old_value/new_value/pre_edit_overall_confidence
     "boundaries": "0.1.0",
     "signals": "0.1.0",
 }

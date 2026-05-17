@@ -47,7 +47,8 @@ def test_baseline_fixture_is_pre_bump(runs_root_with_loadable: Path) -> None:
     ann_path = runs_root_with_loadable / _LOADABLE_RUN_NAME / "annotation.json"
     raw = json.loads(ann_path.read_text())
     assert raw["schema_version"] == "0.2.0"
-    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.3.0"
+    # Sanity: current annotation schema is newer than the frozen fixture.
+    assert ARTIFACT_SCHEMA_VERSIONS["annotation"] == "0.4.0"
 
 
 def test_patch_phase_upgrades_schema_version(runs_root_with_loadable: Path) -> None:
