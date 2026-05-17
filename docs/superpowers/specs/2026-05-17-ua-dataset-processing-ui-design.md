@@ -220,6 +220,8 @@ DELETE /api/jobs/{job_id}
 
 ### 2.4 VLM dumps (U-A3) — rev3 (corrected to match on-disk reality)
 
+> **rev3 (2026-05-17)** — §2.4 was rewritten after on-disk inspection during U-A3 dispatch (commander-approved). The original spec assumed a flat `*.jsonl` layout under each canonical; reality is a directory tree under the **run-set** keyed by source `episode_id`. See U-A3 sub-spec for full reconciliation notes.
+
 FastAPI's `{artifact}` in the catch-all `GET /api/runs/{name}/{artifact}` (at `mimicanno/server/routes.py` — grep `\"/api/runs/{name}/{artifact}\"` since line numbers drift) matches *any* string including `vlm_dumps.json`. The `.json` / `.png` suffix is for human readability; **disambiguation is purely by router registration order**. U-A3 backend MUST register this route **before** the catch-all.
 
 **On-disk reality (NOT `*.jsonl` files — rev2 was wrong):**
@@ -245,7 +247,7 @@ runs/<rs>/_vlm_dumps/<episode_id>/
 GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (see §2.0)
 → 200 application/json
 {
-  "canonical": "episode_000000__...",
+  "canonical": "episode_000000__e35061106394",
   "run_set": "so101_phase4_v5",
   "episode_id": "episode_000000",
   "calls": [

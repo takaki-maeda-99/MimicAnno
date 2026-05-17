@@ -19,8 +19,8 @@
 | 優先 | ID | 内容 | dispatch 順 | 状態 |
 |---|---|---|---|---|
 | 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | dispatched(`feat/ua-1-catalog-jobs`, base `70a61f2`, agent `aba3901c`, background, 2026-05-17) |
-| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | **dispatch ready** — prompt: `docs/superpowers/dispatch/2026-05-17-ua-3-dispatch-prompt.md` (ユーザーが別 Claude Code に貼り付け) |
-| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | **dispatch ready** — prompt: `docs/superpowers/dispatch/2026-05-17-ua-4-dispatch-prompt.md` |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/<episode_id>/` ツリーを RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | **branch pushed (b918c3e)**, PR 未作成 (gh CLI 無し) — master §2.4 を rev3 に書き換え済 (commander 承認、commit `3f484ad`)。code review pass (path-traversal fix 含む 17 件 backend + 12 frontend new test)。手動 PR open 要 |
+| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 未 |
 | 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | U-A1 待ち |
 | 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | U-A1 待ち |
 
@@ -144,6 +144,7 @@ Sub-Claude が dispatch §10.1「`tracks.json` schema を最初に確認、mask 
 | `test/loadable-run-fixture` | `tests/fixtures/loadable_run/` 凍結 + conftest 切替 (5 commit、224 passed) | origin push 済、Opus レビュー APPROVED (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/test/loadable-run-fixture>)。Title `test(fixtures): freeze loadable_run for CI (no real-data dependency)`、body 雛形は `docs/superpowers/plans/2026-05-17-loadable-run-fixture-plan.md` の Summary/Exit criteria 抜粋で十分 |
 | `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
 | `docs/g4-gem4-smoke` | G4 gem4 smoke 結果 (commit `5f8faa2`) | 別セッション、status 確認要 |
+| `feat/ua-3-vlm-panel` | U-A3 VLM dumps viewer (7 commit 含 master §2.4 rev3 + code-review fix)。backend +17 test (254 pass)、frontend +12 vitest (135 pass)、mypy server clean | origin push 済 (`b918c3e`)、自己 code review APPROVED with fixes applied。**§2.4 rev3 を rewrite している点を PR body に明記要** (commander 承認済の commit `3f484ad`)。PR 作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/feat/ua-3-vlm-panel> |
 
 ---
 
