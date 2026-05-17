@@ -672,6 +672,59 @@ def make_router(
             headers={"Cache-Control": "no-cache"},
         )
 
+    # Wrist (secondary) camera video. Resolves from manifest.inputs.video
+    # by replacing the common LeRobot camera segment (e.g. ".front" → ".wrist").
+    # 404 if not present on disk. Must be registered BEFORE catch-all below.
+    @router.get("/api/runs/{canonical}/secondary_video.mp4")
+    def get_secondary_video(
+        canonical: str,
+        run_set: str | None = Query(None, alias="run_set"),
+    ) -> Response:
+        effective_root = parent_root / run_set if run_set else parent_root
+        manifest_path = effective_root / canonical / "manifest.json"
+        if not manifest_path.is_file():
+            raise MimicAnnoHTTPError(
+                status=404, code="manifest_not_found",
+                message=f"manifest for {canonical!r} not found",
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (ValueError, json.JSONDecodeError):
+            raise MimicAnnoHTTPError(
+                status=500, code="manifest_invalid",
+                message="manifest.json is not valid JSON",
+            )
+        src = (
+            (manifest.get("inputs") or {}).get("video", {}).get("path")
+            if isinstance(manifest, dict) else None
+        )
+        if not isinstance(src, str):
+            raise MimicAnnoHTTPError(
+                status=404, code="primary_video_path_missing",
+                message="manifest.inputs.video.path missing",
+            )
+        # Swap common LeRobot camera dir suffix. Try several patterns.
+        candidates = []
+        for old, new in (
+            (".front", ".wrist"),
+            (".overhead", ".wrist"),
+            (".top", ".wrist"),
+            (".external", ".wrist"),
+        ):
+            if old in src:
+                candidates.append(src.replace(old, new))
+        for cand in candidates:
+            p = Path(cand)
+            if p.is_file():
+                return FileResponse(
+                    path=p, media_type="video/mp4",
+                    headers={"Cache-Control": "no-cache"},
+                )
+        raise MimicAnnoHTTPError(
+            status=404, code="secondary_video_not_found",
+            message="no wrist-cam video at any expected path",
+        )
+
     @router.api_route("/api/runs/{name}/{artifact}", methods=["GET", "HEAD"])
     def get_artifact(
         name: str,

@@ -14,6 +14,7 @@ export default function DepthWithKeypoints({
   videoHeight,
   rightHand,
   leftHand,
+  videoElRef,
 }: {
   videoUrl: string;
   currentTimeSec: number;
@@ -23,8 +24,12 @@ export default function DepthWithKeypoints({
   videoHeight: number;
   rightHand: HandSignalFrame | null;
   leftHand: HandSignalFrame | null;
+  videoElRef?: React.MutableRefObject<HTMLVideoElement | null>;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (videoElRef) videoElRef.current = videoRef.current;
+  });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [displayed, setDisplayed] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 

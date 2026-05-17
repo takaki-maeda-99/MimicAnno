@@ -30,7 +30,11 @@ export default function BoundaryMarkerLayer({
     <g className="boundary-markers">
       {candidates.flatMap((c) => {
         const x = (c.time / durationSec) * widthPx;
-        const sources = [...c.sources].sort();
+        // Show only the gray episode_start / episode_end markers (true
+        // segment edges). Hide the noisy signal-derived candidates.
+        const sources = [...c.sources]
+          .filter((s) => s === "episode_start" || s === "episode_end")
+          .sort();
         return sources.map((src, i) => {
           const y0 = bandTopPx + (i * bandHeightPx) / Math.max(sources.length, 1);
           const dy = bandHeightPx / Math.max(sources.length, 1);

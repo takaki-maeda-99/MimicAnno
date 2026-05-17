@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, type MutableRefObject, useEffect, useRef } from "react";
 
 type Props = {
   videoUrl: string;
@@ -6,6 +6,7 @@ type Props = {
   onTimeChange: (tSec: number) => void;
   onError: (message: string) => void;
   maskOverlay?: ReactNode;
+  videoElRef?: MutableRefObject<HTMLVideoElement | null>;
 };
 
 export default function VideoPlayer({
@@ -14,8 +15,12 @@ export default function VideoPlayer({
   onTimeChange,
   onError,
   maskOverlay,
+  videoElRef,
 }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (videoElRef) videoElRef.current = ref.current;
+  });
 
   useEffect(() => {
     const v = ref.current;

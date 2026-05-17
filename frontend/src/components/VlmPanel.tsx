@@ -31,7 +31,9 @@ function ordinalFromSegmentId(segId: string | null): number | null {
 export default function VlmPanel(props: VlmPanelProps): React.JSX.Element {
   const { apiBase, canonical, runSet, selectedSegmentId } = props;
   const [state, setState] = useState<State>({ kind: "idle" });
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Pair-index expansion: planner call_NNN ↔ labeler with segment_ordinal=NNN+1
+  // share the same pair index (NNN). Clicking either row toggles the pair.
+  const [expandedPair, setExpandedPair] = useState<number | null>(null);
 
   useEffect(() => {
     if (!canonical || !runSet) {
@@ -78,43 +80,66 @@ export default function VlmPanel(props: VlmPanelProps): React.JSX.Element {
   }
 
   const selectedOrdinal = ordinalFromSegmentId(selectedSegmentId);
-  const plannerRows = calls.filter((c) => c.kind === "planner");
-  const labelerRows = calls.filter((c) => c.kind === "labeler");
+
+  // Pair index: planner call_NNN → NNN; labeler ordinal K → K-1.
+  const pairIndexOf = (c: VlmCall): number | null => {
+    if (c.kind === "planner") {
+      const m = c.call_id.match(/call_(\d+)/);
+      return m ? parseInt(m[1], 10) : null;
+    }
+    return c.segment_ordinal !== null ? c.segment_ordinal - 1 : null;
+  };
+
+  const pairIndices = Array.from(
+    new Set(
+      calls
+        .map(pairIndexOf)
+        .filter((v): v is number => v !== null),
+    ),
+  ).sort((a, b) => a - b);
+
+  const activePair = expandedPair ?? pairIndices[0] ?? null;
+  const activeCalls =
+    activePair === null
+      ? []
+      : calls.filter((c) => pairIndexOf(c) === activePair);
 
   return (
     <aside data-testid="vlm-panel">
-      {plannerRows.length > 0 ? (
-        <section data-testid="vlm-planner-section">
-          <h4>Planner</h4>
-          {plannerRows.map((c) => (
-            <CallRow
-              key={c.call_id}
-              call={c}
-              selected={false}
-              expanded={expanded === c.call_id}
-              onToggle={() =>
-                setExpanded((cur) => (cur === c.call_id ? null : c.call_id))
-              }
-            />
+      <section data-testid="vlm-input-section">
+        <h4>VLM input</h4>
+        <div data-testid="vlm-section-buttons" style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
+          {pairIndices.map((idx) => (
+            <button
+              key={idx}
+              type="button"
+              data-testid={`vlm-section-button-${idx}`}
+              data-active={activePair === idx ? "true" : "false"}
+              onClick={() => setExpandedPair(idx)}
+              style={{
+                fontWeight: activePair === idx ? "bold" : "normal",
+              }}
+            >
+              section{idx + 1}
+            </button>
           ))}
-        </section>
-      ) : null}
-      <section data-testid="vlm-segments-section">
-        <h4>Segments</h4>
-        {labelerRows.map((c) => (
-          <CallRow
-            key={c.call_id}
-            call={c}
-            selected={
-              selectedOrdinal !== null &&
-              c.segment_ordinal === selectedOrdinal
-            }
-            expanded={expanded === c.call_id}
-            onToggle={() =>
-              setExpanded((cur) => (cur === c.call_id ? null : c.call_id))
-            }
-          />
-        ))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "row", gap: "8px", alignItems: "flex-start" }}>
+          {activeCalls.map((c) => (
+            <div key={c.call_id} style={{ flex: 1, minWidth: 0 }}>
+              <CallRow
+                call={c}
+                selected={
+                  c.kind === "labeler" &&
+                  selectedOrdinal !== null &&
+                  c.segment_ordinal === selectedOrdinal
+                }
+                expanded={true}
+                onToggle={() => {}}
+              />
+            </div>
+          ))}
+        </div>
       </section>
     </aside>
   );
@@ -147,38 +172,44 @@ function CallRow(props: {
       <button type="button" onClick={onToggle}>
         <span data-testid="vlm-kind-badge">{call.kind}</span>
         <span>{summaryLabel}</span>
-        <span>{call.prompt.slice(0, 80)}</span>
       </button>
-      {call.kind === "planner" && call.frame_url ? (
-        <img
-          data-testid="vlm-planner-frame"
-          src={call.frame_url}
-          alt="planner frame"
-          style={{ maxWidth: "100%", display: "block" }}
-        />
+      {expanded && call.kind === "labeler" && call.keyframe_urls.length > 0 ? (
+        <div
+          data-testid="vlm-keyframes"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "4px",
+          }}
+        >
+          {call.keyframe_urls.map((url) => (
+            <img
+              key={url}
+              src={url}
+              alt="keyframe"
+              style={{ width: "100%", display: "block" }}
+            />
+          ))}
+        </div>
       ) : null}
-      {expanded ? (
+      {expanded && call.kind === "planner" ? (
         <div data-testid={`vlm-expanded-${call.call_id}`}>
-          {call.kind === "labeler" && call.keyframe_urls.length > 0 ? (
-            <div data-testid="vlm-keyframes">
-              {call.keyframe_urls.map((url) => (
-                <img
-                  key={url}
-                  src={url}
-                  alt="keyframe"
-                  style={{ maxWidth: "120px", marginRight: "4px" }}
-                />
-              ))}
-            </div>
-          ) : null}
-          <pre data-testid="vlm-prompt-full">{call.prompt}</pre>
-          {call.request_json !== null ? (
-            <pre data-testid="vlm-request-json">
-              {JSON.stringify(call.request_json, null, 2)}
-            </pre>
-          ) : null}
-          <pre data-testid="vlm-raw-output">{call.raw_output}</pre>
-          <pre data-testid="vlm-parsed">
+          <pre
+            data-testid="vlm-prompt-full"
+            style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}
+          >
+            {call.prompt}
+          </pre>
+          <pre
+            data-testid="vlm-raw-output"
+            style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}
+          >
+            {call.raw_output}
+          </pre>
+          <pre
+            data-testid="vlm-parsed"
+            style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}
+          >
             {call.parsed === null
               ? "(unparseable)"
               : JSON.stringify(call.parsed, null, 2)}

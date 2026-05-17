@@ -37,9 +37,9 @@ export async function fetchVlmDumps(args: {
   runSet: string;
   signal?: AbortSignal;
 }): Promise<VlmDumps> {
-  const { apiBase, canonical, runSet, signal } = args;
+  const { canonical, runSet, signal } = args;
   const url =
-    `${apiBase}/api/runs/${encodeURIComponent(canonical)}/vlm_dumps.json` +
+    `/api/runs/${encodeURIComponent(canonical)}/vlm_dumps.json` +
     `?run_set=${encodeURIComponent(runSet)}`;
   const r = await fetch(url, { signal });
   if (!r.ok) {

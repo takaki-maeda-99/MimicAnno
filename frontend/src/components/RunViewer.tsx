@@ -9,6 +9,7 @@ import {
   type AnnotationResult,
   type BoundariesDoc,
   type IndexDoc,
+  type IndexEntry,
   type Manifest,
   type SchemaVersion,
   type SignalsDoc,
@@ -67,6 +68,7 @@ type Loaded = {
   boundaries: ArtifactSlot<BoundariesDoc>;
   signals: ArtifactSlot<SignalsDoc>;
   videoError: string | null;
+  siblingRuns: IndexEntry[];
 };
 
 type State =
@@ -546,6 +548,14 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         assertConsumerCapability(manifest, SUPPORTED_MAJORS);
 
         if (controller.signal.aborted) return;
+        // When the URL is scoped with ?run_set=, the backend returns only
+        // that run-set's entries (no per-entry run_set field). Otherwise
+        // merged-mode includes everything, so filter by run_set field.
+        const siblingRuns = runSetQs
+          ? doc.runs
+          : doc.runs.filter(
+              (r) => (r.run_set ?? null) === (effectiveRunSet ?? null),
+            );
         const initial: Loaded = {
           selection,
           manifest,
@@ -555,6 +565,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           boundaries: { kind: "loading" },
           signals: { kind: "loading" },
           videoError: null,
+          siblingRuns,
         };
         setState({ kind: "loaded", data: initial });
 
@@ -642,20 +653,67 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
       {selection.kind === "multiple" && (
         <ChooserBanner selection={selection} episodeId={episodeId} runSet={runSet} />
       )}
-      {manifest.pipeline_status.degraded_from_phase !== null && (
-        <div className="pipeline-status-banner">
-          degraded from phase {manifest.pipeline_status.degraded_from_phase}: {manifest.pipeline_status.degrade_reason}
-        </div>
-      )}
+      <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
+        <aside
+          className="ep-sidebar"
+          style={{
+            width: "200px",
+            flexShrink: 0,
+            maxHeight: "85vh",
+            overflowY: "auto",
+            borderRight: "1px solid #dee2e6",
+            paddingRight: "6px",
+          }}
+        >
+          <h4 style={{ margin: "4px 0" }}>episodes</h4>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {Object.values(
+              state.data.siblingRuns.reduce<Record<string, IndexEntry>>((acc, r) => {
+                const prev = acc[r.episode_id];
+                if (!prev || prev.generated_at < r.generated_at) acc[r.episode_id] = r;
+                return acc;
+              }, {}),
+            )
+              .sort((a, b) => a.episode_id.localeCompare(b.episode_id))
+              .map((r) => {
+                const isCurrent = r.episode_id === episodeId && r.run_hash_short === state.data.manifest.run_hash.slice(7, 19);
+                const rsNav =
+                  r.run_set && r.run_set !== "."
+                    ? `&run_set=${encodeURIComponent(r.run_set)}`
+                    : "";
+                const href = `?run=${encodeURIComponent(r.episode_id)}&hash=${r.run_hash_short}${apiEnabled ? "&api=1" : ""}${rsNav}`;
+                return (
+                  <li key={`${r.episode_id}__${r.run_hash}`}>
+                    <a
+                      href={href}
+                      style={{
+                        display: "block",
+                        padding: "2px 4px",
+                        fontWeight: isCurrent ? "bold" : "normal",
+                        background: isCurrent ? "#e7f1ff" : "transparent",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {r.episode_id}
+                    </a>
+                  </li>
+                );
+              })}
+          </ul>
+        </aside>
+        <div style={{ flex: 1, minWidth: 0 }}>
       <div ref={rowRef} className="x-row">
         {state.data.videoError !== null
           ? <div className="error">{state.data.videoError}</div>
-          : <VideoPlayer
-              videoUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video")) + dataRunSetQs}
+          : (
+            <DualVideo
+              mainUrl={resolveUrl(state.data.manifestUrl, artifactUrl(state.data.manifest, "video")) + dataRunSetQs}
+              wristUrl={resolveUrl(state.data.manifestUrl, "secondary_video.mp4") + dataRunSetQs}
               currentTimeSec={currentTimeSec}
               onTimeChange={setCurrentTimeSec}
               onError={setVideoError}
             />
+          )
         }
         {state.data.annotation.kind === "error" && (
           <div className="error">{state.data.annotation.message}</div>
@@ -716,6 +774,87 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
           currentTimeSec={currentTimeSec}
         />
       )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Two side-by-side videos kept in sync: play/pause/seek on either
+ *  drives the other. Wrist video hides itself on 404 (not all
+ *  datasets have a secondary cam). */
+function DualVideo(props: {
+  mainUrl: string;
+  wristUrl: string;
+  currentTimeSec: number;
+  onTimeChange: (t: number) => void;
+  onError: (m: string) => void;
+}): React.JSX.Element {
+  const { mainUrl, wristUrl, currentTimeSec, onTimeChange, onError } = props;
+  const mainRef = useRef<HTMLVideoElement | null>(null);
+  const wristRef = useRef<HTMLVideoElement | null>(null);
+
+  // Mirror play/pause/seek from main → wrist and wrist → main without
+  // ping-ponging by guarding on near-equal current state.
+  useEffect(() => {
+    const main = mainRef.current;
+    const wrist = wristRef.current;
+    if (!main || !wrist) return;
+    const sync = (from: HTMLVideoElement, to: HTMLVideoElement) => {
+      if (Math.abs(from.currentTime - to.currentTime) > 0.1) {
+        to.currentTime = from.currentTime;
+      }
+      if (from.paused !== to.paused) {
+        if (from.paused) to.pause();
+        else void to.play().catch(() => {});
+      }
+    };
+    const onMainPlay = () => sync(main, wrist);
+    const onMainPause = () => sync(main, wrist);
+    const onMainSeeked = () => sync(main, wrist);
+    const onWristPlay = () => sync(wrist, main);
+    const onWristPause = () => sync(wrist, main);
+    const onWristSeeked = () => sync(wrist, main);
+    main.addEventListener("play", onMainPlay);
+    main.addEventListener("pause", onMainPause);
+    main.addEventListener("seeked", onMainSeeked);
+    wrist.addEventListener("play", onWristPlay);
+    wrist.addEventListener("pause", onWristPause);
+    wrist.addEventListener("seeked", onWristSeeked);
+    return () => {
+      main.removeEventListener("play", onMainPlay);
+      main.removeEventListener("pause", onMainPause);
+      main.removeEventListener("seeked", onMainSeeked);
+      wrist.removeEventListener("play", onWristPlay);
+      wrist.removeEventListener("pause", onWristPause);
+      wrist.removeEventListener("seeked", onWristSeeked);
+    };
+  }, []);
+
+  return (
+    <div style={{ display: "flex", gap: "4px", alignItems: "flex-start" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <VideoPlayer
+          videoUrl={mainUrl}
+          currentTimeSec={currentTimeSec}
+          onTimeChange={onTimeChange}
+          onError={onError}
+          videoElRef={mainRef}
+        />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <video
+          ref={wristRef}
+          data-testid="wrist-video"
+          src={wristUrl}
+          controls
+          muted
+          style={{ width: "100%", display: "block" }}
+          onError={(e) => {
+            (e.currentTarget as HTMLVideoElement).style.display = "none";
+          }}
+        />
+      </div>
     </div>
   );
 }

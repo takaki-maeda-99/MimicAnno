@@ -30,7 +30,10 @@ export default function RunList({ runSet }: Props = {}) {
   // In api mode, fetch available run-sets once for the switcher dropdown.
   useEffect(() => {
     if (!apiEnabled) return;
-    fetchRunSets().then(setRunSets).catch(() => setRunSets([]));
+    fetchRunSets()
+      // Hide run-sets whose name starts with "_" (smoke / scratch).
+      .then((rs) => setRunSets(rs.filter((r) => !r.name.startsWith("_"))))
+      .catch(() => setRunSets([]));
   }, [apiEnabled]);
 
   useEffect(() => {

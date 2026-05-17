@@ -22,6 +22,7 @@ function VideoWithAxes({
   intrinsics,
   rightHand,
   leftHand,
+  videoElRef,
 }: {
   videoUrl: string;
   currentTimeSec: number;
@@ -32,9 +33,13 @@ function VideoWithAxes({
   intrinsics?: { fx: number; fy: number; cx: number; cy: number };
   rightHand: HandSignalFrame | null;
   leftHand: HandSignalFrame | null;
+  videoElRef?: React.MutableRefObject<HTMLVideoElement | null>;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (videoElRef) videoElRef.current = videoRef.current;
+  });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [displayed, setDisplayed] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
@@ -217,6 +222,38 @@ export default function HandViewer({ episodeId }: Props) {
   const [videoError, setVideoError] = useState<string | null>(null);
   const [widthPx, setWidthPx] = useState(0);
   const obsRef = useRef<ResizeObserver | null>(null);
+  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
+  const depthVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Mirror play/pause/seek between the RGB and depth videos.
+  useEffect(() => {
+    const a = mainVideoRef.current;
+    const b = depthVideoRef.current;
+    if (!a || !b) return;
+    const sync = (from: HTMLVideoElement, to: HTMLVideoElement) => {
+      if (Math.abs(from.currentTime - to.currentTime) > 0.1) to.currentTime = from.currentTime;
+      if (from.paused !== to.paused) {
+        if (from.paused) to.pause();
+        else void to.play().catch(() => {});
+      }
+    };
+    const aP = () => sync(a, b);
+    const bP = () => sync(b, a);
+    a.addEventListener("play", aP);
+    a.addEventListener("pause", aP);
+    a.addEventListener("seeked", aP);
+    b.addEventListener("play", bP);
+    b.addEventListener("pause", bP);
+    b.addEventListener("seeked", bP);
+    return () => {
+      a.removeEventListener("play", aP);
+      a.removeEventListener("pause", aP);
+      a.removeEventListener("seeked", aP);
+      b.removeEventListener("play", bP);
+      b.removeEventListener("pause", bP);
+      b.removeEventListener("seeked", bP);
+    };
+  }, [state.kind]);
   const rowRef = useCallback((node: HTMLDivElement | null) => {
     obsRef.current?.disconnect();
     obsRef.current = null;
@@ -367,6 +404,7 @@ export default function HandViewer({ episodeId }: Props) {
             intrinsics={intrinsics}
             rightHand={rightHand}
             leftHand={leftHand}
+            videoElRef={mainVideoRef}
           />
           {videoError && <div className="error">{videoError}</div>}
           <HandScrubBar
@@ -406,6 +444,7 @@ export default function HandViewer({ episodeId }: Props) {
               videoHeight={videoH}
               rightHand={rightHand}
               leftHand={leftHand}
+              videoElRef={depthVideoRef}
             />
           ) : (
             <div className="depth-unavailable">Depth video not found</div>
