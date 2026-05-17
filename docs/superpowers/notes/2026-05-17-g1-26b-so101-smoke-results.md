@@ -163,3 +163,42 @@ gem4 boundary/smoother YAML はまだ書かれていないため、gem4 entries 
 - v1 で観察された 「segments=1 idle」は config gap が単独原因で、26B planner 自体は健全 (本 v2 で実証)。
 - 別セッション (b17dd21) の `batch_annotate.py` 側 YAML loader fix は **SO101 検証には不要だった** (shell script fix で十分)。ただし将来 gem4 用 boundary/smoother YAML を書いたとき、batch_annotate.py 経由でも届くようになる前置き fix として価値あり。
 - TODO の「`run_26B_so101.sh` config gap」中優先タスクは本検証で **完了済へ移動可能**。
+
+---
+
+## 2026-05-17 追記 (3): batch_annotate.py 経路 E2E smoke ✅
+
+**Branch**: `fix/26b-config-gap` (worktree `.claude/worktrees/26b-config-gap/`, commit `b17dd21`)
+**Run root**: `/tmp/fix-26bcg-smoke/`
+**GPU**: 0 (A100 80GB)
+**Wall clock**: ~4 min (load+ep0 ~2.5 min, ep1 OK at +90.7s)
+**VRAM peak**: 66,421 MiB (v2 per-ep 55 GiB より +11 GiB、Unsloth long-lived state 由来、73,728 threshold 余裕)
+
+### 結果
+
+| 指標 | v2 (run_26B_so101.sh, per-ep restart) | v3 (batch_annotate.py, long-lived) |
+|---|---|---|
+| ep0 segments | 5 | **5** ✅ |
+| ep0 boundaries | 4 | **4** ✅ |
+| ep1 segments | 4 | **4** ✅ |
+| ep1 boundaries | 3 | **3** ✅ |
+| VRAM peak | 55,177 MiB | 66,421 MiB |
+| Wall (2 ep) | 7.6 min | ~4 min (load 1 回のみ) |
+
+### 4B vs 26B v3 ep1 比較 (v2 ep1 がやや degenerate だった ep)
+
+| frame range | 4B G3 phase | 26B v3 phase | 26B v3 verb |
+|---|---|---|---|
+| [0-29] | approach_object | approach_object | approach |
+| [30-55] | approach_object | align_gripper | align |
+| [56-90] | approach_object | move_to_target | move |
+| [91-150] | approach_object | **place_object** | place |
+
+→ **v3 ep1 は v2 ep1 より意味的に良い** (approach→align→move→place の物理的に正しい順序)。planner non-determinism のため per-call で品質に揺れあり。
+
+### 結論
+
+- `fix/26b-config-gap` branch (b17dd21) の `batch_annotate.py` 修正は **期待通り動作** — boundary/smoother YAML が AnnotationConfig まで届き、`run_26B_so101.sh` 経路と segment/boundary 数が完全一致。
+- batch_annotate.py 経路は **モデル load 1 回**で複数 ep を回せるので、chain run (gem4 26B 728 ep 等) で wall clock メリット大 (4 min/2ep vs 7.6 min/2ep)。
+- **merge ready**: branch を origin にプッシュ + PR 作成可能。本 smoke が exit criteria を満たした。
+- gem4 entries は依然 `boundary_config=None` (default fallback) — gem4 専用 YAML 作成は別 task (TODO 残)。
