@@ -33,6 +33,13 @@ import WaveformView from "./WaveformView";
 import VlmPanel from "./VlmPanel";
 import type { SubtaskSegment } from "../lib/manifest";
 
+/** Compose the `?run_set=<encoded>` query suffix for artifact / PATCH URLs.
+ *  `undefined` and `"."` (legacy root sentinel) both produce an empty string,
+ *  letting the route fall through to the `parent_root` raw pass-through. */
+function toRunSetQs(rs: string | undefined): string {
+  return rs && rs !== "." ? `?run_set=${encodeURIComponent(rs)}` : "";
+}
+
 /** U-A3 — derive the segment containing the given playback time. */
 export function selectSegmentIdByTime(
   segments: readonly SubtaskSegment[],
@@ -147,10 +154,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
       };
     }
     const data = state.data;
-    const dataRunSetQs =
-      data.runSet && data.runSet !== "."
-        ? `?run_set=${encodeURIComponent(data.runSet)}`
-        : "";
+    const dataRunSetQs = toRunSetQs(data.runSet);
     const durationMs = clientEditDurationMs;
     setEditInFlight(true);
     setToast(undefined);
@@ -276,10 +280,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ): Promise<void> => {
     if (state.kind !== "loaded") return;
     const data = state.data;
-    const dataRunSetQs =
-      data.runSet && data.runSet !== "."
-        ? `?run_set=${encodeURIComponent(data.runSet)}`
-        : "";
+    const dataRunSetQs = toRunSetQs(data.runSet);
     setBoundaryPatchInFlight(true);
     setToast(undefined);
     try {
@@ -355,10 +356,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
-    const dataRunSetQs =
-      data.runSet && data.runSet !== "."
-        ? `?run_set=${encodeURIComponent(data.runSet)}`
-        : "";
+    const dataRunSetQs = toRunSetQs(data.runSet);
     const reviewedDurationMs = clientEditDurationMs;
     setReviewedPatchInFlight(true);
     setToast(undefined);
@@ -427,10 +425,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   ) => {
     if (state.kind !== "loaded") return { kind: "error" as const, httpStatus: 0, errorCode: null, message: "not loaded" };
     const data = state.data;
-    const dataRunSetQs =
-      data.runSet && data.runSet !== "."
-        ? `?run_set=${encodeURIComponent(data.runSet)}`
-        : "";
+    const dataRunSetQs = toRunSetQs(data.runSet);
     const labelsDurationMs = clientEditDurationMs;
     setLabelsPatchInFlight(true);
     setToast(undefined);
@@ -539,10 +534,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
         // This is what makes artifact fetches resolve to the right run-set subdir
         // when the user reloads at /?api=1&run=...&hash=... without &run_set=.
         const effectiveRunSet = entry.run_set ?? runSet;
-        const effectiveRunSetQs =
-          effectiveRunSet && effectiveRunSet !== "."
-            ? `?run_set=${encodeURIComponent(effectiveRunSet)}`
-            : "";
+        const effectiveRunSetQs = toRunSetQs(effectiveRunSet);
 
         const manifestUrl = resolveUrl(
           new URL(`${apiBase}index.json`, window.location.origin).toString(),
@@ -641,10 +633,7 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
   }
   const { selection, manifest } = state.data;
   // Per-entry run_set drives artifact URLs in the loaded state (merged-mode reload).
-  const dataRunSetQs =
-    state.data.runSet && state.data.runSet !== "."
-      ? `?run_set=${encodeURIComponent(state.data.runSet)}`
-      : "";
+  const dataRunSetQs = toRunSetQs(state.data.runSet);
   return (
     <div className="run-viewer">
       <div className="back-link">

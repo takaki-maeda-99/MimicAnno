@@ -65,6 +65,38 @@ def test_get_index_with_run_set(tmp_parent_runs_root: Path) -> None:
     assert data["schema_version"] == "0.1.0"
 
 
+def test_get_index_named_run_set_is_raw_pass_through(
+    tmp_parent_runs_root: Path,
+) -> None:
+    """?run_set=<name> stays raw — rows do NOT carry the merge-only run_set field.
+
+    Mirrors test_get_index_dot_run_set for the named-run-set case so the matrix
+    (no run_set → merged, ?run_set=. → raw, ?run_set=<name> → raw) is complete.
+    """
+    idx = tmp_parent_runs_root / "so101_phase4_v5" / "index.json"
+    idx.write_text(json.dumps({
+        "schema_version": "0.1.0",
+        "runs": [{
+            "episode_id": "episode_000000",
+            "run_hash": "sha256:" + "a" * 64,
+            "run_hash_short": "a" * 12,
+            "manifest_url": "episode_000000__aaa/manifest.json",
+            "config_hash_short": "1",
+            "input_hash_short": "2",
+            "task_text": "raw",
+            "pipeline_phase": 4,
+            "generated_at": "2026-01-01T00:00:00Z",
+        }],
+    }))
+    client = _make_client(tmp_parent_runs_root)
+    r = client.get("/api/runs/index.json?run_set=so101_phase4_v5")
+    assert r.status_code == 200
+    doc = r.json()
+    assert len(doc["runs"]) == 1
+    for row in doc["runs"]:
+        assert "run_set" not in row
+
+
 def test_get_index_no_run_set_legacy_still_works(tmp_runs_root: Path) -> None:
     """Legacy: root index.json present → merged response includes its rows tagged '.'."""
     client = _make_client(tmp_runs_root)
