@@ -124,13 +124,13 @@ def test_partial_coverage() -> None:
     assert m.client_coverage == pytest.approx(2 / 3, abs=1e-9)
 
 
-def test_label_agreement() -> None:
-    """3 of 5 segments are human_edit → label_agreement = 0.6."""
+def test_human_touched_fraction() -> None:
+    """3 of 5 segments are human_edit → human_touched_fraction = 0.6."""
     ann = _make_annotation(n_human=3, n_total=5)
     m = compute_metrics(ann, "run_d")
     assert m.human_edited_segments == 3
     assert m.total_segments == 5
-    assert m.label_agreement == pytest.approx(0.6)
+    assert m.human_touched_fraction == pytest.approx(0.6)
 
 
 def test_aggregate() -> None:
@@ -142,7 +142,7 @@ def test_aggregate() -> None:
         client_coverage=1.0,
         human_edited_segments=2,
         total_segments=5,
-        label_agreement=0.4,
+        human_touched_fraction=0.4,
     )
     m2 = RunMetrics(
         run_name="run_b",
@@ -151,7 +151,7 @@ def test_aggregate() -> None:
         client_coverage=0.0,
         human_edited_segments=0,
         total_segments=3,
-        label_agreement=0.0,
+        human_touched_fraction=0.0,
     )
     agg = aggregate([m1, m2])
     assert agg.run_name == "**total**"
@@ -161,7 +161,7 @@ def test_aggregate() -> None:
     assert agg.client_coverage == pytest.approx(0.75)
     assert agg.human_edited_segments == 2
     assert agg.total_segments == 8
-    assert agg.label_agreement == pytest.approx(2 / 8)
+    assert agg.human_touched_fraction == pytest.approx(2 / 8)
 
 
 def test_aggregate_empty() -> None:
@@ -202,7 +202,7 @@ def test_render_markdown_smoke() -> None:
         "client_cov",
         "human_segs",
         "total_segs",
-        "label_agr",
+        "human_touched",
     ):
         assert col in out
     # Each run name and the aggregate row appear.
@@ -235,10 +235,93 @@ def test_render_json_smoke() -> None:
 
 def test_empty_segments_no_zerodiv() -> None:
     """compute_metrics on an annotation with zero segments must not ZeroDivide;
-    label_agreement defaults to 0.0 and total_segments to 0."""
+    human_touched_fraction defaults to 0.0 and total_segments to 0."""
     ann = _make_annotation(n_total=0, history=[])
     m = compute_metrics(ann, "run_empty")
     assert m.total_segments == 0
-    assert m.label_agreement == 0.0
+    assert m.human_touched_fraction == 0.0
     assert m.total_edits == 0
     assert m.client_coverage == 0.0
+
+
+# ----------------------------------------------------------------------------
+# Phase 5 D r2 — B3: rename label_agreement → human_touched_fraction
+# ----------------------------------------------------------------------------
+
+
+def test_human_touched_fraction_replaces_label_agreement() -> None:
+    """RunMetrics must expose the renamed field; the old name MUST be gone."""
+    from mimicanno.eval.metrics import RunMetrics
+    m = RunMetrics(
+        run_name="dummy",
+        total_edits=0,
+        human_edit_time_ms=0,
+        client_coverage=0.0,
+        human_edited_segments=0,
+        total_segments=0,
+        human_touched_fraction=0.5,
+    )
+    assert m.human_touched_fraction == 0.5
+    assert not hasattr(m, "label_agreement"), (
+        "label_agreement field must be removed after D r2 rename"
+    )
+
+
+def test_render_markdown_uses_workload_proxy_footnote() -> None:
+    """The Markdown render must include a footnote clarifying the metric is
+    a workload proxy, not planner agreement."""
+    from mimicanno.eval.metrics import RunMetrics
+    from mimicanno.eval.render import render_markdown
+    r = RunMetrics(
+        run_name="ep0",
+        total_edits=1,
+        human_edit_time_ms=100,
+        client_coverage=1.0,
+        human_edited_segments=3,
+        total_segments=5,
+        human_touched_fraction=0.6,
+    )
+    agg = RunMetrics(
+        run_name="**total**",
+        total_edits=1,
+        human_edit_time_ms=100,
+        client_coverage=1.0,
+        human_edited_segments=3,
+        total_segments=5,
+        human_touched_fraction=0.6,
+    )
+    out = render_markdown([r], agg)
+    lo = out.lower()
+    assert "workload proxy" in lo or "human-workload" in lo, (
+        f"render must include a workload-proxy footnote, got: {out!r}"
+    )
+
+
+def test_render_markdown_uses_human_touched_column() -> None:
+    """The Markdown header must read `human_touched` (not `label_agr`)."""
+    from mimicanno.eval.metrics import RunMetrics
+    from mimicanno.eval.render import render_markdown
+    r = RunMetrics(
+        run_name="ep0",
+        total_edits=0, human_edit_time_ms=0, client_coverage=0.0,
+        human_edited_segments=0, total_segments=0, human_touched_fraction=0.0,
+    )
+    out = render_markdown([r], r)
+    assert "human_touched" in out, f"missing column header: {out!r}"
+    assert "label_agr" not in out, f"old column header still present: {out!r}"
+
+
+def test_render_json_uses_new_key() -> None:
+    """The JSON render must emit `human_touched_fraction`, not `label_agreement`."""
+    import json
+    from mimicanno.eval.metrics import RunMetrics
+    from mimicanno.eval.render import render_json
+    r = RunMetrics(
+        run_name="ep0",
+        total_edits=0, human_edit_time_ms=0, client_coverage=0.0,
+        human_edited_segments=0, total_segments=0, human_touched_fraction=0.6,
+    )
+    parsed = json.loads(render_json([r], r))
+    assert "human_touched_fraction" in parsed["runs"][0]
+    assert "label_agreement" not in parsed["runs"][0]
+    assert "human_touched_fraction" in parsed["aggregate"]
