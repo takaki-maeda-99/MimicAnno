@@ -4,6 +4,22 @@
 
 ---
 
+## ✅ D r2 backend hardening — branch SHIPPED (`feat/phase5-d-r2-backend`)
+
+**ブランチ**: `feat/phase5-d-r2-backend` (worktree `.claude/worktrees/d-r2-backend/`)
+**4 commits ahead of main** (`f7f1579..874ceb1`)、**252 tests passing** (233 baseline + 15 new、mypy --strict clean)
+**結果 note**: `docs/superpowers/notes/2026-05-17-phase5-d-r2-backend-results.md` (gitignored、worktree-only)
+
+修正済 4 item:
+- **B1** schema_version PATCH upgrade (4 repos × `replace(annotation, ..., schema_version=...)` 追加)
+- **B2** PATCH-twice history-order regression test (2 tests, no code change)
+- **B3** `label_agreement` → `human_touched_fraction` rename + workload-proxy footnote (Markdown 列 / JSON key / 4 new guard tests)
+- **B4** `client_edit_duration_ms` 上限 cap 600,000ms (4 PATCH route × reject + 8 boundary tests)
+
+**次ステップ**: PR open は user 判断。`superpowers:finishing-a-development-branch` skill 経由でマージ判定。Phase 6 / eval v2 で扱う: 真の planner agreement (EditEvent old/new value 拡張、confusion matrix、per-edit-type breakdown)。
+
+---
+
 ## ✅ D r2 frontend timing — branch SHIPPED (本 worktree)
 
 **ブランチ**: `feat/phase5-d-r2-frontend-timing` (worktree `.claude/worktrees/d-r2-frontend-timing/`)
@@ -72,7 +88,7 @@
 
 | 優先 | ID | 内容 | 状態・備考 |
 |---|---|---|---|
-| 高 | **D r2 backend** | `label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap | spec 未着手。frontend 3件は本 PR で main merge 済。残るは backend のみ。詳細: `2026-05-16-phase5-autonomy-exit-summary.md` |
+| ~~高~~ | ~~**D r2 backend**~~ | ~~`label_agreement` リネーム / PATCH-route `schema_version` upgrade 漏れ / PATCH-twice history order test / `client_edit_duration_ms` server-side cap~~ | ✅ **SHIPPED 2026-05-17** (branch `feat/phase5-d-r2-backend`、上記参照)。Phase 6 / eval v2 で扱う: 真の planner agreement (EditEvent old/new value 拡張) |
 | 低 | **Phase 5 E (そのうち)** | MimicRec 統合は遅らせる方針 (2026-05-16 ユーザー判断)。MimicAnno 側だけで先行できる準備 3 件: (A) `mimicanno export-undo` CLI、(B) integration contract 凍結 docs (parent §14 + Phase 5 A 現状を stable doc に切り出し)、(C) read-only Python client `mimicanno.client` (将来 MimicRec が import するための runs reader) | **そのうちやる**。MimicRec 本体 (`~/MimicRec` まだ未配置) への save_annotations swap-out + Replay page は MimicRec が手元に来てから別途 spec。本リポ内で完結する範囲のみ autonomy 窓不要 |
 | ~~中~~ | ~~**G1**~~ | ~~batch_annotate 実機 smoke (4B variant)~~ | ✅ **DONE 2026-05-17**。4B PASS (`2026-05-17-g1-batch-annotate-smoke-results.md`)。26B は VRAM 不足で skip 確定 |
 | 中 | **G3** | autonomy exit end-to-end 実データ sanity check (SO101 3-5 ep × rubric 妥当性) | ⏸ `.venv` torch 2.11.0+cu130 vs driver 12.6 mismatch で停止中。.venv は G1/G4 と共有のため独断で書き換えず、env 調整方針要 |
