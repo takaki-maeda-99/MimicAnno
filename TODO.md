@@ -38,6 +38,15 @@ manifest 検査: `cat runs/_smoke_grounding_retry/episode_000002__*/manifest.jso
 
 **完了後**: smoke 結果次第で `grounding_retry_fractions=[0.5, 0.25, 0.75]` の見直し (m5 spec)、PR 提出、main merge。
 
+**Final review nice-to-haves (deferred、smoke 後または PR 中に対応)**:
+- I1: `_count_missing_mask_frames` wire-up — 関数は `pipeline.py:319` に実装済だが call site (`pipeline.py:1135`) が hardcoded `0` のまま。`segment_keyframes` を manifest 構築点に通せば配線できる
+- M3: frame 0 success path で `propagation_direction="forward", anchor=0` を assert する integration test を追加 (現在は retry-success と degrade のみカバー、§6.1 invariant の forward 経路は未テスト)
+- I3: `mimicanno/schema.py` の `_UNSET: Any` sentinel — `Any` typing が mypy を defeat。`Sentinel = NewType(...)` 化または explicit subclass 化で型安全性向上
+- M1: 命名揺れ `adopted_frame_idx` (Python local) vs `adopted_frame_index` (manifest/dataclass) — search-and-replace で統一
+- M4: `fixtures.py:178` の `propagation_direction: str = "forward"` → `Literal["forward","both"]` で型整合
+- M5: `_extract_frame_at:293` の `except Exception` を I/O 例外限定に絞る
+- M6: `test_retry_total_failure_returns_none` が `[0,75,37,112]` ハードコード → default 変更時 brittle、parametrize 推奨
+
 ---
 
 ### U-A: Dataset processing & visualization UI ✅ **完了 (2026-05-17)**
