@@ -160,7 +160,8 @@ POST /api/jobs
 ```
 
 ```
-GET /api/jobs
+GET /api/jobs[?status=<queued|running|done|failed|cancelled>]
+   // status filter optional, may repeat (?status=queued&status=running). Used by U-A5.
 → 200 application/json
 [
   { "job_id": "j_...", "status": "running", "dataset": "SO101",
@@ -217,7 +218,7 @@ DELETE /api/jobs/{job_id}
 
 ### 2.4 VLM dumps (U-A3)
 
-Path is suffixed with `.json` to disambiguate from the existing catch-all `GET /api/runs/{name}/{artifact}` route at `mimicanno/server/routes.py:568` (which would otherwise match first and return 404 from `RunsRepository.open_artifact`). U-A3 backend MUST register this route **before** the catch-all in the router.
+FastAPI's `{artifact}` in the catch-all `GET /api/runs/{name}/{artifact}` (at `mimicanno/server/routes.py` — grep `\"/api/runs/{name}/{artifact}\"` since line numbers drift) matches *any* string including `vlm_dumps.json`. The `.json` / `.png` suffix is for human readability; **disambiguation is purely by router registration order**. U-A3 backend MUST register this route **before** the catch-all.
 
 ```
 GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (see §2.0)
@@ -246,7 +247,7 @@ Reads `runs/<rs>/<canonical>/_vlm_dumps/*.jsonl`. Missing dir (`_vlm_dumps/` not
 
 ### 2.5 SAM3 masks (U-A4)
 
-Paths use file-suffixed shapes for the same reason as §2.4 (catch-all disambiguation). U-A4 backend registers these **before** the catch-all.
+Same situation as §2.4: catch-all matches anything, so U-A4 backend MUST register these routes **before** the catch-all. The `.png` / `.json` suffixes are for human readability only.
 
 ```
 GET /api/runs/{canonical}/masks/{frame}.png?run_set=<rs>   // run_set REQUIRED
@@ -359,7 +360,7 @@ U-A3 and U-A4 can technically start before U-A1 finishes (they only depend on th
 
 1. From `/datasets` a user can pick a dataset, click "Annotate", select robot+pipeline+ep subset, submit, and watch the job complete in `/jobs`.
 2. After the job finishes, the resulting runs show up under `/runs` immediately.
-3. From RunViewer the user sees the VLM panel (U-A3) and the SAM3 mask overlay (U-A4) for the current ep without manual page reload.
+3. From RunViewer the user sees the VLM panel (U-A3) and the SAM3 mask overlay (U-A4) for the current ep. (Mechanism: VLM panel fetches on segment selection change; mask overlay fetches per frame on time cursor change. No global push needed — each sub-spec pins its own trigger.)
 4. `/datasets/<name>` shows the dataset summary dashboard (U-A2).
 5. The header badge (U-A5) reflects running-job count at most a few seconds out of date.
 6. No regression in existing GET / PATCH routes or RunViewer behavior.
