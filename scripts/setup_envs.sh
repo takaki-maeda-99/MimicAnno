@@ -53,6 +53,11 @@ done
 if [[ $DO_UNIDAC -eq 1 ]]; then
     log "=== UniDAC conda env ==="
 
+    # NOTE: scripts/precompute_depth.py and scripts/visualize_depth.py pipe
+    # frames to `ffmpeg` (libx264) for browser-playable mp4 output. Ensure
+    # ffmpeg is on PATH — install via `apt install ffmpeg` system-wide or
+    # `conda install -n unidac -c conda-forge ffmpeg` into the env.
+
     if conda env list 2>/dev/null | grep -q '^unidac '; then
         ok "conda env 'unidac' already exists — skipping create"
     else
