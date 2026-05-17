@@ -91,6 +91,36 @@ class GapEvent:
     reason: GapReason
 
 
+@dataclass(slots=True, frozen=True)
+class GroundingAttempt:
+    """One frame's grounding attempt during retry (spec §5.2).
+
+    Attributes:
+        frame_index: video frame index attempted
+        n_object_grounded: detections with role == "object"
+        n_total_grounded: objects + targets + tools
+        adopted: True on the attempt whose plan was returned; False otherwise.
+            On total failure (degrade), all attempts have adopted=False.
+        skipped_reason: "io_error" if frame read failed; else None
+    """
+
+    frame_index: int
+    n_object_grounded: int
+    n_total_grounded: int
+    adopted: bool
+    skipped_reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-serializable representation for manifest output."""
+        return {
+            "frame_index": self.frame_index,
+            "n_object_grounded": self.n_object_grounded,
+            "n_total_grounded": self.n_total_grounded,
+            "adopted": self.adopted,
+            "skipped_reason": self.skipped_reason,
+        }
+
+
 @dataclass(slots=True)
 class Track:
     """One propagated track for one (role, prompt) seed (spec §2.4)."""
