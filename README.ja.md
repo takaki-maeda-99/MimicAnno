@@ -26,28 +26,32 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 
 ## インストール
 
-Python 3.11+ と [uv](https://github.com/astral-sh/uv) が必要。
+Linux + `uv`, `conda`, `python3.10`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
 
 ```bash
-git clone git@github.com:takaki-maeda-99/MimicAnno.git
+git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
-uv sync                     # コアのみ
-uv sync --extra dev         # + pytest / mypy / ruff (開発時推奨)
-uv sync --extra vlm         # + transformers   (Phase 2 — Gemma)
-uv sync --extra sam3        # + transformers + torch + torchvision (Phase 3 — SAM3)
+
+# 一発セットアップ (submodules / core / unidac / hamer / frontend / gated weights)。
+# SAM3 と Gemma 4 のために事前に `HF_TOKEN` を export するか `hf auth login` を実行。
+bash scripts/setup_envs.sh
+
+# 個別実行 (不要な step を skip):
+bash scripts/setup_envs.sh --core --frontend     # UI のみ
+bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
+
+# 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
 
-CUDA driver が 13.0 未満の GPU 環境 (例: Ubuntu 24.04 + driver 12.8) は、`uv sync` 後にバージョンの合う torch wheel を上書きインストール:
+手動ステップ: https://mano.is.tue.mpg.de に登録し `MANO_RIGHT.pkl` を
+`hamer/_DATA/data/mano/MANO_RIGHT.pkl` に配置 (license gate、script 化不可)。
+
+レビュー UI を起動:
 
 ```bash
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-uv pip install transformers Pillow
-```
-
-CUDA が認識されているか確認:
-
-```bash
-uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+bash scripts/start_ui.sh                                  # :8000 / :5173
+API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
+bash scripts/start_ui.sh --runs-root /path/to/runs
 ```
 
 ## クイックスタート

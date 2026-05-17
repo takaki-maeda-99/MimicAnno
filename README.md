@@ -26,37 +26,32 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 
 ## Install
 
-Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
+Requires Linux + `uv`, `conda`, `python3.10`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof`.
 
 ```bash
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
-# If you forgot --recurse-submodules above:
-git submodule update --init sam3
 
-uv sync                     # core
-uv sync --extra dev         # + pytest / mypy / ruff (recommended for development)
-uv sync --extra vlm         # + transformers   (Phase 2 — Gemma 4)
-uv sync --extra sam3        # + sam3 submodule (editable) + torch + opencv + ... (Phase 3)
+# One-shot bootstrap (submodules, core, unidac, hamer, frontend, gated weights).
+# Set HF_TOKEN or run `hf auth login` first for SAM3 / Gemma 4.
+bash scripts/setup_envs.sh
+
+# Selective install (skip steps you don't need):
+bash scripts/setup_envs.sh --core --frontend     # UI-only path
+bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
+
+# Re-runs are idempotent (each step skips when its sentinel is satisfied).
 ```
 
-Phase 3 uses the vendored [`sam3/`](sam3/) git submodule (Meta's SAM 3 native API,
-not the transformers integration). Drop the SAM 3 weights into
-`sam3/checkpoints/sam3.pt`; the CLI's `--sam3-checkpoint` points at this file.
-The HF transformers SAM3 path was retired on 2026-05-04 — see
-[`docs/superpowers/specs/2026-05-04-sam3-submodule-backend-design.md`](docs/superpowers/specs/2026-05-04-sam3-submodule-backend-design.md).
+Manual step: register at https://mano.is.tue.mpg.de and place `MANO_RIGHT.pkl` at
+`hamer/_DATA/data/mano/MANO_RIGHT.pkl` (license-gated, cannot be scripted).
 
-GPU users with CUDA driver < 13.0 (e.g. Ubuntu 24.04 with driver 12.8) need a matching torch wheel:
+Launch the review UI:
 
 ```bash
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-uv pip install transformers Pillow
-```
-
-Verify CUDA:
-
-```bash
-uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+bash scripts/start_ui.sh                                  # :8000 / :5173
+API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
+bash scripts/start_ui.sh --runs-root /path/to/runs
 ```
 
 ## Quickstart
