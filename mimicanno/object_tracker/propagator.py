@@ -166,6 +166,33 @@ def ground_initial_detections(
 # ---------------------------------------------------------------------------
 
 
+def _compute_retry_frame_indices(
+    n_frames: int, retry_fractions: list[float],
+) -> list[int]:
+    """Compute clamped, dedup'd retry frame indices (spec §5.3).
+
+    For each frac in retry_fractions:
+      idx = max(0, min(n_frames - 1, int(frac * n_frames)))
+    Filter out frame 0 (the initial attempt is always frame 0) and
+    dedup preserving order.
+
+    Returns [] when n_frames <= 1 (no alternative frames exist) or
+    when retry_fractions is empty.
+    """
+    if n_frames <= 1 or not retry_fractions:
+        return []
+    max_idx = n_frames - 1
+    out: list[int] = []
+    seen: set[int] = {0}  # frame 0 is the initial attempt, exclude
+    for frac in retry_fractions:
+        idx = max(0, min(max_idx, int(frac * n_frames)))
+        if idx in seen:
+            continue
+        seen.add(idx)
+        out.append(idx)
+    return out
+
+
 def _build_frame_iterator(n_frames: int, stride: int) -> list[int]:
     """Build frame indices: 0, stride, 2*stride, ... always including n_frames - 1."""
     if n_frames == 0:
