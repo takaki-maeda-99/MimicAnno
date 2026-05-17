@@ -36,6 +36,7 @@ from mimicanno.server.edit_repo import (
 from mimicanno.server.errors import MimicAnnoHTTPError
 from mimicanno.server.labelset import LabelSetCache
 from mimicanno.server.labels_repo import LabelsNoChange, patch_labels
+from mimicanno.server.mask_routes import make_mask_router
 from mimicanno.server.reviewed_repo import ReviewedNoChange, patch_reviewed
 from mimicanno.server.runs_repo import RunsRepository, list_run_sets
 from mimicanno.server.vlm_dumps import (
@@ -596,6 +597,10 @@ def make_router(
                 "Cache-Control": "no-cache",
             },
         )
+
+    # U-A4 — SAM3 mask overlay routes.
+    # MUST be registered BEFORE the /api/runs/{name}/{artifact} catch-all.
+    router.include_router(make_mask_router(parent_root))
 
     # U-A3 — VLM dumps viewer route (master §2.4 rev3).
     # MUST be registered BEFORE the /api/runs/{name}/{artifact} catch-all

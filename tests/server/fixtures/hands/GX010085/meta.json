@@ -7,5 +7,10 @@
   "frames_with_hands": 2,
   "frames_left_hand": 1,
   "frames_right_hand": 2,
-  "pass1_complete": true
+  "pass1_complete": true,
+  "depth_source": "tests/server/fixtures/depth/GX010085",
+  "depth_meta": {
+    "frames_processed": 3,
+    "frames_skipped_existing": 0
+  }
 }

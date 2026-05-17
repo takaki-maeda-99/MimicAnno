@@ -10,6 +10,7 @@ export type HandSignalFrame = {
   cam_t: [number, number, number];
   euler_deg: { yaw: number; pitch: number; roll: number };
   depth_ok: boolean;
+  joints_2d: [number, number][] | null;
 };
 
 export type HandFrameEntry = {
@@ -25,6 +26,7 @@ export type HandSignalsDoc = {
 export type HandEpisodeEntry = {
   episode_id: string;
   signals_ready: boolean;
+  depth_video_ready: boolean;
 };
 
 export type HandIndexDoc = {
@@ -36,5 +38,14 @@ export type HandMetaDoc = {
   video_source: string;
   video_fps: number;
   video_total_frames: number;
+  video_width?: number;
+  video_height?: number;
+  depth_source?: string;
+  depth_meta?: {
+    frames_processed?: number;
+    frames_skipped_existing?: number;
+    preset_params?: { fl_x_ref?: number; fl_y_ref?: number };
+    ref_w_native?: number;
+  };
   [key: string]: unknown;
 };

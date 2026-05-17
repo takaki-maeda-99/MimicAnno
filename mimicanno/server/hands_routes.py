@@ -65,16 +65,37 @@ def make_hands_router(
             if signals_path.exists():
                 try:
                     sig = json.loads(signals_path.read_text())
-                    signals_ready = sig.get("schema_version") == 2
+                    signals_ready = sig.get("schema_version") == 3
                 except Exception:
                     signals_ready = False
             ep_id = ep_dir.name
+            depth_video_ready = False
+            depth_source = meta.get("depth_source")
+            if isinstance(depth_source, str) and depth_source:
+                depth_meta = meta.get("depth_meta") or {}
+                fp = depth_meta.get("frames_processed")
+                fs = depth_meta.get("frames_skipped_existing", 0)
+                vtf = meta.get("video_total_frames")
+                frames_ok = (
+                    isinstance(fp, int)
+                    and isinstance(fs, int)
+                    and isinstance(vtf, int)
+                    and fp + fs == vtf
+                )
+                if frames_ok:
+                    depth_path = (repo_root / depth_source / "viz_depth.mp4").resolve()
+                    try:
+                        if depth_path.is_relative_to(repo_root.resolve()) and depth_path.exists():
+                            depth_video_ready = True
+                    except ValueError:
+                        depth_video_ready = False
             episodes.append({
                 "episode_id": ep_id,
                 "fps": meta.get("video_fps"),
                 "total_frames": meta.get("video_total_frames"),
                 "frames_with_hands": meta.get("frames_with_hands"),
                 "signals_ready": signals_ready,
+                "depth_video_ready": depth_video_ready,
                 "video_url": f"{ep_id}/video",
                 "signals_url": f"{ep_id}/signals.json",
                 "meta_url": f"{ep_id}/meta.json",
@@ -137,5 +158,38 @@ def make_hands_router(
         if not video_path.exists():
             return JSONResponse({"error": "video file not found"}, status_code=404)
         return FileResponse(str(video_path), media_type="video/mp4")
+
+    @router.get("/{episode}/depth_video")
+    async def hands_depth_video(episode: str) -> Response:
+        if hands_root is None:
+            return _503()
+        bad = _validate_episode(episode)
+        if bad:
+            return bad
+        meta_path = hands_root / episode / "meta.json"
+        if not meta_path.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            return JSONResponse({"error": "meta.json parse error"}, status_code=500)
+        depth_source = meta.get("depth_source")
+        if not isinstance(depth_source, str) or not depth_source:
+            return JSONResponse(
+                {"error": "meta.json missing depth_source"}, status_code=400
+            )
+        depth_path = (repo_root / depth_source / "viz_depth.mp4").resolve()
+        try:
+            if not depth_path.is_relative_to(repo_root.resolve()):
+                return JSONResponse(
+                    {"error": "depth_source outside repo_root"}, status_code=400
+                )
+        except ValueError:
+            return JSONResponse(
+                {"error": "depth_source outside repo_root"}, status_code=400
+            )
+        if not depth_path.exists():
+            return JSONResponse({"error": "viz_depth.mp4 not found"}, status_code=404)
+        return FileResponse(str(depth_path), media_type="video/mp4")
 
     return router
