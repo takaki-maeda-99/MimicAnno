@@ -325,3 +325,378 @@ def test_render_json_uses_new_key() -> None:
     assert "human_touched_fraction" in parsed["runs"][0]
     assert "label_agreement" not in parsed["runs"][0]
     assert "human_touched_fraction" in parsed["aggregate"]
+
+
+# ----------------------------------------------------------------------------
+# Phase 6 — planner_agreement metric tests
+# ----------------------------------------------------------------------------
+
+
+def _make_annotation_v04(
+    history: list[EditEvent] | None = None,
+    segments: list | None = None,
+    schema_version: str = "0.4.0",
+) -> AnnotationResult:
+    """Construct a minimal AnnotationResult for Phase 6 tests (schema 0.4.0)."""
+    from mimicanno.schema import (
+        BoundaryRef,
+        GeneratorInfo,
+        PipelineStatus,
+        SubtaskSegment,
+        TaskInfo,
+    )
+
+    def _seg(
+        i: int,
+        phase: str = "grasp",
+        label_source: str = "signals_only",
+        overall_confidence: float = 0.9,
+    ) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source=label_source,
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=overall_confidence,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    if segments is None:
+        segments = [_seg(i) for i in range(5)]
+
+    ps = PipelineStatus(
+        object_state_available=False,
+        degraded_from_phase=None,
+        degrade_reason=None,
+    )
+    return AnnotationResult(
+        schema_version=schema_version,
+        episode_id="episode_000000",
+        task=TaskInfo(text="pick", version=None),
+        generated_at="2026-05-16T00:00:00Z",
+        generator=GeneratorInfo(name="mimicanno", cli_version="0.1.0", pipeline_phase=4),
+        config_hash="sha256:" + "a" * 64,
+        input_hash="sha256:" + "b" * 64,
+        run_hash="sha256:" + "c" * 64,
+        model_versions={},
+        pipeline_phase=4,
+        pipeline_status=ps,
+        segments=segments,
+        boundaries_url="boundaries.json",
+        signals_url="signals.json",
+        notes=None,
+        history=history or [],
+    )
+
+
+def _relabel_event(
+    seg_id: str,
+    old_phase: str,
+    new_phase: str,
+    edited_at: str = "2026-05-16T00:00:00Z",
+    pre_edit_confidence: float | None = None,
+) -> EditEvent:
+    return EditEvent(
+        edit_type="relabel",
+        segment_id=seg_id,
+        edited_at=edited_at,
+        client_edit_duration_ms=100,
+        reviewer=None,
+        old_value={"kind": "relabel", "value": old_phase},
+        new_value={"kind": "relabel", "value": new_phase},
+        pre_edit_overall_confidence=pre_edit_confidence,
+    )
+
+
+def test_p6_planner_agreement_overall_rate_correct_for_mixed_history() -> None:
+    """5 segments: 2 unedited (planner==final, agree),
+    2 edited with planner==final (relabel cancelled, agree),
+    1 edited with planner!=final (disagree).
+    Expect overall_rate = 4/5 = 0.8.
+    """
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str, label_source: str = "signals_only") -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source=label_source,
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    # seg0, seg1: unedited → planner==final (agree)
+    # seg2: relabeled approach→approach (agree, relabel cancelled)
+    # seg3: relabeled approach→approach (agree, relabel cancelled)
+    # seg4: relabeled approach→grasp (disagree)
+    segs = [
+        _seg(0, "idle"),
+        _seg(1, "approach"),
+        _seg(2, "approach", "human_edit"),
+        _seg(3, "approach", "human_edit"),
+        _seg(4, "grasp", "human_edit"),
+    ]
+    history = [
+        _relabel_event("seg0002", old_phase="approach", new_phase="approach"),
+        _relabel_event("seg0003", old_phase="approach", new_phase="approach"),
+        _relabel_event("seg0004", old_phase="approach", new_phase="grasp"),
+    ]
+    ann = _make_annotation_v04(history=history, segments=segs)
+    m = compute_metrics(ann, "run_p6")
+    assert m.planner_agreement is not None
+    assert m.planner_agreement.overall_rate == pytest.approx(0.8)
+
+
+def test_p7_confusion_matrix_dimensions_and_counts() -> None:
+    """Synthetic run with phases {idle, approach, grasp}. Verify rows are
+    planner phases (from history[0].old_value or segment.phase), cols are
+    final phases (segment.phase), off-diagonal entries count disagreements.
+    """
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source="signals_only",
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    # seg0: unedited, phase=idle → cm[idle][idle] += 1
+    # seg1: relabeled idle→approach → cm[idle][approach] += 1 (off-diagonal)
+    # seg2: unedited, phase=grasp → cm[grasp][grasp] += 1
+    segs = [_seg(0, "idle"), _seg(1, "approach"), _seg(2, "grasp")]
+    history = [_relabel_event("seg0001", old_phase="idle", new_phase="approach")]
+    ann = _make_annotation_v04(history=history, segments=segs)
+    m = compute_metrics(ann, "run_p7")
+    assert m.planner_agreement is not None
+    cm = m.planner_agreement.confusion_matrix
+    assert cm["idle"]["idle"] == 1
+    assert cm["idle"]["approach"] == 1
+    assert cm["grasp"]["grasp"] == 1
+    # No spurious entries
+    assert "approach" not in cm or cm.get("approach", {}).get("grasp", 0) == 0
+
+
+def test_p8_breakdowns_sum_consistent_with_overall() -> None:
+    """sum(by_source[*].agree + disagree) == overall (agree + disagree).
+    Same for by_confidence_bucket and by_phase.
+    """
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str, conf: float = 0.9) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source="signals_only",
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=conf,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    segs = [
+        _seg(0, "idle", conf=0.3),    # low confidence
+        _seg(1, "approach", conf=0.7),  # mid confidence
+        _seg(2, "grasp", conf=0.95),   # high confidence
+    ]
+    # seg1: relabeled idle→approach (disagree)
+    history = [_relabel_event("seg0001", old_phase="idle", new_phase="approach", pre_edit_confidence=0.4)]
+    ann = _make_annotation_v04(history=history, segments=segs)
+    m = compute_metrics(ann, "run_p8")
+    assert m.planner_agreement is not None
+    block = m.planner_agreement
+
+    total_overall = sum(
+        v.agree + v.disagree for v in block.by_source.values()
+    )
+    assert total_overall == len(segs)
+
+    total_conf = sum(v.agree + v.disagree for v in block.by_confidence_bucket.values())
+    assert total_conf == len(segs)
+
+    total_phase = sum(v.agree + v.disagree for v in block.by_phase.values())
+    assert total_phase == len(segs)
+
+
+def test_p9_unedited_segments_contribute_to_diagonal() -> None:
+    """A segment never edited contributes confusion_matrix[seg.phase][seg.phase] += 1.
+    Per spec §5.2 algorithm.
+    """
+    segs_data = [("idle", 0), ("approach", 1), ("grasp", 2)]
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source="signals_only",
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    segs = [_seg(i, phase) for phase, i in segs_data]
+    ann = _make_annotation_v04(history=[], segments=segs)  # no history
+    m = compute_metrics(ann, "run_p9")
+    assert m.planner_agreement is not None
+    cm = m.planner_agreement.confusion_matrix
+    # All unedited → all diagonal
+    assert cm["idle"]["idle"] == 1
+    assert cm["approach"]["approach"] == 1
+    assert cm["grasp"]["grasp"] == 1
+    assert m.planner_agreement.overall_rate == pytest.approx(1.0)
+
+
+def test_p10_edit_then_revert_uses_first_event_as_planner_side() -> None:
+    """Two relabel events on same segment: A → B → A. Earliest event's
+    old_value (= A) is used. Confusion matrix records A→A (diagonal).
+    Final segment.phase is also A.
+    """
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source="human_edit",
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    # Final phase is "approach" (reverted)
+    segs = [_seg(0, "approach")]
+    # Two events: first A→B, then B→A (revert)
+    history = [
+        _relabel_event("seg0000", old_phase="approach", new_phase="grasp",
+                       edited_at="2026-05-16T00:00:01Z"),
+        _relabel_event("seg0000", old_phase="grasp", new_phase="approach",
+                       edited_at="2026-05-16T00:00:02Z"),
+    ]
+    ann = _make_annotation_v04(history=history, segments=segs)
+    m = compute_metrics(ann, "run_p10")
+    assert m.planner_agreement is not None
+    cm = m.planner_agreement.confusion_matrix
+    # planner_phase = approach (from first event old_value), final = approach → diagonal
+    assert cm["approach"]["approach"] == 1
+    assert m.planner_agreement.overall_rate == pytest.approx(1.0)
+
+
+def test_p13_0_3_0_run_yields_planner_agreement_none() -> None:
+    """If annotation.schema_version == '0.3.0', compute_planner_agreement returns None.
+    Verify RunMetrics.planner_agreement is None for such runs.
+    """
+    ann = _make_annotation(history=[], n_total=3)  # uses schema_version="0.3.0"
+    m = compute_metrics(ann, "run_p13")
+    assert m.planner_agreement is None
