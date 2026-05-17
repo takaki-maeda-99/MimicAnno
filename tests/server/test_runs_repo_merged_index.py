@@ -100,3 +100,24 @@ def test_merged_index_malformed_subdir_skipped(tmp_path: Path) -> None:
     repo = RunsRepository(tmp_path)
     doc = json.loads(repo.read_merged_index())
     assert [r["run_set"] for r in doc["runs"]] == ["good"]
+
+
+def test_merged_index_skips_non_dict_rows(tmp_path: Path) -> None:
+    """Defensive: a corrupt row that isn't a dict is skipped, valid rows kept."""
+    (tmp_path / "mixed" / "index.json").parent.mkdir(parents=True)
+    (tmp_path / "mixed" / "index.json").write_text(json.dumps({
+        "schema_version": "0.1.0",
+        "runs": [
+            "not_a_dict",
+            42,
+            {"episode_id": "episode_000000", "run_hash": "sha256:" + "0" * 64,
+             "manifest_url": "episode_000000__000/manifest.json",
+             "run_hash_short": "000000000000", "config_hash_short": "x",
+             "input_hash_short": "y", "task_text": "ok", "pipeline_phase": 4,
+             "generated_at": "2026-01-07T00:00:00Z"},
+        ],
+    }))
+    repo = RunsRepository(tmp_path)
+    doc = json.loads(repo.read_merged_index())
+    assert [r["run_set"] for r in doc["runs"]] == ["mixed"]
+    assert doc["runs"][0]["episode_id"] == "episode_000000"

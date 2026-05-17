@@ -84,7 +84,10 @@ class RunsRepository:
         - rows from ``<root>/<sub>/index.json`` → ``run_set: "<sub>"``
 
         Read uses the same retry loop as ``read_index`` so a run-set
-        currently mid-publish is not silently dropped. Subdirs without
+        whose index is mid-rewrite (visible to ``iterdir`` but momentarily
+        missing during ``read_bytes``) is not silently dropped. A run-set
+        published entirely after ``iterdir()`` is naturally missed —
+        callers needing absolute freshness should re-request. Subdirs without
         index.json or with malformed JSON are silently skipped.
         Empty result: ``{"schema_version":"0.1.0","runs":[]}``.
 
