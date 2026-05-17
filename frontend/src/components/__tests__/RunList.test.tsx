@@ -66,7 +66,7 @@ function renderWithProvider() {
 
 it("shows hand episode links when /api/hands/index.json returns episodes", async () => {
   renderWithProvider();
-  await waitFor(() => screen.getByText("手のデータ"));
+  await waitFor(() => screen.getByText("Hand data"));
   const link = screen.getByRole("link", { name: "GX010085" });
   expect(link.getAttribute("href")).toContain("hand=GX010085");
 });
@@ -80,13 +80,13 @@ it("does not show hand section when /api/hands/index.json returns 503", async ()
   );
   renderWithProvider();
   await waitFor(() => screen.getByText("ep0"));
-  expect(screen.queryByText("手のデータ")).toBeNull();
+  expect(screen.queryByText("Hand data")).toBeNull();
 });
 
-it("signals_ready=false shows signals未生成 label", async () => {
+it("signals_ready=false shows signals-not-generated label", async () => {
   renderWithProvider();
-  await waitFor(() => screen.getByText("手のデータ"));
-  expect(screen.getByText("(signals未生成)")).toBeTruthy();
+  await waitFor(() => screen.getByText("Hand data"));
+  expect(screen.getByText("(signals not generated)")).toBeTruthy();
   const links = screen.getAllByRole("link");
   const handLinks = links.filter((l) => l.getAttribute("href")?.includes("hand=GX010086"));
   expect(handLinks).toHaveLength(0);

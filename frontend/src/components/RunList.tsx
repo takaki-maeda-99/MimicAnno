@@ -162,7 +162,7 @@ export default function RunList({ runSet }: Props = {}) {
       </table>
       {handState.kind === "ok" && handState.doc.episodes.length > 0 && (
         <div className="hand-episode-list">
-          <h2>手のデータ</h2>
+          <h2>Hand data</h2>
           <ul>
             {handState.doc.episodes.map((ep) =>
               ep.signals_ready ? (
@@ -174,7 +174,7 @@ export default function RunList({ runSet }: Props = {}) {
               ) : (
                 <li key={ep.episode_id} className="hand-episode-no-signals">
                   {ep.episode_id}{" "}
-                  <span className="hand-no-signals-label">(signals未生成)</span>
+                  <span className="hand-no-signals-label">(signals not generated)</span>
                 </li>
               ),
             )}

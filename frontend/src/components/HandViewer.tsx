@@ -153,7 +153,7 @@ function HandDataPanel({
     | { right: HandSignalFrame | null; left: HandSignalFrame | null }
     | undefined;
   if (entry === undefined) {
-    return <div className="hand-data-panel">フレームデータなし</div>;
+    return <div className="hand-data-panel">No frame data</div>;
   }
 
   function HandSide({
@@ -166,12 +166,12 @@ function HandDataPanel({
     if (hand === null) {
       return (
         <div className="hand-side">
-          <strong>{label}</strong>: <span className="hand-undetected">未検出</span>
+          <strong>{label}</strong>: <span className="hand-undetected">Not detected</span>
         </div>
       );
     }
     const dimClass = hand.depth_ok ? "" : "hand-estimated";
-    const badge = hand.depth_ok ? null : <span className="hand-badge">(推定)</span>;
+    const badge = hand.depth_ok ? null : <span className="hand-badge">(estimated)</span>;
     return (
       <div className="hand-side">
         <strong>{label}</strong>
@@ -205,8 +205,8 @@ function HandDataPanel({
 
   return (
     <div className="hand-data-panel">
-      <HandSide label="右手" hand={entry.right} />
-      <HandSide label="左手" hand={entry.left} />
+      <HandSide label="Right hand" hand={entry.right} />
+      <HandSide label="Left hand" hand={entry.left} />
     </div>
   );
 }
@@ -306,15 +306,15 @@ export default function HandViewer({ episodeId }: Props) {
   }, [episodeId]);
 
   if (state.kind === "loading") return <div>loading…</div>;
-  if (state.kind === "unavailable") return <div>手のデータがありません</div>;
+  if (state.kind === "unavailable") return <div>No hand data available</div>;
   if (state.kind === "no-episode")
-    return <div>エピソードが見つかりません: {state.episodeId}</div>;
+    return <div>Episode not found: {state.episodeId}</div>;
   if (state.kind === "signals-not-ready")
-    return <div>このエピソードは signals.json が未生成です: {state.episodeId}</div>;
+    return <div>signals.json not generated for this episode: {state.episodeId}</div>;
   if (state.kind === "signals-bad-version")
     return (
       <div>
-        signals.json が古いフォーマットです。--signals-only --full-signals で再生成してください
+        signals.json is in an outdated format. Please regenerate with --signals-only --full-signals
       </div>
     );
   if (state.kind === "error") return <div className="error">{state.message}</div>;
@@ -408,7 +408,7 @@ export default function HandViewer({ episodeId }: Props) {
               leftHand={leftHand}
             />
           ) : (
-            <div className="depth-unavailable">深度動画が見つかりません</div>
+            <div className="depth-unavailable">Depth video not found</div>
           )}
           <HandDataPanel frameKey={frameKey} signals={signals} />
         </div>
