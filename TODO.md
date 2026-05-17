@@ -8,7 +8,14 @@
 
 ## 残タスク
 
-### SAM3 grounding retry smoke (T13) — 別サーバーで GPU 待ち
+### SAM3 grounding retry smoke (T13) ✅ **完了 (2026-05-17 PM)** — cluster 仮説 4/6 hit (67%)
+
+- **結果ノート**: `docs/superpowers/notes/2026-05-17-sam3-grounding-retry-smoke.md`
+- **実行**: GPU 1 で 6 ep × ~1.3 min ≈ 8 min、`runs/_smoke_grounding_retry/`
+- **mechanism PASS**: ep2 で 4 回目 (frame 112, frac=0.75) で救済成功 (`adopted=True, n_object_grounded=1`)、ep0 regression なし (frame 0 即成功)
+- **仮説外れ**: ep9/ep26 は cluster A (救済可能) と分類してたが 4 frame 全部 `n_object_grounded=0` → 実は cluster B (object 自体 SAM3 grounding 困難)
+- **follow-up (任意)**: m5 spec で `grounding_retry_fractions=[0.5, 0.25, 0.75]` 拡張 (0.1, 0.9 追加など)、`n_total_grounded > 0` ベースの soft adoption ロジック
+- **GPU 要件残存**: 別サーバー実行は不要になった (本ホスト A100 80GB で 8 min smoke 完走、4B+SAM3 で 12-15 GB 確認)
 
 - 実装 T1–T12 は PR #26 (`413bfd7`) で main マージ済 (unit 830 + integration 59 pass)
 - 残り: 別サーバーで GPU 確保次第、so101_4B の degraded 5 ep (`ep2/6/9/10/26`) + regression 用 ep0 を再生成、`adopted_frame_index`/attempts を記録
