@@ -60,9 +60,7 @@
 
 ## 未マージ PR 待ち
 
-| branch | 内容 | 状態 |
-|---|---|---|
-| `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
+(なし、全て merged 2026-05-17 evening)
 
 ---
 
@@ -85,9 +83,9 @@
 | **G3** | autonomy exit e2e sanity (SO101 3 ep) | `runs/g3_smoke_20260516_2252/` |
 | **G3 再走** (2026-05-17) | 同条件再現性 PASS、wall 4.5 min (前回 5.5 min)、planner 出力 deterministic 一致 | `runs/g3_smoke_20260517_1353/` / note `2026-05-17-g3-rerun-results.md` |
 | **G1 26B SO101** (2026-05-17) | A100 80GB で 26B mechanics PASS (VRAM 52 GiB)、2 ep × 7 min。planner 品質は 4B より良い兆候 (bottle→targets, gripper 具体化) | `/tmp/g1_smoke_26b/` / note `2026-05-17-g1-26b-so101-smoke-results.md` |
-| **G6** | Gemma 4B planner regression (`docs/g-smoke-results`) | `6ca0a43` |
-| **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 (`docs/g-smoke-results`) | `633ca13` |
-| **G8** | UniDAC precompute_depth (`docs/g-smoke-results`) | `158b647` |
+| **G6** | Gemma 4B planner regression | PR #24 → `1fc5c30` (`4b14639`) |
+| **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 | PR #24 → `1fc5c30` (`0ed0892`) |
+| **G8** | UniDAC precompute_depth | PR #24 → `1fc5c30` (`922a146`) |
 | **Phase 6 core (eval v2)** (2026-05-17) | true `planner_agreement` metric + confusion matrix + by_source/confidence/phase breakdown + schema 0.4.0、295 tests + mypy --strict clean。spec `docs/superpowers/specs/2026-05-17-phase6-eval-v2-design.md` 残存 (plan + results note は worktree 削除で消失) | **PR #13 → `d2facf1` (main)** |
 | **U-A1** Catalog + Job kick (2026-05-17) | `/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` ページ + subprocess job runner | **PR #12 → `1624af5`** |
 | **U-A1 follow-up** routing (2026-05-17) | App.tsx `?page=datasets` / `?page=jobs` 配線 + 5 vitest | **PR #15 → `88b9324`** |
@@ -104,7 +102,6 @@
 
 ## 推奨次ステップ
 
-1. `docs/g-smoke-results` を PR 作成 → main マージ (G6/G7/G8 docs、残り唯一の未 merged PR)
-2. gem4 boundary/smoother YAML 作成 (gem4 26B chain の degenerate 解消、低優先)
-3. Phase 5 E は MimicRec 配置待ちで保留 (低優先、autonomy 不要範囲のみ MimicAnno 単独で進められる)
-4. Phase 6+ A (auth) / B (Replay UI + boundary timing) / C (multi-reviewer) は別 spec から
+1. gem4 boundary/smoother YAML 作成 (gem4 26B chain の degenerate 解消、低優先)
+2. Phase 5 E は MimicRec 配置待ちで保留 (低優先、autonomy 不要範囲のみ MimicAnno 単独で進められる)
+3. Phase 6+ A (auth) / B (Replay UI + boundary timing) / C (multi-reviewer) は別 spec から
