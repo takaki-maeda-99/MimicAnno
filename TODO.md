@@ -14,28 +14,73 @@
 
 **実行方式**: 本セッション (司令塔) は **dispatch 管理のみ、コード作業はしない**。各 sub-project は **別 Claude セッションが spec+plan+impl まで完結**させる。司令塔の責務は (1) dispatch 時の context 用意、(2) 完了後の整合確認 + merge 順管理、(3) sub-project が master contract に変更を要求してきた時の調停。
 
+**状態列の凡例**: `未` / `dispatched(<branch>)` / `PR#<n>` / `merged` / `blocked(<理由>)`
+
 | 優先 | ID | 内容 | dispatch 順 | 状態 |
 |---|---|---|---|---|
-| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | 🔲 未 dispatch |
-| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer 右パネルに) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | 🔲 未 dispatch |
-| 中 | **U-A4** | SAM3 mask overlay (video frame 上に tracks.json の mask を描画) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 🔲 未 dispatch |
-| 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | 🔲 U-A1 待ち |
-| 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | 🔲 U-A1 待ち |
+| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | 未 |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer **右パネルのみ** に。VideoPlayer は触らない) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | 未 |
+| 中 | **U-A4** | SAM3 mask overlay (VideoPlayer の **canvas overlay 子のみ**。RunViewer 右パネルは触らない) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 未 |
+| 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | U-A1 待ち |
+| 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | U-A1 待ち |
 
-#### Dispatch 時に司令塔が渡すもの (チェックリスト)
+#### Dispatch 時に司令塔が sub-Claude に渡すもの (zero-context 想定の完全 brief)
 
-1. master spec path + 該当 sub-project セクション参照 (§3.X) + master §2 contract への準拠厳守
-2. master §8 テンプレに従って `docs/superpowers/specs/2026-05-XX-ua-<id>-design.md` を起こす指示
-3. 関連既存コードへの path (`mimicanno/server/routes.py`, `mimicanno/cli.py`, 該当 frontend component)
-4. branch 命名: `feat/ua-<id>-<short>` (例: `feat/ua-1-catalog-jobs`)
-5. PR タイトル prefix: `feat(ua-<id>):`
-6. 報告事項: spec path、plan path、impl 完了範囲、テスト件数、master contract に変更を要する点があれば flag
+**A. 設計参照**
+
+1. master spec path: `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` (rev2 commit `1ba138d`) + 該当 sub-project セクション (§3.X) + **master §2 contract への準拠厳守**
+2. master §8 テンプレに従って `docs/superpowers/specs/2026-05-XX-ua-<id>-design.md` を新規作成
+3. 関連既存コードへの path 明示:
+   - 共通: `mimicanno/server/routes.py` (catch-all は最後尾、新 route は前に register), `mimicanno/server/app.py` (CORS), `tests/server/conftest.py` (`tmp_runs_root_loadable` 等の frozen fixture)
+   - U-A1: `mimicanno/cli.py`, `scripts/batch_annotate_4B.py`, frontend `frontend/src/components/RunList.tsx`
+   - U-A3: `frontend/src/components/RunViewer.tsx` (右パネル領域のみ)
+   - U-A4: `frontend/src/components/VideoPlayer.tsx` (canvas overlay の子要素のみ)
+4. **触ってよい / ダメな範囲を明文化** (file collision 回避): U-A3 = RunViewer 右パネル / U-A4 = VideoPlayer canvas overlay / 互いに相手のコンポーネントは触らない
+
+**B. 規約 / 環境**
+
+5. **autonomy 窓 CLOSED (2026-05-16)**: sub-Claude は spec / plan / impl まで進めて良いが、**main への merge と destructive op はユーザー承認待ち**。PR push は OK
+6. **`sudo` 絶対禁止** (memory `feedback_no_sudo.md`)。install 必要時は `uv`, `pip --user`, `pipx`, `conda`, `cargo install`, バイナリ `~/bin/` 直配置のみ
+7. **test / lint コマンド**:
+   - backend: `uv run pytest tests/server/ -v`, `uv run pytest tests/ -v` (full), `uv run mypy --strict mimicanno/`
+   - frontend: `cd frontend && npm test` (vitest, jsdom)
+   - 既存 baseline 252 passing + mypy strict clean を退行させないこと
+8. **`.venv` 使い分け**: MimicAnno 本体の `.venv` (uv) は本 sub-project (server / frontend) で **使う**。CLAUDE.md にある「`.venv` 使わない」は Phase 3 pipeline (hand / depth) 用注記なので適用外
+9. **U-A4 のみ追加**: `feedback_sam3_use_external_cam.md` (SAM3 grounding は overhead/external cam を使う) を読む。tracks.json が wrist cam ベースだと壊れるケースに注意
+
+**C. Git 規約**
+
+10. branch base: `origin/main` の最新 (dispatch 時の SHA を司令塔がメモ)
+11. branch 命名: `feat/ua-<id>-<short>` (例: `feat/ua-1-catalog-jobs`, `feat/ua-3-vlm-panel`)
+12. commit prefix: `feat(ua-<id>):` / `test(ua-<id>):` / `docs(ua-<id>):` で統一 (既存 convention 整合)
+13. PR タイトル prefix: `feat(ua-<id>):` 、push 先は `origin`
+14. **PR body 必須行**: `Touches master §2 contract: yes/no` (yes の場合は理由 + 提案差分を併記)。司令塔はこの行を grep で監視
+15. **レビュー / merge**: 司令塔セッション (本セッションまたは継承先) が Opus subagent でレビュー → ユーザー最終承認 → merge。sub-Claude は self-merge しない
+16. U-A3 / U-A4 が U-A1 着地前に impl 完了した場合: PR は待機可、merge 前に post-U-A1 main へ rebase
+
+**D. 報告事項テンプレ (sub-Claude → 司令塔)**
+
+17. spec path + plan path + impl 完了範囲 (機能 / file リスト)
+18. テスト件数 (new / total / baseline 比)
+19. master contract に変更要求があれば PR body と本報告の両方に flag
+20. 未解決の risk / 既知の TODO
 
 #### 司令塔の監視ポイント
 
-- **contract drift**: sub-project が master §2 を変える PR を出したら停止 → master を先に revise
+- **contract drift**: sub-project PR の `Touches master §2 contract: yes` を grep で検出 → 停止 → master spec を先に revise → 当該 PR は revise 後 rebase
 - **依存順序**: U-A2 / U-A5 を U-A1 backend landed 前に dispatch しない
-- **merge 順序**: U-A1 → (U-A3 ∥ U-A4 任意順) → U-A2 → U-A5
+- **merge 順序**: U-A1 → (U-A3 ∥ U-A4 任意順、rebase あり) → U-A2 → U-A5
+- **file collision**: U-A3 / U-A4 が予定外の file (相手側 component, server/routes.py の同じ block 等) を触る PR を出したら一旦止める
+
+#### Cross-session 継続
+
+5 sub-project を 1 commander セッションで全部回すのは非現実的。**次の commander セッション**が resume するための情報源:
+
+- 本 TODO §「U-A:」(状態列が source of truth)
+- memory `project_ua_initiative.md` (initiative 概要 + 司令塔ロールの明示)
+- master spec rev2 + 最新 rev (commit log で確認)
+
+次の commander が引き継ぐ際の最初の作業: `git log --oneline | grep "feat(ua-" ` + `gh pr list --search "feat(ua-"` (gh 不可時は GitHub UI) で merged / open PR を棚卸し、状態列を更新してから次 dispatch を準備。
 
 ### その他
 
