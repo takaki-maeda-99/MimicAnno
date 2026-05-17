@@ -6,6 +6,12 @@
 - Phase 5 D r2: frontend (`b5050cc`) + backend (`a7d5283`) — summary `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`
 - Phase 6 core (eval v2): PR #13 (`d2facf1`) — true planner_agreement + confusion matrix + schema 0.4.0
 - **U-A initiative**: 7 PRs (#12, #14-#18, #20) — dataset processing & visualization UI、下表参照
+- **26B config gap fix**: PR #19 (`0d65616`) — `scripts/batch_annotate.py` boundary/smoother YAML passthrough。本セッションで GPU 0 (A100 80GB) で E2E smoke proven (commit `869be5b`)、26B SO101 で segments=5/4 と 4B 一致
+- **G7 full-ep 再走 ✅ FULL PASS** (`37b5964`, GPU 1+3): cam_t metric anchoring 検証通過 — UniDAC anchored 0.14-0.27 m (21/23 frame)、wrist_depth_m 0.37-0.51 m。これで **以下が gated 解除**:
+  - Phase 5+ Replay UI で手の 3D 位置を mm 単位で可視化
+  - MimicRec で metric pose を使った hand mimicry
+  - HandSignalGraph (commit `3ae28bb`) の xyz cam_t グラフが意味ある値で表示 (前は HaMeR fallback 13 m scale で無意味)
+  - 詳細: `docs/superpowers/notes/2026-05-17-g7-full-ep-rerun-results.md`
 
 ---
 
