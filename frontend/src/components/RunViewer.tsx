@@ -688,9 +688,11 @@ export default function RunViewer({ episodeId, runHashShort, runSet }: Props) {
                       href={href}
                       style={{
                         display: "block",
-                        padding: "2px 4px",
-                        fontWeight: isCurrent ? "bold" : "normal",
-                        background: isCurrent ? "#e7f1ff" : "transparent",
+                        padding: "3px 6px",
+                        borderRadius: "4px",
+                        fontWeight: isCurrent ? 600 : 400,
+                        color: isCurrent ? "#0d47a1" : "#5a9bf6",
+                        background: isCurrent ? "#dbeafe" : "transparent",
                         textDecoration: "none",
                       }}
                     >

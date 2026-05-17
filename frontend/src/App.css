@@ -25,9 +25,28 @@ body { margin: 0; font-family: system-ui, sans-serif; color: var(--text); backgr
 /* RunViewer */
 .error { padding: 1rem; background: var(--error-bg); color: var(--error-text); border-radius: 4px; }
 .run-viewer { padding: 1rem; }
-.back-link { margin-bottom: 0.5rem; }
-.back-link a { color: var(--link); text-decoration: none; }
-.back-link a:hover { text-decoration: underline; }
+.back-link { margin-bottom: 0.75rem; }
+.back-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  background: #f1f3f5;
+  border: 1px solid #dee2e6;
+  border-radius: 999px;
+  color: #495057;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.back-link a:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+  color: #212529;
+  text-decoration: none;
+}
+.back-link a:active { background: #dee2e6; }
 .x-row { display: flex; flex-direction: column; gap: 0.5rem; }
 .chooser-banner { background: var(--warn-bg); color: var(--text); padding: 0.5rem; margin-bottom: 0.5rem; border-radius: 4px; }
 .pipeline-status-banner { background: var(--degrade-bg); color: var(--text); padding: 0.5rem; margin-bottom: 0.5rem; border-radius: 4px; }
