@@ -44,6 +44,13 @@ DATASETS = {
         "video_subdir": "videos/chunk-000/observation.images.front",
         "runs_root": REPO / "runs/so101_26B",
         "default_end": 35,
+        # SO101 gripper signals are weak — default BoundaryConfig yields
+        # candidates: [] and the run collapses to one idle segment. The 4B
+        # path (scripts/batch_so101_phase4_v5.sh) and run_26B_so101.sh both
+        # pass these two YAMLs explicitly; this entry mirrors them for the
+        # batch runner. None for other datasets falls back to defaults.
+        "boundary_config": REPO / "mimicanno/configs/boundary/so101_zero_crossing.yaml",
+        "smoother_config": REPO / "mimicanno/configs/smoother/so101_zc_preserve.yaml",
     },
     "gem4_pick_up_bottle": {
         "data_root": REPO / "data" / "GEM4_pick_up_bottle",
@@ -133,8 +140,38 @@ def main() -> int:
     log.info(f"SAM3 loaded in {time.time()-t_sam3:.1f}s")
 
     # --- Phase 4 共通設定 ---
+    # Per-dataset boundary/smoother YAML を `mimicanno.cli annotate` 経路と
+    # 同じローダで読み込む (CLI 経路は cli.py:175-176 / 254-275 参照)。
+    # YAML が指定されていないデータセット (現状 gem4_* 各種) は従来通り
+    # デフォルトに fallback。
+    from mimicanno.config import (
+        load_boundary_config_yaml,
+        load_smoother_config_yaml,
+    )
+    from mimicanno.labelset import default_labels_path, load_label_set
     from mimicanno.smoother import SmootherConfig
-    smoother_cfg = SmootherConfig()
+
+    boundary_cfg_path: Path | None = ds.get("boundary_config")  # type: ignore[assignment]
+    if boundary_cfg_path is not None:
+        log.info(f"loading BoundaryConfig YAML: {boundary_cfg_path}")
+        boundary_cfg = load_boundary_config_yaml(boundary_cfg_path)
+    else:
+        boundary_cfg = BoundaryConfig.with_defaults()
+
+    smoother_cfg_path: Path | None = ds.get("smoother_config")  # type: ignore[assignment]
+    if smoother_cfg_path is not None:
+        log.info(f"loading SmootherConfig YAML: {smoother_cfg_path}")
+        # SmootherConfig forbidden_transitions validation needs the labelset's
+        # allowed label ids. batch_annotate passes labels_path=None, so use the
+        # default manipulation labelset (matches cli.py:259-264).
+        label_set = load_label_set(Path(default_labels_path("manipulation")))
+        allowed_label_ids = [lbl.id for lbl in label_set.labels]
+        smoother_cfg = load_smoother_config_yaml(
+            smoother_cfg_path, allowed_labels=allowed_label_ids,
+        )
+    else:
+        smoother_cfg = SmootherConfig()
+
     tracking_cfg = TrackingConfig(
         sam3_checkpoint=str(SAM3_PATH),
         sam3_offload=True,
@@ -174,7 +211,7 @@ def main() -> int:
 
             t_ep = time.time()
             cfg = AnnotationConfig(
-                boundary=BoundaryConfig.with_defaults(),
+                boundary=boundary_cfg,
                 target_phase=4,
                 model_config=build_model_config(
                     target_phase=4, vlm=vlm_cfg,
