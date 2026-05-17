@@ -10,19 +10,32 @@
 
 ### U-A: Dataset processing & visualization UI (新規 initiative, 2026-05-17)
 
-Master spec: `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` (commit `a08647e`)
+**Master spec**: `docs/superpowers/specs/2026-05-17-ua-dataset-processing-ui-design.md` (rev2 commit `1ba138d`、Critical/Important/Minor 全消化済、Opus 再レビュー通過)
 
-「既存 LeRobot v3 dataset をサーバー上で picking → UI で annotate kick + 進捗監視 + 可視化」をやる initiative。Mode B (人手動画) は別 spec。API contract は master spec §2 で凍結済 → 各 sub-project は別 Claude セッションで spec+plan+impl を並列に進める。
+**実行方式**: 本セッション (司令塔) は **dispatch 管理のみ、コード作業はしない**。各 sub-project は **別 Claude セッションが spec+plan+impl まで完結**させる。司令塔の責務は (1) dispatch 時の context 用意、(2) 完了後の整合確認 + merge 順管理、(3) sub-project が master contract に変更を要求してきた時の調停。
 
-| 優先 | ID | 内容 | 依存 | 並列性 |
+| 優先 | ID | 内容 | dispatch 順 | 状態 |
 |---|---|---|---|---|
-| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` ページ + subprocess job runner) | 既存 `mimicanno serve` + `scripts/batch_annotate_4B.py` | **最初に着手** (他 sub-project の起点) |
-| 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab on `/datasets/{name}`) | master §2.1 + §2.2 contract | U-A1 backend 後に並列可 |
-| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer 右パネルに) | master §2.4 のみ (jobs と独立) | **即並列可** |
-| 中 | **U-A4** | SAM3 mask overlay (video frame 上に tracks.json の mask を描画) | master §2.5 のみ | **即並列可** (rasterize-on-fly vs pre-bake は sub-spec で判断) |
-| 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) | U-A1 後 |
+| 高 | **U-A1** | Catalog + Job kick (`/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` + subprocess job runner) | **最初に dispatch** (backend 確定が他の起点) | 🔲 未 dispatch |
+| 中 | **U-A3** | VLM dumps viewer (`_vlm_dumps/*.jsonl` を RunViewer 右パネルに) | U-A1 と並列 dispatch 可 (master §2.4 のみ依存) | 🔲 未 dispatch |
+| 中 | **U-A4** | SAM3 mask overlay (video frame 上に tracks.json の mask を描画) | U-A1 と並列 dispatch 可 (master §2.5 のみ依存) | 🔲 未 dispatch |
+| 中 | **U-A2** | Dataset summary (label 分布 / reviewed 率 dashboard tab) | U-A1 backend (§2.1) landed 後 | 🔲 U-A1 待ち |
+| 低 | **U-A5** | Site-wide progress badge (header に running jobs N) | U-A1 backend (§2.3 jobs API) landed 後 | 🔲 U-A1 待ち |
 
-各 sub-project Claude は master §8 のテンプレに従い `docs/superpowers/specs/2026-05-XX-ua-<id>-design.md` を起こす。
+#### Dispatch 時に司令塔が渡すもの (チェックリスト)
+
+1. master spec path + 該当 sub-project セクション参照 (§3.X) + master §2 contract への準拠厳守
+2. master §8 テンプレに従って `docs/superpowers/specs/2026-05-XX-ua-<id>-design.md` を起こす指示
+3. 関連既存コードへの path (`mimicanno/server/routes.py`, `mimicanno/cli.py`, 該当 frontend component)
+4. branch 命名: `feat/ua-<id>-<short>` (例: `feat/ua-1-catalog-jobs`)
+5. PR タイトル prefix: `feat(ua-<id>):`
+6. 報告事項: spec path、plan path、impl 完了範囲、テスト件数、master contract に変更を要する点があれば flag
+
+#### 司令塔の監視ポイント
+
+- **contract drift**: sub-project が master §2 を変える PR を出したら停止 → master を先に revise
+- **依存順序**: U-A2 / U-A5 を U-A1 backend landed 前に dispatch しない
+- **merge 順序**: U-A1 → (U-A3 ∥ U-A4 任意順) → U-A2 → U-A5
 
 ### その他
 
