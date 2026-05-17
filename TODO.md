@@ -71,6 +71,16 @@
 
 `mimicanno/configs/robot/gem4_*.yaml` × 3 の clean-up（docs/別 PR）。
 
+### SAM3 grounding retry 改善 (T13 follow-up、低優先)
+
+**背景**: T13 smoke (`docs/superpowers/notes/2026-05-17-sam3-grounding-retry-smoke.md`) で cluster 仮説 4/6 hit。仮説外れの ep9/ep26 は 4 frame (0/75/37/112) 全部 `n_object_grounded=0`。retry mechanism は ep2 で完璧に動作確認済 (frame 112, frac=0.75 で救済) なので、改善の余地は frame 選択 + adoption ロジック側。
+
+**改善案 (m5 spec で扱う)**:
+1. **`grounding_retry_fractions` 拡張** — 現在 `[0.5, 0.25, 0.75]`。`[0.1, 0.9]` 追加で episode 端 (object が一瞬だけ映る ep) もカバー
+2. **`n_total_grounded > 0` ベースの soft adoption** — ep2 attempts 1-3 で `n_object_grounded=0` だが `n_total_grounded=1` (nuisance あり)。soft 判定 (`best_iou > thr` 等) で retry 回数を減らせる可能性
+
+**着手条件**: m5 spec 起こす時、or T13 smoke の degrade rate が許容できなくなった時 (現状 6/6 中 3 ep degrade = 50% で許容範囲)。
+
 ---
 
 ## 後始末（残り）
