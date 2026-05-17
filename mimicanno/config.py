@@ -273,6 +273,11 @@ class TrackingConfig:
     object_motion_min_sec: float = 0.10
     image_aspect_ratio_default: float = 16.0 / 9.0
     planner_max_retries: int = 3
+    # 2026-05-17: SAM3 grounding retry — alternate frames tried when frame 0
+    # yields zero object-role detections. Empty list disables retry.
+    grounding_retry_fractions: list[float] = field(
+        default_factory=lambda: [0.5, 0.25, 0.75]
+    )
 
     def to_dict(self) -> dict[str, Any]:
         # sam3_checkpoint is excluded — see class docstring + spec §9.1
@@ -289,6 +294,7 @@ class TrackingConfig:
             "object_motion_min_sec": self.object_motion_min_sec,
             "image_aspect_ratio_default": self.image_aspect_ratio_default,
             "planner_max_retries": self.planner_max_retries,
+            "grounding_retry_fractions": list(self.grounding_retry_fractions),
         }
 
     def effective_stride(self, fps: float) -> int:

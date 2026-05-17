@@ -119,3 +119,39 @@ class TestComposeRunHash:
         assert RUN_HASH_DEFAULT_PREFIX_LEN == 12
         h = "sha256:" + "f" * 64
         assert len(run_hash_short(h)) == 12
+
+
+# ---------------------------------------------------------------------------
+# TrackingConfig.grounding_retry_fractions tests (2026-05-17)
+# ---------------------------------------------------------------------------
+
+
+def test_default_grounding_retry_fractions() -> None:
+    from mimicanno.config import TrackingConfig
+
+    cfg = TrackingConfig(sam3_checkpoint=None)
+    assert cfg.grounding_retry_fractions == [0.5, 0.25, 0.75]
+
+
+def test_to_dict_includes_grounding_retry_fractions() -> None:
+    from mimicanno.config import TrackingConfig
+
+    cfg = TrackingConfig(sam3_checkpoint=None)
+    d = cfg.to_dict()
+    assert d["grounding_retry_fractions"] == [0.5, 0.25, 0.75]
+
+
+def test_grounding_retry_fractions_changes_to_dict() -> None:
+    from mimicanno.config import TrackingConfig
+
+    a = TrackingConfig(sam3_checkpoint=None, grounding_retry_fractions=[0.5])
+    b = TrackingConfig(sam3_checkpoint=None, grounding_retry_fractions=[])
+    assert a.to_dict()["grounding_retry_fractions"] != b.to_dict()["grounding_retry_fractions"]
+
+
+def test_empty_list_disables_retry() -> None:
+    """Empty list is the documented 'OFF' sentinel; must round-trip."""
+    from mimicanno.config import TrackingConfig
+
+    cfg = TrackingConfig(sam3_checkpoint=None, grounding_retry_fractions=[])
+    assert cfg.to_dict()["grounding_retry_fractions"] == []
