@@ -700,3 +700,133 @@ def test_p13_0_3_0_run_yields_planner_agreement_none() -> None:
     ann = _make_annotation(history=[], n_total=3)  # uses schema_version="0.3.0"
     m = compute_metrics(ann, "run_p13")
     assert m.planner_agreement is None
+
+
+# ----------------------------------------------------------------------------
+# Phase 6 — render: confusion matrix + breakdown tables + unavailable line
+# ----------------------------------------------------------------------------
+
+
+def test_p16_render_markdown_includes_confusion_matrix_and_breakdowns() -> None:
+    """Build a RunMetrics with PlannerAgreementBlock; render_markdown output
+    must contain confusion matrix header, by_source/confidence/phase headers.
+    """
+    from mimicanno.eval.render import render_markdown
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str, label_source: str = "signals_only") -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source=label_source,
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    segs = [_seg(0, "idle"), _seg(1, "approach", "human_edit"), _seg(2, "grasp")]
+    history = [_relabel_event("seg0001", old_phase="idle", new_phase="approach")]
+    ann = _make_annotation_v04(history=history, segments=segs)
+    m = compute_metrics(ann, "run_p16")
+    agg = aggregate([m])
+
+    out = render_markdown([m], agg)
+    assert isinstance(out, str)
+    assert "planner_agreement" in out
+    assert "#### Confusion matrix" in out
+    assert "#### Agreement by source" in out
+    assert "#### Agreement by confidence bucket" in out
+    assert "#### Agreement by planner phase" in out
+
+
+def test_render_markdown_unavailable_when_planner_agreement_is_none() -> None:
+    """Build a RunMetrics with planner_agreement=None; output contains
+    'planner_agreement: unavailable' and a hint about upgrading.
+    """
+    from mimicanno.eval.render import render_markdown
+
+    m = compute_metrics(_make_annotation(history=[], n_total=3), "run_p13_render")
+    agg = aggregate([m])
+
+    out = render_markdown([m], agg)
+    assert "unavailable" in out
+    assert "pre-0.4.0" in out or "upgrade" in out or "0.4.0" in out
+
+
+def test_render_json_includes_planner_agreement_dict() -> None:
+    """If planner_agreement is set, render_json includes it as a nested dict.
+    If None, the field is null.
+    """
+    import json as _json
+    from mimicanno.eval.render import render_json
+    from mimicanno.schema import BoundaryRef, SubtaskSegment
+
+    def _seg(i: int, phase: str) -> SubtaskSegment:
+        br = BoundaryRef(candidate_id=None, time=float(i), sources=[], score=1.0)
+        return SubtaskSegment(
+            segment_id=f"seg{i:04d}",
+            episode_id="episode_000000",
+            start_frame=i * 10,
+            end_frame=i * 10 + 9,
+            start_time=float(i),
+            end_time=float(i) + 0.9,
+            phase=phase,
+            verb=None,
+            object=None,
+            target=None,
+            failure_flags=[],
+            label_source="signals_only",
+            object_state_unavailable=False,
+            object_track_ids=[],
+            label_version="0.1.0",
+            start_boundary=br,
+            end_boundary=br,
+            boundary_confidence=0.9,
+            vlm_confidence=None,
+            overall_confidence=0.9,
+            evidence=None,
+            reviewed=False,
+            reviewer_id=None,
+        )
+
+    # Run with planner_agreement set (0.4.0)
+    segs = [_seg(0, "idle"), _seg(1, "grasp")]
+    ann = _make_annotation_v04(history=[], segments=segs)
+    m_v04 = compute_metrics(ann, "run_v04")
+    agg_v04 = aggregate([m_v04])
+
+    out_v04 = render_json([m_v04], agg_v04)
+    parsed = _json.loads(out_v04)
+    run0 = parsed["runs"][0]
+    assert "planner_agreement" in run0
+    assert isinstance(run0["planner_agreement"], dict)
+    assert "overall_rate" in run0["planner_agreement"]
+    assert "confusion_matrix" in run0["planner_agreement"]
+
+    # Run with planner_agreement = None (0.3.0)
+    m_v03 = compute_metrics(_make_annotation(history=[], n_total=2), "run_v03")
+    agg_v03 = aggregate([m_v03])
+
+    out_v03 = render_json([m_v03], agg_v03)
+    parsed_v03 = _json.loads(out_v03)
+    run0_v03 = parsed_v03["runs"][0]
+    assert "planner_agreement" in run0_v03
+    assert run0_v03["planner_agreement"] is None
