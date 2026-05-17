@@ -1,8 +1,11 @@
-# TODO (2026-05-17 14:35 現在)
+# TODO (2026-05-17 evening, post-U-A cleanup)
 
 **Autonomy window: CLOSED 2026-05-16** — Phase 5 D shipped + SO101 v5 real-data smoke (17 events × 4 edit types) green。次窓を開ける場合はユーザー判断。
 
-**Phase 5 D r2 全部完了 (2026-05-17)**: frontend (merge `b5050cc`) + backend (merge `a7d5283`) どちらも `origin/main` 反映済。本セッション全行動の summary は `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`。
+**Major shipments (2026-05-17)**:
+- Phase 5 D r2: frontend (`b5050cc`) + backend (`a7d5283`) — summary `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`
+- Phase 6 core (eval v2): PR #13 (`d2facf1`) — true planner_agreement + confusion matrix + schema 0.4.0
+- **U-A initiative**: 7 PRs (#12, #14-#18, #20) — dataset processing & visualization UI、下表参照
 
 ---
 
@@ -50,6 +53,8 @@
 
 - `/misc/dl00/gayagaya/MimicAnno-phase5d/frontend/node_modules/` — git 認識外、`rm -rf` でいつでも除去可
 - `mimicanno serve` (PID 1063745) — so101_phase4_v5 配信で稼働継続中、別件なので触らない
+- agent-locked worktrees `.claude/worktrees/agent-a8b2893e*` / `agent-ae08b633*` — sub-agent 由来、本体 PR は merged 済、解放手続きは agent ツール経由 (commander touch しない)
+- `fix/26b-config-gap` worktree — PR #19 で別経路 merged、本 branch は redundant、いつでも削除可
 
 ---
 
@@ -57,9 +62,7 @@
 
 | branch | 内容 | 状態 |
 |---|---|---|
-| `test/loadable-run-fixture` | `tests/fixtures/loadable_run/` 凍結 + conftest 切替 (5 commit、224 passed) | origin push 済、Opus レビュー APPROVED (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/test/loadable-run-fixture>)。Title `test(fixtures): freeze loadable_run for CI (no real-data dependency)`、body 雛形は `docs/superpowers/plans/2026-05-17-loadable-run-fixture-plan.md` の Summary/Exit criteria 抜粋で十分 |
 | `docs/g-smoke-results` | G6/G7/G8 GPU smoke 結果 (3 commit + TODO 更新) | origin push 済、PR 本文準備済 (ブラウザで作成: <https://github.com/takaki-maeda-99/MimicAnno/pull/new/docs/g-smoke-results>) |
-| `docs/g4-gem4-smoke` | G4 gem4 smoke 結果 (commit `5f8faa2`) | 別セッション、status 確認要 |
 
 ---
 
@@ -85,16 +88,23 @@
 | **G6** | Gemma 4B planner regression (`docs/g-smoke-results`) | `6ca0a43` |
 | **G7** 🟡 | Hand+HAMER pipeline mechanics PASS、cam_t anchoring 未検証 (`docs/g-smoke-results`) | `633ca13` |
 | **G8** | UniDAC precompute_depth (`docs/g-smoke-results`) | `158b647` |
-| **U-A3** (2026-05-17) | VLM dumps viewer e2e: backend reader (`mimicanno/server/vlm_dumps.py`) + `GET /api/runs/{c}/vlm_dumps.json` + frontend `VlmPanel` + RunViewer 右スロット統合。master §2.4 を rev3 に書き換え (`*.jsonl` flat 想定 → run-set 直下 `_planner/`+`s_NNN/attempt_M/` ツリー)。code review pass (path-traversal fix 含む)。+17 backend tests (254 pass) / +12 vitest (135 pass) / mypy server strict clean | PR #14 → merge `9cdce19` (main) / spec `docs/superpowers/specs/2026-05-17-ua-3-vlm-panel-design.md` |
+| **Phase 6 core (eval v2)** (2026-05-17) | true `planner_agreement` metric + confusion matrix + by_source/confidence/phase breakdown + schema 0.4.0、295 tests + mypy --strict clean。spec `docs/superpowers/specs/2026-05-17-phase6-eval-v2-design.md` 残存 (plan + results note は worktree 削除で消失) | **PR #13 → `d2facf1` (main)** |
+| **U-A1** Catalog + Job kick (2026-05-17) | `/api/datasets` + `/api/jobs` + frontend `/datasets` `/jobs` ページ + subprocess job runner | **PR #12 → `1624af5`** |
+| **U-A1 follow-up** routing (2026-05-17) | App.tsx `?page=datasets` / `?page=jobs` 配線 + 5 vitest | **PR #15 → `88b9324`** |
+| **U-A3** VLM dumps viewer (2026-05-17) | backend reader (`mimicanno/server/vlm_dumps.py`) + `GET /api/runs/{c}/vlm_dumps.json` + frontend `VlmPanel` + RunViewer 右スロット統合。master §2.4 を rev3 に書き換え。+17 backend / +12 vitest | **PR #14 → `9cdce19`** |
+| **U-A3 rev3 schema fix** (2026-05-17) | `kind: labeler` + `call_id` 形式 + `segment_ordinal`/`attempt`/`frame_url`/`keyframe_urls`/`request_json` 整合。+32 backend / +11 vitest | **PR #17 → `cc6aa5e`** |
+| **U-A2** Dataset summary (2026-05-17) | `GET /api/datasets/{name}/summary` + Summary dashboard tab。`label_diversity` = distinct phase 数。+13 backend / +8 vitest | **PR #16 → `bba681e`** |
+| **U-A4** SAM3 mask overlay (2026-05-17) | annotate-time `_masks/<frame>.png` sidecar + backend routes + VideoPlayer canvas overlay (per-track color/alpha/toggle)。+20 backend / +14 vitest | **PR #18 → `e6e9b2f`** |
+| **U-A5** Site-wide progress badge (2026-05-17) | header `JobsBadge` ポーリング (4s)、`?page=jobs` link。+11 vitest | **PR #20 → `747c5e7`** |
+| **26B config gap fix** (2026-05-17) | `scripts/batch_annotate.py` で robot YAML を `load_boundary_config_yaml` / `load_smoother_config_yaml` 経由で AnnotationConfig へ届ける + 5 unit tests。E2E は 26B SO101 で `segments=5/4` 確認済 | **PR #19 → `51f4f0d`** |
 
-結果 note は `docs/superpowers/notes/2026-05-17-{g1,g6,g7,g8}-*-smoke-results.md` 等。各 G の詳細・surprise はそれぞれの note 参照。
-**本セッション D r2 全完了サマリー**: `docs/superpowers/notes/2026-05-17-session-summary-d-r2-complete.md`
+結果 note は `docs/superpowers/notes/2026-05-17-{g1,g6,g7,g8,g1-26b}-*-smoke-results.md` / `2026-05-17-session-summary-d-r2-complete.md` 等参照。
 
 ---
 
 ## 推奨次ステップ
 
-1. `docs/g-smoke-results` を PR 作成 → main マージ (`test/loadable-run-fixture` も同様)
-2. ~~D r2 backend~~ ✅ DONE (`a7d5283` merge)
-3. `run_26B_so101.sh` の config gap 修正 (中優先、26B vs 4B fair compare に必要)
-4. Phase 5 E は MimicRec 配置待ちで保留 (低優先、autonomy 不要範囲のみ MimicAnno 単独で進められる)
+1. `docs/g-smoke-results` を PR 作成 → main マージ (G6/G7/G8 docs、残り唯一の未 merged PR)
+2. gem4 boundary/smoother YAML 作成 (gem4 26B chain の degenerate 解消、低優先)
+3. Phase 5 E は MimicRec 配置待ちで保留 (低優先、autonomy 不要範囲のみ MimicAnno 単独で進められる)
+4. Phase 6+ A (auth) / B (Replay UI + boundary timing) / C (multi-reviewer) は別 spec から
