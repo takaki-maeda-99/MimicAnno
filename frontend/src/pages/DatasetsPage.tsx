@@ -1,5 +1,6 @@
 /**
  * U-A1 — /datasets page: dataset catalog + per-dataset episode table + Annotate modal.
+ * U-A2 — adds "Summary" tab to the expanded dataset panel (spec §2.2).
  */
 import { useEffect, useState } from "react";
 import {
@@ -10,6 +11,10 @@ import {
   type DatasetDetail,
   type PostJobBody,
 } from "../lib/catalogClient";
+import {
+  fetchDatasetSummary,
+  type DatasetSummary,
+} from "../lib/datasetSummaryClient";
 
 // ---------------------------------------------------------------------------
 // AnnotateModal
@@ -161,6 +166,105 @@ function AnnotateModal({ dataset, onClose, onSubmitted }: AnnotateModalProps) {
 }
 
 // ---------------------------------------------------------------------------
+// U-A2 — SummaryPanel
+// ---------------------------------------------------------------------------
+
+interface SummaryPanelProps {
+  datasetName: string;
+  summary: DatasetSummary;
+}
+
+function SummaryPanel({ datasetName, summary }: SummaryPanelProps) {
+  if (summary.annotated_ep_count === 0) {
+    return (
+      <div data-testid={`summary-empty-${datasetName}`} style={{ padding: 8, color: "#666" }}>
+        No annotations in run_set &quot;{summary.run_set}&quot;.
+      </div>
+    );
+  }
+
+  // Sort label_distribution descending by count
+  const sortedLabels = Object.entries(summary.label_distribution).sort(
+    ([aLabel, aCount], [bLabel, bCount]) => {
+      if (bCount !== aCount) return bCount - aCount;
+      return aLabel.localeCompare(bLabel);
+    },
+  );
+  const maxCount = sortedLabels.length > 0 ? sortedLabels[0][1] : 1;
+
+  return (
+    <div style={{ padding: 8 }}>
+      <div data-testid={`run-set-display-${datasetName}`} style={{ marginBottom: 8, color: "#555" }}>
+        Run set: <strong>{summary.run_set}</strong>
+        &nbsp;| Annotated episodes: {summary.annotated_ep_count} / {summary.ep_count}
+        &nbsp;| Reviewed rate: {(summary.reviewed_rate * 100).toFixed(1)}%
+        &nbsp;| Seg stats: mean={summary.segment_count_stats.mean.toFixed(1)},
+        min={summary.segment_count_stats.min}, max={summary.segment_count_stats.max}
+      </div>
+
+      {/* Label distribution bar chart */}
+      <div data-testid={`label-distribution-${datasetName}`} style={{ marginBottom: 16 }}>
+        <strong>Label distribution</strong>
+        <div style={{ marginTop: 4 }}>
+          {sortedLabels.map(([label, count]) => (
+            <div
+              key={label}
+              data-testid={`label-bar-${label}`}
+              style={{ display: "flex", alignItems: "center", marginBottom: 2 }}
+            >
+              <div style={{ width: 160, fontSize: 12, textAlign: "right", paddingRight: 6, color: "#333" }}>
+                {label}
+              </div>
+              <div
+                style={{
+                  height: 14,
+                  width: `${Math.max(2, (count / maxCount) * 200)}px`,
+                  background: "#4a90d9",
+                  borderRadius: 2,
+                }}
+              />
+              <div style={{ marginLeft: 4, fontSize: 12, color: "#555" }}>{count}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-episode stats table */}
+      <div>
+        <strong>Per-episode</strong>
+        <table
+          data-testid={`per-ep-table-${datasetName}`}
+          style={{ borderCollapse: "collapse", width: "100%", marginTop: 4, fontSize: 12 }}
+        >
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: "2px 6px" }}>Ep</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: "2px 6px" }}>Canonical</th>
+              <th style={{ textAlign: "right", borderBottom: "1px solid #ccc", padding: "2px 6px" }}>Segs</th>
+              <th style={{ textAlign: "right", borderBottom: "1px solid #ccc", padding: "2px 6px" }}>Reviewed</th>
+              <th style={{ textAlign: "right", borderBottom: "1px solid #ccc", padding: "2px 6px" }}>Diversity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary.per_episode.map((ep) => (
+              <tr key={ep.idx} data-testid={`per-ep-row-${ep.idx}`}>
+                <td style={{ padding: "2px 6px" }}>{ep.idx}</td>
+                <td style={{ padding: "2px 6px", fontFamily: "monospace", fontSize: 11 }}>
+                  {ep.canonical.length > 30 ? ep.canonical.slice(0, 30) + "…" : ep.canonical}
+                </td>
+                <td style={{ textAlign: "right", padding: "2px 6px" }}>{ep.segment_count}</td>
+                <td style={{ textAlign: "right", padding: "2px 6px" }}>{ep.reviewed_count}</td>
+                <td style={{ textAlign: "right", padding: "2px 6px" }}>{ep.label_diversity}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -180,10 +284,19 @@ type ModalState =
   | { kind: "open"; dataset: string }
   | { kind: "success"; jobId: string };
 
+// U-A2: summary panel state per dataset name
+type SummaryState =
+  | { kind: "hidden" }
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ok"; summary: DatasetSummary };
+
 export default function DatasetsPage() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [detailState, setDetailState] = useState<DetailState>({ kind: "none" });
   const [modal, setModal] = useState<ModalState>({ kind: "closed" });
+  // U-A2: summary tab state (keyed by dataset name)
+  const [summaryStates, setSummaryStates] = useState<Record<string, SummaryState>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -208,6 +321,27 @@ export default function DatasetsPage() {
       .then((detail) => setDetailState({ kind: "ok", detail }))
       .catch((err: unknown) =>
         setDetailState({ kind: "error", name, message: String(err instanceof Error ? err.message : err) }),
+      );
+  };
+
+  // U-A2: toggle summary tab; fetches on first click
+  const handleSummaryTabClick = (name: string, runSet?: string) => {
+    const cur = summaryStates[name];
+    if (cur?.kind === "ok" && !runSet) {
+      // Toggle hidden/shown
+      setSummaryStates((prev) => ({ ...prev, [name]: { kind: "hidden" } }));
+      return;
+    }
+    setSummaryStates((prev) => ({ ...prev, [name]: { kind: "loading" } }));
+    fetchDatasetSummary(name, runSet)
+      .then((summary) =>
+        setSummaryStates((prev) => ({ ...prev, [name]: { kind: "ok", summary } })),
+      )
+      .catch((err: unknown) =>
+        setSummaryStates((prev) => ({
+          ...prev,
+          [name]: { kind: "error", message: String(err instanceof Error ? err.message : err) },
+        })),
       );
   };
 
@@ -267,6 +401,41 @@ export default function DatasetsPage() {
               {detailState.kind === "ok" && detailState.detail.name === ds.name && (
                 <tr key={`${ds.name}-detail`}>
                   <td colSpan={7}>
+                    {/* U-A2: Summary tab button */}
+                    <div style={{ marginBottom: 8 }}>
+                      <button
+                        data-testid={`summary-tab-btn-${ds.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const cur = summaryStates[ds.name];
+                          if (cur?.kind === "ok") {
+                            setSummaryStates((prev) => ({ ...prev, [ds.name]: { kind: "hidden" } }));
+                          } else {
+                            handleSummaryTabClick(ds.name);
+                          }
+                        }}
+                        style={{ marginRight: 8, fontSize: 12 }}
+                      >
+                        Summary
+                      </button>
+                    </div>
+                    {/* U-A2: Summary panel */}
+                    {summaryStates[ds.name]?.kind === "loading" && (
+                      <div data-testid={`summary-loading-${ds.name}`} style={{ fontSize: 12, color: "#666" }}>
+                        Loading summary…
+                      </div>
+                    )}
+                    {summaryStates[ds.name]?.kind === "error" && (
+                      <div data-testid={`summary-error-${ds.name}`} style={{ fontSize: 12, color: "red" }}>
+                        Summary error: {(summaryStates[ds.name] as { kind: "error"; message: string }).message}
+                      </div>
+                    )}
+                    {summaryStates[ds.name]?.kind === "ok" && (
+                      <SummaryPanel
+                        datasetName={ds.name}
+                        summary={(summaryStates[ds.name] as { kind: "ok"; summary: DatasetSummary }).summary}
+                      />
+                    )}
                     <table data-testid={`ep-table-${ds.name}`} style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr>

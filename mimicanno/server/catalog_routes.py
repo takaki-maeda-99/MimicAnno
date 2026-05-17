@@ -23,6 +23,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from mimicanno.server.catalog import get_dataset_detail, scan_datasets
+from mimicanno.server.dataset_summary import compute_summary
 from mimicanno.server.errors import MimicAnnoHTTPError
 from mimicanno.server.job_runner import JobQueue, JobRunner, SSE_KEEPALIVE_SEC
 from mimicanno.server.job_store import JobError, JobRecord, JobStore
@@ -136,6 +137,28 @@ def make_catalog_router(
             })
         return Response(
             content=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            media_type="application/json",
+        )
+
+    # -----------------------------------------------------------------------
+    # GET /api/datasets/{name}/summary   (U-A2)
+    # Must be registered BEFORE /api/datasets/{name} to avoid shadowing.
+    # -----------------------------------------------------------------------
+
+    @router.get("/api/datasets/{name}/summary")
+    def get_dataset_summary(
+        name: str,
+        run_set: str | None = Query(default=None),
+    ) -> Response:
+        # 404 if dataset doesn't exist under data_root
+        if not (data_root / name).is_dir():
+            raise MimicAnnoHTTPError(
+                status=404, code="dataset_not_found",
+                message=f"dataset {name!r} not found under {data_root}",
+            )
+        summary = compute_summary(name, data_root, runs_root, run_set=run_set)
+        return Response(
+            content=json.dumps(summary, ensure_ascii=False).encode("utf-8"),
             media_type="application/json",
         )
 
