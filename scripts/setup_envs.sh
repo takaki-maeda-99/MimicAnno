@@ -1,161 +1,131 @@
 #!/bin/bash
-# One-shot environment setup for MimicAnno hand pipeline.
+# One-shot environment setup for MimicAnno.
 #
-# Sets up three environments from scratch:
-#   1. UniDAC  — conda env "unidac"  (Phase A depth precomputation)
-#   2. HaMeR   — venv  hamer/.hamer  (Phase B hand pose estimation)
-#   3. MimicAnno core — uv venv .venv
+# Steps (in order, when selected):
+#   submodules → core → unidac → hamer → frontend → weights
 #
 # Usage:
-#   bash scripts/setup_envs.sh            # set up all three
-#   bash scripts/setup_envs.sh --unidac   # UniDAC only
-#   bash scripts/setup_envs.sh --hamer    # HaMeR only
-#   bash scripts/setup_envs.sh --core     # MimicAnno core only
+#   bash scripts/setup_envs.sh                # --all (default)
+#   bash scripts/setup_envs.sh --core         # MimicAnno core (uv) only
+#   bash scripts/setup_envs.sh --unidac --hamer
+#   bash scripts/setup_envs.sh --all --skip-weights
+#
+# Auth (for weights step):
+#   Either export HF_TOKEN or run `hf auth login` beforehand.
 #
 # Manual prerequisite (HaMeR):
 #   Register at https://mano.is.tue.mpg.de and place MANO_RIGHT.pkl at:
 #   hamer/_DATA/data/mano/MANO_RIGHT.pkl
-#
-# After setup, run the pipeline with:
-#   bash scripts/run_all_pipeline.sh
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
-REPO_ROOT="$PWD"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/preflight.sh"
 
-log()  { echo "[$(date '+%H:%M:%S')] $*"; }
-ok()   { echo "[$(date '+%H:%M:%S')] ✓ $*"; }
-warn() { echo "[$(date '+%H:%M:%S')] ! $*"; }
+cd "$REPO_ROOT"
 
 # ---------------------------------------------------------------------------
-# Argument parsing (default: all)
+# Flag parsing
+DO_SUBMODULES=0
+DO_CORE=0
 DO_UNIDAC=0
 DO_HAMER=0
-DO_CORE=0
-if [[ $# -eq 0 ]]; then
-    DO_UNIDAC=1; DO_HAMER=1; DO_CORE=1
-fi
+DO_FRONTEND=0
+DO_WEIGHTS=0
+SKIP_WEIGHTS=0
+EXPLICIT=0
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --unidac) DO_UNIDAC=1; shift ;;
-        --hamer)  DO_HAMER=1;  shift ;;
-        --core)   DO_CORE=1;   shift ;;
+        --all)       DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_HAMER=1; DO_FRONTEND=1; DO_WEIGHTS=1; EXPLICIT=1; shift ;;
+        --core)      DO_CORE=1;     EXPLICIT=1; shift ;;
+        --unidac)    DO_UNIDAC=1;   EXPLICIT=1; shift ;;
+        --hamer)     DO_HAMER=1;    EXPLICIT=1; shift ;;
+        --frontend)  DO_FRONTEND=1; EXPLICIT=1; shift ;;
+        --weights)   DO_WEIGHTS=1;  EXPLICIT=1; shift ;;
+        --skip-weights) SKIP_WEIGHTS=1; shift ;;
         --help|-h)
             sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
             exit 0 ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        *) fail "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# ---------------------------------------------------------------------------
-# 1. UniDAC conda environment
-# ---------------------------------------------------------------------------
-if [[ $DO_UNIDAC -eq 1 ]]; then
-    log "=== UniDAC conda env ==="
-
-    # NOTE: scripts/precompute_depth.py and scripts/visualize_depth.py pipe
-    # frames to `ffmpeg` (libx264) for browser-playable mp4 output. Ensure
-    # ffmpeg is on PATH — install via `apt install ffmpeg` system-wide or
-    # `conda install -n unidac -c conda-forge ffmpeg` into the env.
-
-    if conda env list 2>/dev/null | grep -q '^unidac '; then
-        ok "conda env 'unidac' already exists — skipping create"
-    else
-        log "Creating conda env 'unidac' (python=3.10)…"
-        conda create -n unidac python=3.10 -y
-    fi
-
-    log "Installing PyTorch (cu118) into unidac…"
-    conda run -n unidac pip install \
-        torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
-        --index-url https://download.pytorch.org/whl/cu118
-
-    log "Installing UniDAC requirements…"
-    conda run -n unidac pip install -r "$REPO_ROOT/UniDAC/requirements.txt"
-
-    log "Installing UniDAC package (editable)…"
-    conda run -n unidac pip install -e "$REPO_ROOT/UniDAC" --no-deps
-
-    # Verify weights
-    if [[ ! -f "$REPO_ROOT/UniDAC/checkpoints/unidac.pt" ]]; then
-        warn "UniDAC weights not found at UniDAC/checkpoints/unidac.pt"
-        warn "Download from the UniDAC release and place them there."
-    else
-        ok "UniDAC weights found"
-    fi
-
-    ok "UniDAC setup complete"
+if [[ "$EXPLICIT" -eq 0 ]]; then
+    DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_HAMER=1; DO_FRONTEND=1; DO_WEIGHTS=1
+fi
+if [[ "$SKIP_WEIGHTS" -eq 1 ]]; then
+    DO_WEIGHTS=0
+fi
+# --weights implies --core (hf lives in .venv)
+if [[ "$DO_WEIGHTS" -eq 1 && "$DO_CORE" -eq 0 ]]; then
+    DO_CORE=1
+    log "--weights implies --core; adding core step."
+fi
+# Anything but pure --core implies --submodules so the dirs exist.
+if [[ "$DO_SUBMODULES" -eq 0 && ("$DO_UNIDAC" -eq 1 || "$DO_HAMER" -eq 1 || "$DO_WEIGHTS" -eq 1) ]]; then
+    DO_SUBMODULES=1
+    log "Selected steps depend on submodules; adding submodules step."
 fi
 
 # ---------------------------------------------------------------------------
-# 2. HaMeR venv
-# ---------------------------------------------------------------------------
-if [[ $DO_HAMER -eq 1 ]]; then
-    log "=== HaMeR venv ==="
-
-    HAMER_ROOT="$REPO_ROOT/hamer"
-    HAMER_VENV="$HAMER_ROOT/.hamer"
-    HAMER_PY="$HAMER_VENV/bin/python"
-
-    if [[ -f "$HAMER_PY" ]]; then
-        ok "HaMeR venv already exists at hamer/.hamer — skipping create"
-    else
-        log "Creating HaMeR venv (requires python3.10)…"
-        python3.10 -m venv "$HAMER_VENV"
-    fi
-
-    log "Installing PyTorch (cu124) into HaMeR venv…"
-    "$HAMER_VENV/bin/pip" install \
-        torch==2.6.0 torchvision==0.21.0 \
-        --index-url https://download.pytorch.org/whl/cu124
-
-    log "Installing HaMeR package [all]…"
-    "$HAMER_VENV/bin/pip" install -e "$HAMER_ROOT[all]"
-
-    log "Installing ViTPose (third-party)…"
-    "$HAMER_VENV/bin/pip" install -v -e "$HAMER_ROOT/third-party/ViTPose"
-
-    # Install scipy (needed for pipeline.py + run_hand_estimation.py)
-    "$HAMER_VENV/bin/pip" install scipy
-
-    # Fetch HaMeR demo data (model weights) if not already present
-    if [[ -d "$HAMER_ROOT/_DATA/hamer_ckpts" ]]; then
-        ok "HaMeR model weights already present"
-    else
-        log "Downloading HaMeR demo data (requires gdown / internet access)…"
-        (cd "$HAMER_ROOT" && bash fetch_demo_data.sh)
-    fi
-
-    # Check MANO weights (requires manual registration)
-    if [[ ! -f "$HAMER_ROOT/_DATA/data/mano/MANO_RIGHT.pkl" ]]; then
-        warn "MANO_RIGHT.pkl not found."
-        warn "Register at https://mano.is.tue.mpg.de and place the file at:"
-        warn "  hamer/_DATA/data/mano/MANO_RIGHT.pkl"
-    else
-        ok "MANO_RIGHT.pkl found"
-    fi
-
-    ok "HaMeR setup complete"
-fi
+# Preflight
+log "=== Preflight ==="
+require_tool git
+[[ "$DO_CORE" -eq 1 || "$DO_WEIGHTS" -eq 1 ]] && require_tool uv "curl -Ls https://astral.sh/uv/install.sh | sh"
+[[ "$DO_UNIDAC" -eq 1 ]] && require_tool conda "Install miniforge or anaconda"
+[[ "$DO_HAMER" -eq 1 ]] && require_tool python3.10 "Install python3.10 (pyenv or apt)"
+[[ "$DO_FRONTEND" -eq 1 ]] && { require_tool node "Install Node >=20"; require_tool pnpm "corepack enable && corepack prepare pnpm@latest --activate"; }
+[[ "$DO_UNIDAC" -eq 1 ]] && check_optional curl "UniDAC weights DL"
+[[ "$DO_UNIDAC" -eq 1 ]] && check_optional ffmpeg "precompute_depth.py runtime"
+check_optional lsof "start_ui.sh port probe"
+print_driver_hint
 
 # ---------------------------------------------------------------------------
-# 3. MimicAnno core (uv)
-# ---------------------------------------------------------------------------
-if [[ $DO_CORE -eq 1 ]]; then
-    log "=== MimicAnno core (uv) ==="
+# Step runner
+run_step() {
+    local label="$1" script_path="$2"
+    log "=== Step: $label ==="
+    local start_ts=$SECONDS
+    local rc=0
+    bash "$script_path" || rc=$?
+    local dur=$((SECONDS - start_ts))
+    case "$rc" in
+        0) summary_add "PASS" "$label" "${dur}s" ;;
+        2) summary_add "WARN" "$label" "user action required (${dur}s)" ;;
+        *) summary_add "FAIL" "$label" "exit=$rc (${dur}s)" ;;
+    esac
+    return "$rc"
+}
 
-    if ! command -v uv &>/dev/null; then
-        warn "uv not found. Install with: curl -Ls https://astral.sh/uv/install.sh | sh"
-        exit 1
+OVERALL=0  # 0 ok, 1 fail, 2 warn
+
+step_and_track() {
+    local label="$1" path="$2"
+    set +e
+    run_step "$label" "$path"
+    local rc=$?
+    set -e
+    if [[ "$rc" -eq 1 ]]; then
+        OVERALL=1
+    elif [[ "$rc" -eq 2 && "$OVERALL" -ne 1 ]]; then
+        OVERALL=2
     fi
+}
 
-    log "Running uv sync (core + dev + vlm + sam3)…"
-    uv sync --extra dev --extra vlm --extra sam3
+# Run selected steps in canonical order.
+[[ "$DO_SUBMODULES" -eq 1 ]] && step_and_track submodules "$SCRIPT_DIR/setup/submodules.sh"
+[[ "$DO_CORE"       -eq 1 ]] && step_and_track core       "$SCRIPT_DIR/setup/core.sh"
+[[ "$DO_UNIDAC"     -eq 1 ]] && step_and_track unidac     "$SCRIPT_DIR/setup/unidac.sh"
+[[ "$DO_HAMER"      -eq 1 ]] && step_and_track hamer      "$SCRIPT_DIR/setup/hamer.sh"
+[[ "$DO_FRONTEND"   -eq 1 ]] && step_and_track frontend   "$SCRIPT_DIR/setup/frontend.sh"
+[[ "$DO_WEIGHTS"    -eq 1 ]] && step_and_track weights    "$SCRIPT_DIR/setup/weights.sh"
 
-    ok "MimicAnno core setup complete"
-fi
+summary_print
 
-# ---------------------------------------------------------------------------
-log "=== All done ==="
-log "Run the pipeline:"
-log "  bash scripts/run_all_pipeline.sh [VIDEO_NAME ...]"
+case "$OVERALL" in
+    0) ok "All done."; exit 0 ;;
+    2) warn "Completed with user-action items above."; exit 2 ;;
+    1) fail "Completed with failures. See summary above."; exit 1 ;;
+esac
