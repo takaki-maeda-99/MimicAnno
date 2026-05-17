@@ -1159,6 +1159,11 @@ def annotate_episode_phase3(req: AnnotateRequest) -> AnnotateResult:
         write_annotation_json(tmp_dir / "annotation.json", annotation)
         write_manifest_json(tmp_dir / "manifest.json", manifest)
         write_tracks_json(tmp_dir / "tracks.json", tracks_file)
+        # U-A4: persist SAM3 masks as _masks/ sidecar for the frontend overlay.
+        # mask_cache is None when mask_overlay_enabled=False (pre-bake skipped).
+        if mask_cache is not None:
+            from mimicanno.masks.sidecar import write_masks_sidecar
+            write_masks_sidecar(tmp_dir, mask_cache, tracks, canonical=episode_id)
 
     publish_req = PublishRequest(
         runs_root=req.runs_root,
