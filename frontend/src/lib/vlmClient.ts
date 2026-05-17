@@ -1,18 +1,23 @@
 /** U-A3 — VLM dumps HTTP client (master §2.4 rev3). */
 
-export type VlmCallKind = "planner" | "segment";
+export type VlmCallKind = "planner" | "labeler";
 
 export interface VlmCall {
-  call_id: string;
   kind: VlmCallKind;
-  phase: string | null;
-  segment_id: string | null;
+  call_id: string;
+  attempt: number | null;
   prompt: string;
   raw_output: string;
   parsed: unknown;
   failed: boolean;
-  ms: number | null;
-  model_variant: string | null;
+  /** Planner-only: URL to the frame image. Null for labeler. */
+  frame_url: string | null;
+  /** Labeler-only: 0-based segment ordinal. Null for planner. */
+  segment_ordinal: number | null;
+  /** Labeler-only: parsed request.json or null if absent. */
+  request_json: unknown;
+  /** Labeler-only: sorted keyframe image URLs. Empty for planner. */
+  keyframe_urls: string[];
 }
 
 export interface VlmDumps {
