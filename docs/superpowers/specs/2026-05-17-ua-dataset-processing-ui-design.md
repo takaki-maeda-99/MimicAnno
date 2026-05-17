@@ -49,8 +49,8 @@ Non-goals:
        └─ stdout/stderr → .mimicanno-jobs/<id>.log    │
                           ┌───────────────────────────┘
                           │
-   runs/<rs>/<can>/_vlm_dumps/*.jsonl ──▶ GET /api/runs/{canonical}/vlm_dumps    (U-A3)
-   runs/<rs>/<can>/tracks.json (+masks) ──▶ GET /api/runs/{canonical}/masks?...   (U-A4)
+   runs/<rs>/<can>/_vlm_dumps/*.jsonl ──▶ GET /api/runs/{canonical}/vlm_dumps.json     (U-A3)
+   runs/<rs>/<can>/tracks.json (+masks) ──▶ GET /api/runs/{canonical}/masks/{frame}.png (U-A4)
 ```
 
 Job submission and progress are the only stateful additions. Catalog, summary, vlm_dumps, and masks are pure read-side over existing filesystem artifacts.
@@ -58,6 +58,20 @@ Job submission and progress are the only stateful additions. Catalog, summary, v
 ## 2. Shared HTTP contract (frozen by this spec)
 
 All endpoints are versioned under `/api/`. Sub-projects MUST implement / consume these exact shapes. Field-level additions are allowed (additive change) but not removals or renames without revising this spec.
+
+### 2.0 Run-set scoping (applies to §2.1, §2.2, §2.4, §2.5)
+
+`runs/` today contains a mix of run-set subdirectories (each holds its own `index.json` and multiple `<canonical>/` dirs) and bare `<canonical>/` directories at the top level (legacy single-mode runs). The contract handles this as follows:
+
+- A **run-set** is any direct subdirectory of the runs root that contains an `index.json`. Anything else at the top level is treated as a legacy bare canonical and bucketed under the synthetic run_set name `__legacy__`.
+- "**Most recent run_set**" (used as default in §2.2): the run-set whose `index.json` has the latest mtime. `__legacy__` is eligible.
+- `annotated_ep_count` in §2.1 = number of distinct `episode_idx` values that have **at least one** run across **all** run-sets combined (union).
+- Routes that operate on a single `<canonical>` (§2.4, §2.5) **require** `run_set` because canonical names are not unique across run-sets (e.g., `episode_000000__abcd1234` may exist in `so101_phase4_v5` and `so101_phase4_v4`).
+- `run_set=__legacy__` selects bare canonical dirs at the top level.
+
+### 2.0.1 CORS
+
+U-A1 adds `POST` and `DELETE` to the `cors_origins` allow-list (currently `GET, HEAD, PATCH, OPTIONS`). Without this, browsers reject preflight on `/api/jobs`. This change is part of U-A1's scope and not optional.
 
 ### 2.1 Datasets
 
@@ -69,7 +83,7 @@ GET /api/datasets
     "name": "SO101",                              // dir name under data/
     "path": "data/SO101",                         // repo-relative
     "ep_count": 33,                               // episodes on disk
-    "annotated_ep_count": 17,                     // episodes with ≥1 run in runs/
+    "annotated_ep_count": 17,                     // see §2.0: union across all run-sets
     "robot_hint": "so101",                        // inferred from data/{}/meta or null
     "task_text_hint": "Put the tape into the bottle",  // from meta/tasks.parquet, or null
     "videos_root": "videos/chunk-000/observation.images.front",  // for catalog UI
@@ -203,11 +217,14 @@ DELETE /api/jobs/{job_id}
 
 ### 2.4 VLM dumps (U-A3)
 
+Path is suffixed with `.json` to disambiguate from the existing catch-all `GET /api/runs/{name}/{artifact}` route at `mimicanno/server/routes.py:568` (which would otherwise match first and return 404 from `RunsRepository.open_artifact`). U-A3 backend MUST register this route **before** the catch-all in the router.
+
 ```
-GET /api/runs/{canonical}/vlm_dumps?run_set=<rs>
+GET /api/runs/{canonical}/vlm_dumps.json?run_set=<rs>      // run_set REQUIRED (see §2.0)
 → 200 application/json
 {
   "canonical": "episode_000000__...",
+  "run_set": "so101_phase4_v5",
   "calls": [
     { "call_id": "call_0001",
       "phase": "approach_object",
@@ -221,28 +238,37 @@ GET /api/runs/{canonical}/vlm_dumps?run_set=<rs>
     ...
   ]
 }
+→ 400 if run_set query param is missing
+→ 404 if (run_set, canonical) does not resolve to a run dir
 ```
 
-Reads `runs/<rs>/<canonical>/_vlm_dumps/*.jsonl`. Missing dir → empty `calls`.
+Reads `runs/<rs>/<canonical>/_vlm_dumps/*.jsonl`. Missing dir (`_vlm_dumps/` not present, but run dir is) → empty `calls`.
 
 ### 2.5 SAM3 masks (U-A4)
 
+Paths use file-suffixed shapes for the same reason as §2.4 (catch-all disambiguation). U-A4 backend registers these **before** the catch-all.
+
 ```
-GET /api/runs/{canonical}/masks?frame=<N>&run_set=<rs>
+GET /api/runs/{canonical}/masks/{frame}.png?run_set=<rs>   // run_set REQUIRED
 → 200 image/png         (RGBA, alpha = mask presence × per-track color)
-→ 404 if no tracks.json
-→ 204 if frame has no tracked objects
+→ 400 if run_set query param is missing or frame is not a non-negative int
+→ 404 if (run_set, canonical) does not resolve, or no tracks.json
+→ 204 if frame is in range but has no tracked objects
 ```
 
 ```
-GET /api/runs/{canonical}/masks/meta?run_set=<rs>
+GET /api/runs/{canonical}/masks/meta.json?run_set=<rs>     // run_set REQUIRED
 → 200 application/json
-{ "frame_count": 151,
+{ "canonical": "episode_000000__...",
+  "run_set": "so101_phase4_v5",
+  "frame_count": 151,
   "tracks": [{ "track_id": "t0", "label": "tape_roll", "color": "#ff8800",
                "first_frame": 12, "last_frame": 140 }] }
+→ 400 if run_set query param is missing
+→ 404 if (run_set, canonical) does not resolve to a run dir
 ```
 
-Implementation detail (U-A4 decides): on-the-fly rasterization from `tracks.json` polygons / RLE, or pre-bake to a sidecar PNG dir at annotate time. The contract is the same either way.
+Implementation detail (U-A4 decides): on-the-fly rasterization from `tracks.json` polygons / RLE, or pre-bake to a sidecar PNG dir at annotate time. The contract is the same either way. If pre-bake is chosen, the sidecar location is `runs/<rs>/<canonical>/_masks/<frame>.png` and U-A4 amends the annotate pipeline to write it.
 
 ## 3. Sub-projects
 
@@ -319,8 +345,12 @@ U-A3 and U-A4 can technically start before U-A1 finishes (they only depend on th
 
 ## 5. Common concerns
 
-- **GPU queue:** single FIFO. `gpu_index` honored if multiple visible GPUs exist; otherwise ignored. New jobs while one runs go to `queued`.
-- **Job persistence across server restart:** `.mimicanno-jobs/<id>.json` is the source of truth; on startup, jobs in `running` status whose subprocess PID no longer exists are reclassified `failed` with reason `"server_restart"`.
+- **GPU queue:** **per-GPU FIFO**. Each visible CUDA device has its own queue; jobs with the same `gpu_index` serialize, jobs with different `gpu_index` run concurrently. `gpu_index` omitted/null in POST body → server assigns the GPU with the shortest queue (ties → lowest index). Single-GPU hosts degenerate to a single global queue. Rationale: dl40 has multiple GPUs and we already run `gem4` chains on GPU 1 while doing other work on GPU 3.
+- **Job state directory:** `.mimicanno-jobs/` lives at the **sibling** of `runs_root` (i.e., `runs_root.parent / ".mimicanno-jobs"`). Overridable via `mimicanno serve --jobs-dir <path>`. Created on demand. Contents: `<job_id>.json` (metadata) + `<job_id>.log` (full stdout/stderr).
+- **Job persistence across server restart:** `.mimicanno-jobs/<id>.json` is the source of truth. On startup, jobs in `running` status whose recorded `pid` no longer exists (or whose `proc_start_time` does not match `/proc/<pid>/stat` field 22) are reclassified `failed` with `error: {"reason": "server_restart"}`.
+- **Progress signal:** `progress_pct` is computed from a stable stdout marker that U-A1 introduces into `scripts/batch_annotate_4B.py` (and `mimicanno annotate`): one line per finished episode prefixed `[mimicanno-job-progress] ep=<idx> finished=<k>/<total>`. The job runner tails the log, parses these lines, and updates `.mimicanno-jobs/<id>.json`. No new schema on disk; only a stdout convention. SSE `progress` events fire when the parsed value changes.
+- **SSE semantics:** server emits a `keepalive` comment line (`:keepalive\n\n`) every 15 s. Clients are expected to reconnect on drop with a fresh request; `Last-Event-ID` is **not** honored (events are not persistent — the latest job state is always retrievable via `GET /api/jobs/{id}`). Stream ends on the first `done` or `failed` event.
+- **Re-annotate guard:** `POST /api/jobs` rejects (409 Conflict) when the target `(run_set, canonical)` already exists on disk and the existing manifest's `run_hash` would match. To re-annotate, the user picks a different `run_set`. This prevents races with PATCH writers on the existing run.
 - **Log size:** subprocess output is appended to `.mimicanno-jobs/<id>.log`. `log_tail` returns last 200 lines; full log via `/log` route.
 - **Test strategy:** backend uses existing `tests/server/conftest.py::tmp_runs_root_loadable` + new tmp `data/` fixtures. Frontend follows D r2 timing-test pattern (vitest + jsdom workarounds where needed).
 - **Schema:** none of §2.1–§2.5 introduces new on-disk schema fields. If U-A4 chooses pre-bake, sidecar directory `_masks/` is documented at sub-project time.
