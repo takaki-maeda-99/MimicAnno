@@ -475,9 +475,18 @@ class HandRaw:
 
 
 _MP_LANDMARKER = None
+
+# Environment variable that lets production / air-gapped deployments point at
+# a pre-fetched .task asset. See scripts/fetch_mediapipe_model.sh and README
+# (Axis B → Offline / air-gapped deployment).
+_MP_HAND_LANDMARKER_ENV = "MIMICANNO_HAND_LANDMARKER_PATH"
+
+# URL pinned to the /1/ revision (was /latest/). MediaPipe Solutions is in
+# Preview and Google can rotate /latest/ without notice; pinning to an
+# explicit revision freezes the model bytes for reproducibility.
 _MP_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-    "hand_landmarker/float16/latest/hand_landmarker.task"
+    "hand_landmarker/float16/1/hand_landmarker.task"
 )
 
 # Acceptable size window for the float16 hand_landmarker.task asset (bytes).
@@ -486,7 +495,36 @@ _MP_MODEL_SIZE_MIN = 5 * 1024 * 1024
 _MP_MODEL_SIZE_MAX = 20 * 1024 * 1024
 
 
-def _hand_landmarker_model_path() -> Path:
+def _resolve_model_path() -> Path:
+    """Resolve the MediaPipe HandLandmarker .task asset, downloading if needed.
+
+    Resolution order:
+
+    1. Environment variable ``MIMICANNO_HAND_LANDMARKER_PATH`` — if set, must
+       point at an existing file. Intended for production / air-gapped
+       deployments that pre-fetch the model with
+       ``scripts/fetch_mediapipe_model.sh``.
+    2. User cache ``~/.cache/mimicanno/hand_landmarker.task`` — if present
+       AND size-verified.
+    3. Network download from the pinned URL into the user cache, with atomic
+       write + flock + size verify (see ``_download_and_cache_model``).
+
+    Raises ``FileNotFoundError`` if the env-var path is set but does not
+    exist; raises ``RuntimeError`` (from the download path) if network
+    fetch fails or the bytes are unexpected.
+    """
+    env = os.environ.get(_MP_HAND_LANDMARKER_ENV)
+    if env:
+        p = Path(env)
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"{_MP_HAND_LANDMARKER_ENV} points to a non-existent file: {p}"
+            )
+        return p
+    return _download_and_cache_model()
+
+
+def _download_and_cache_model() -> Path:
     """Locate or atomically download the MediaPipe HandLandmarker .task asset.
 
     Cached at ``~/.cache/mimicanno/hand_landmarker.task``. The download is:
@@ -535,7 +573,20 @@ def _hand_landmarker_model_path() -> Path:
 
         tmp_path = cache_dir / f"hand_landmarker.task.tmp.{os.getpid()}"
         try:
-            urllib.request.urlretrieve(_MP_MODEL_URL, tmp_path)
+            try:
+                urllib.request.urlretrieve(_MP_MODEL_URL, tmp_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"MediaPipe model download failed from {_MP_MODEL_URL}: "
+                    f"{exc!r}. If you are in an air-gapped environment, "
+                    f"pre-fetch the file on a host with network access via "
+                    f"scripts/fetch_mediapipe_model.sh and set the environment "
+                    f"variable {_MP_HAND_LANDMARKER_ENV} to its path. See the "
+                    f"README (Axis B → Offline / air-gapped deployment) for "
+                    f"details. MediaPipe Solutions is in Preview, so model "
+                    f"URLs may change; see "
+                    f"https://ai.google.dev/edge/mediapipe/legal/tos."
+                ) from exc
             if not _size_ok(tmp_path):
                 size = tmp_path.stat().st_size
                 raise RuntimeError(
@@ -565,7 +616,7 @@ def _get_mediapipe_hands():
         )
         options = HandLandmarkerOptions(
             base_options=BaseOptions(
-                model_asset_path=str(_hand_landmarker_model_path())
+                model_asset_path=str(_resolve_model_path())
             ),
             running_mode=VisionTaskRunningMode.IMAGE,
             num_hands=2,

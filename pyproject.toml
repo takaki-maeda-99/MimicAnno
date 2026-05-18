@@ -16,7 +16,9 @@ dependencies = [
   "jsonschema>=4.21",
   "imageio-ffmpeg>=0.4.9",
   "datasets>=4.8.5",
-  "mediapipe>=0.10",
+  # Upper bound: MediaPipe Solutions is in Preview; minor versions may break
+  # the Tasks API. Bump explicitly after verifying on a new minor.
+  "mediapipe>=0.10,<0.11",
 ]
 
 [project.scripts]

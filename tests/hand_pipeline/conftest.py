@@ -45,11 +45,12 @@ def two_hands_central_image():
 
 @pytest.fixture(scope="session", autouse=True)
 def _mediapipe_hand_model_prewarm():
-    """Download MediaPipe HandLandmarker model once per session.
+    """Resolve the MediaPipe HandLandmarker model once per session.
 
-    Runs before any test in tests/hand_pipeline/. Hits the network only if
-    the user-level cache is empty.
+    Runs before any test in tests/hand_pipeline/. Respects the
+    ``MIMICANNO_HAND_LANDMARKER_PATH`` env var override; otherwise hits the
+    network only if the user-level cache is empty.
     """
-    from mimicanno.hand_pipeline.pipeline import _hand_landmarker_model_path
+    from mimicanno.hand_pipeline.pipeline import _resolve_model_path
 
-    _hand_landmarker_model_path()
+    _resolve_model_path()

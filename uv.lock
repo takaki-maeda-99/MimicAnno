@@ -1479,7 +1479,7 @@ requires-dist = [
     { name = "imageio-ffmpeg", specifier = ">=0.4.9" },
     { name = "iopath", marker = "extra == 'sam3'", specifier = ">=0.1.10" },
     { name = "jsonschema", specifier = ">=4.21" },
-    { name = "mediapipe", specifier = ">=0.10" },
+    { name = "mediapipe", specifier = ">=0.10,<0.11" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'sam3'", specifier = ">=1.26,<2" },

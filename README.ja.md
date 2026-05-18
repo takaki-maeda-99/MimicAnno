@@ -70,6 +70,13 @@ mimicanno annotate \
 
 `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json` を生成します。同じ config + 同じ入力での再実行は no-op (冪等)。
 
+config を変えて (smoother/boundary YAML、adapter など) 再実行すると、
+既存ディレクトリを上書きせず **新しい** `episode_NNNNNN__<short-hash>/`
+が併存します。viewer はこの場合「N runs exist for this episode」の
+chooser banner を表示し、URL の `&hash=...` で現在表示中の run を pin
+します。古い run が要らなければ `runs/<set>/` 下の該当ディレクトリを
+削除してください。
+
 Phase は累積的: `--target-phase 1` (境界検出のみ、VLM/SAM3 不要)、`--target-phase 2` (+ VLM)、`--target-phase 3` (+ SAM3、checkpoint 必須)、`--target-phase 4` (+ smoothing)。
 
 CPU のみ・driver 不一致の環境では `--vlm-device cpu --vlm-timeout-sec 600` を追加 (8 セグメントのエピソードで GPU 1 分 ≒ CPU 1 時間が目安)。
@@ -201,6 +208,22 @@ bash scripts/run_all_pipeline.sh
 ```
 
 出力は `data/depth/<NAME>/` と `data/hands/<NAME>/` 配下。スキーマ・フィールド定義・バッチオプションは [`docs/hand-pipeline.md`](docs/hand-pipeline.md) を参照。
+
+### Third-party data collection (MediaPipe)
+
+このパイプラインは手検出に **MediaPipe Solutions** を使用しています。MediaPipe は動画フレーム自体は **完全に on-device** で処理し、メディアを Google に送信することはありません。ただし MediaPipe は **使用状況とパフォーマンスのメトリクス** を Google に送信します (SDK 利用状況、推論回数、ハードウェア性能、アプリケーション識別子、ホスト OS バージョン)。詳細は Google の [MediaPipe APIs Terms of Service](https://ai.google.dev/edge/mediapipe/legal/tos) を参照。
+
+**本ソフトウェアを再配布する場合**、適用される法令 (GDPR、CCPA 等) で求められる範囲で、エンドユーザーへの告知と同意取得は再配布者の責任となります。
+
+### Offline / air-gapped deployment
+
+ネット接続のない環境で動かす場合、接続可能なマシンで先に MediaPipe モデルを取得しておきます:
+
+```bash
+scripts/fetch_mediapipe_model.sh /path/to/deployment/models/hand_landmarker.task
+```
+
+本番環境で `MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task` を設定すれば、パイプラインはネットワーク download をスキップしてこのファイルを使います。URL は `/1/` リビジョンに pin してあり、同梱の fetch スクリプトも同じ pin を使うので、再現可能なバイト列が得られます。
 
 ## サーバ
 

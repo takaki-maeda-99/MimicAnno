@@ -90,3 +90,48 @@ def test_mediapipe_detection_rate_gx010085():
             n_hit += 1
     rate = n_hit / n_total
     assert rate >= threshold, f"detection rate {rate:.2%} < {threshold:.2%}"
+
+
+# ---------------------------------------------------------------------------
+# Model-path resolution tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_model_path_uses_env_var(tmp_path, monkeypatch):
+    """When MIMICANNO_HAND_LANDMARKER_PATH points at an existing file,
+    _resolve_model_path returns that path unchanged — no network, no cache."""
+    from mimicanno.hand_pipeline.pipeline import _resolve_model_path
+
+    fake = tmp_path / "fake_model.task"
+    fake.write_bytes(b"dummy")
+    monkeypatch.setenv("MIMICANNO_HAND_LANDMARKER_PATH", str(fake))
+
+    assert _resolve_model_path() == fake
+
+
+def test_resolve_model_path_env_var_missing_file_raises(tmp_path, monkeypatch):
+    """When the env var is set but the file is missing, fail loudly rather
+    than silently falling back to network download."""
+    from mimicanno.hand_pipeline.pipeline import _resolve_model_path
+
+    monkeypatch.setenv(
+        "MIMICANNO_HAND_LANDMARKER_PATH", str(tmp_path / "nonexistent.task")
+    )
+    with pytest.raises(FileNotFoundError):
+        _resolve_model_path()
+
+
+def test_resolve_model_path_uses_cache_when_present(tmp_path, monkeypatch):
+    """When the env var is not set and a properly-sized cached file exists at
+    ~/.cache/mimicanno/hand_landmarker.task, _resolve_model_path returns it
+    without re-downloading."""
+    from mimicanno.hand_pipeline.pipeline import _resolve_model_path
+
+    monkeypatch.delenv("MIMICANNO_HAND_LANDMARKER_PATH", raising=False)
+    fake_cache = tmp_path / ".cache" / "mimicanno" / "hand_landmarker.task"
+    fake_cache.parent.mkdir(parents=True)
+    # Must satisfy the size check (5 MB minimum) so the cache path is used.
+    fake_cache.write_bytes(b"\x00" * (6 * 1024 * 1024))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    assert _resolve_model_path() == fake_cache
