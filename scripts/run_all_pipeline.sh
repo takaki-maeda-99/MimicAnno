@@ -75,7 +75,26 @@ done
 
 # ---------------------------------------------------------------------------
 # Paths
-UNIDAC_PY=/home/gayagaya/anaconda3/envs/unidac/bin/python
+# Resolve the UniDAC env's python without hardcoding $HOME or $USER.
+# 1. Honor an explicit UNIDAC_PY override.
+# 2. Otherwise ask conda where it put the `unidac` env.
+# 3. Fall back to the legacy /home/gayagaya path so existing setups
+#    keep working; complain clearly if nothing resolves.
+if [[ -z "${UNIDAC_PY:-}" ]]; then
+    if command -v conda &>/dev/null; then
+        UNIDAC_PREFIX="$(conda env list 2>/dev/null | awk '/[\/]unidac$/ {print $NF; exit}')"
+        if [[ -n "$UNIDAC_PREFIX" && -x "$UNIDAC_PREFIX/bin/python" ]]; then
+            UNIDAC_PY="$UNIDAC_PREFIX/bin/python"
+        fi
+    fi
+fi
+UNIDAC_PY="${UNIDAC_PY:-/home/gayagaya/anaconda3/envs/unidac/bin/python}"
+if [[ ! -x "$UNIDAC_PY" ]]; then
+    echo "error: UniDAC python not found at $UNIDAC_PY." >&2
+    echo "       Create the env with: bash scripts/setup_envs.sh --unidac" >&2
+    echo "       Or set UNIDAC_PY=/path/to/conda/envs/unidac/bin/python" >&2
+    exit 1
+fi
 PP="$PWD:$PWD/UniDAC"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
