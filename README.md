@@ -141,7 +141,7 @@ uv run mimicanno annotate \
   --target-phase 4 \
   --vlm-model    "google/gemma-4-E2B-it" \
   --sam3-checkpoint sam3/checkpoints/sam3.pt \
-  --runs-root    ./runs/so101_demo
+  --runs-root    ./runs
 
 # 3. Batch-annotate one GEM4 episode with the Gemma 4 QLoRA adapter
 #    (requires unsloth_env; ~2 min for the single-ep slice below)
