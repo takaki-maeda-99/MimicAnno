@@ -139,7 +139,7 @@ uv run mimicanno annotate \
   --target-phase 4 \
   --vlm-model    "google/gemma-4-E2B-it" \
   --sam3-checkpoint sam3/checkpoints/sam3.pt \
-  --runs-root    ./runs
+  --runs-root    ./runs/so101
 
 # 3. GEM4 episode を Gemma 4 QLoRA アダプタで一括アノテーション
 #    (unsloth_env 必須、下記は 1 ep 切り出しで ~2 分)
