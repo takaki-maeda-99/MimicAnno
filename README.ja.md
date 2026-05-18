@@ -76,9 +76,12 @@ script 化していません。初回のみ:
 ```bash
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
-pip install unsloth
-pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
+uv pip install unsloth        # plain pip より resolver が ~10x 高速
+uv pip install -e .           # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
 ```
+
+`uv pip` で unsloth の CUDA 制約に弾かれた場合は plain pip にフォールバック
+(`pip install unsloth && pip install -e .`)。
 
 **DINOv3 backbone (Hand pipeline Phase A 用)**: UniDAC が
 `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`

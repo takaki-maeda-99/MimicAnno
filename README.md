@@ -77,9 +77,12 @@ fragile to script. Create the env once:
 ```bash
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
-pip install unsloth
-pip install -e .   # MimicAnno itself, so the wrappers can `import mimicanno`
+uv pip install unsloth        # ~10× faster resolver than plain pip
+uv pip install -e .           # MimicAnno itself, so the wrappers can `import mimicanno`
 ```
+
+If `uv pip` rejects unsloth's CUDA constraints, fall back to plain
+`pip install unsloth` and `pip install -e .` (pip's resolver is looser).
 
 **DINOv3 backbone (for Hand pipeline Phase A)** — UniDAC needs
 `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
