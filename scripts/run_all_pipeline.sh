@@ -5,7 +5,7 @@
 #   bash scripts/run_all_pipeline.sh [OPTIONS] [VIDEO_NAME ...]
 #
 # Examples:
-#   # All fisheye videos in data/video/new/ (auto-detect 2704x1520)
+#   # All fisheye videos in data/video/ (auto-detect 2704x1520)
 #   bash scripts/run_all_pipeline.sh
 #
 #   # Specific videos only
@@ -95,7 +95,7 @@ log "GPUs: cuda:$GPU0 (even batches) cuda:$GPU1 (odd batches)"
 
 # ---------------------------------------------------------------------------
 # Phase C helper: render fisheye-space depth mp4 + transcode to h264.
-# Produces data/depth/<name>/viz_depth.mp4 which the viewer expects.
+# Produces outputs/depth/<name>/viz_depth.mp4 which the viewer expects.
 phase_c() {
     local name=$1 gpu=$2
     local out_mp4="$DEPTH_DIR/$name/viz_depth.mp4"

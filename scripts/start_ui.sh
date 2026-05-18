@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --hands-root is only passed to the backend when the directory exists,
-# so a missing data/hands/ doesn't crash the server. Pass HANDS_ROOT=
+# so a missing outputs/hands/ doesn't crash the server. Pass HANDS_ROOT=
 # (empty) to disable the hand routes entirely.
 api_args=(--runs-root "$RUNS_ROOT" --port "$API_PORT")
 if [[ -n "$HANDS_ROOT" && -d "$HANDS_ROOT" ]]; then
