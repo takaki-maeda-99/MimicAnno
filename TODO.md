@@ -8,6 +8,33 @@
 
 ## 残タスク
 
+### GX010180 hand データ MediaPipe 再生成（データ移行待ち）
+
+- 2026-05-18 PM の MediaPipe 再生成バッチ (GX010085 除く 8 ep) で GX010180 のみ失敗。
+  原因: 並列実行中にユーザ側でデータ移行が走り `data/depth/GX010180/` / `data/hands/GX010180/`
+  が消えた (`FileNotFoundError: data/hands/GX010180/meta.json`)。他 7 ep (086, 175-179, 181)
+  は MediaPipe 出力で正常完了。
+- 再走コマンド (data 移行完了後、`data/depth/GX010180/` が戻ったら):
+  ```bash
+  CUDA_VISIBLE_DEVICES=0 uv run python scripts/run_hand_estimation.py \
+      --video data/video/new/GX010180.MP4 \
+      --depth data/depth/GX010180 \
+      --out   data/hands/GX010180 \
+      --overwrite --full-signals
+  ```
+- 所要 ~1-2 分 (MediaPipe は CPU、UniDAC depth は precomputed なので Phase B のみ)。
+
+### 内部 README drift (server / frontend, Phase 5 B r2-r4 follow-up commit 待ち)
+
+- 詳細は memory `project-doc-drift-2026-05-18` に記録。3 ファイル:
+  - `mimicanno/server/README.md` — title が "Phase 5 A read-only + Phase 5 B r1 edit backend" のまま、
+    routes 一覧も `PATCH /api/runs/{name}/segments/{id}` 1 本だけ (r2 boundary / r3 reviewed / r4 labels 未記載)
+  - `frontend/README.md` — title が "MimicAnno Phase 1 viewer" のまま、編集モード解説も r1 phase dropdown のみ
+  - `tests/fixtures/loadable_run/README.md` — L18 "Phase 1 boundary candidates" の内部 phase 番号 leak (些細)
+- 触らない理由: Phase 5 B r2-r4 を実装した PR が doc 同時 update せず land しており、ここを今独立に
+  触ると owning context を持つ次の PR と conflict する。次に server/frontend 系を触る PR で
+  同時更新が筋。
+
 ### start_ui.sh venv-safety ✅ **完了 (2026-05-18 PM)** — fix/start-ui-venv-safety → main (PR #33, merge `13e1ac1`)
 
 - 問題: `bash scripts/start_ui.sh` が `uv run --extra server` で `.venv` を narrow extras set に再 sync → `[sam3]`/`[vlm]`/`[dev]` 由来パッケージ削除 → `mimicanno serve` 起動時に `ImportError: cannot import name 'mask' from 'pycocotools'` で死亡
