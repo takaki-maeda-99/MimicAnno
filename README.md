@@ -133,8 +133,8 @@ bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
 
 # 2. Annotate one SO101 episode (Phase 1–4, ~1 min on GPU)
 uv run mimicanno annotate \
-  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
-  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
+  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000032.mp4 \
+  --parquet      data/SO101/data/chunk-000/episode_000032.parquet \
   --task         "Put the tape into the bottle" \
   --robot        generic \
   --robot-config tests/exports/fixtures/so101_robot_config.yaml \
@@ -160,7 +160,7 @@ datasets are covered in the next section.
 ### 1. Annotate one episode
 
 See the SO101 example in [Demo §2](#demo) — same command, against
-`data/SO101/episode_000000`.
+`data/SO101/episode_000032`.
 
 Produces `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json`. Re-running with the same config and inputs is a no-op.
 

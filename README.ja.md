@@ -131,8 +131,8 @@ bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
 
 # 2. SO101 episode 1 本をアノテーション (Phase 1–4、GPU で ~1 分)
 uv run mimicanno annotate \
-  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
-  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
+  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000032.mp4 \
+  --parquet      data/SO101/data/chunk-000/episode_000032.parquet \
   --task         "Put the tape into the bottle" \
   --robot        generic \
   --robot-config tests/exports/fixtures/so101_robot_config.yaml \
@@ -158,7 +158,7 @@ bash scripts/start_ui.sh
 ### 1. エピソード 1 本にアノテーション
 
 [デモ §2](#デモ) の SO101 例を参照 — 同じコマンドを
-`data/SO101/episode_000000` で実行する形。
+`data/SO101/episode_000032` で実行する形。
 
 `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json` を生成します。同じ config + 同じ入力での再実行は no-op (冪等)。
 
