@@ -33,8 +33,8 @@ Runs UniDAC (Preset A) over every frame of a fisheye video and saves euclid-dist
 conda activate unidac
 PYTHONPATH=/path/to/MimicAnno:/path/to/MimicAnno/UniDAC \
 python scripts/precompute_depth.py \
-    --input data/video/new/GX010085.MP4 \
-    --out   data/depth/GX010085/
+    --input data/video/GX010085.MP4 \
+    --out   outputs/depth/GX010085/
 ```
 
 **Key args:**
@@ -79,9 +79,9 @@ Reads precomputed UniDAC depth from Phase A, runs the hand backend (MediaPipe Ha
 ```bash
 PYTHONPATH=/path/to/MimicAnno:/path/to/MimicAnno/UniDAC \
 uv run python scripts/run_hand_estimation.py \
-    --video data/video/new/GX010085.MP4 \
-    --depth data/depth/GX010085 \
-    --out   data/hands/GX010085
+    --video data/video/GX010085.MP4 \
+    --depth outputs/depth/GX010085 \
+    --out   outputs/hands/GX010085
 ```
 
 **Key args:**
@@ -117,7 +117,7 @@ bash scripts/run_all_pipeline.sh --skip-phase-a        # depth already precomput
 bash scripts/run_all_pipeline.sh --overwrite           # ignore existing outputs
 ```
 
-**Skip logic:** Phase A is skipped for a video if `data/depth/<NAME>/meta.json` exists and `interrupted=false`. Phase B is skipped if `data/hands/<NAME>/meta.json` exists and `pass1_complete=true` and `interrupted=false`.
+**Skip logic:** Phase A is skipped for a video if `outputs/depth/<NAME>/meta.json` exists and `interrupted=false`. Phase B is skipped if `outputs/hands/<NAME>/meta.json` exists and `pass1_complete=true` and `interrupted=false`.
 
 **Logs:** per-video logs at `/tmp/phaseA_<NAME>.log` and `/tmp/phaseB_<NAME>.log`. A summary table is printed on completion.
 
@@ -128,9 +128,9 @@ Loads precomputed `.npy` depth files from Phase A, back-warps them from ERP to f
 ```bash
 PYTHONPATH=/path/to/MimicAnno:/path/to/MimicAnno/UniDAC \
 conda run -n unidac python scripts/visualize_depth.py \
-    --depth data/depth/GX010085 \
-    --video data/video/new/GX010085.MP4 \
-    --out   data/depth/GX010085/viz.mp4
+    --depth outputs/depth/GX010085 \
+    --video data/video/GX010085.MP4 \
+    --out   outputs/depth/GX010085/viz.mp4
 ```
 
 Useful flags: `--frames 0,5,10` (specific indices), `--stride N`, `--scale 0.5`, `--no-side-by-side`, `--colormap {plasma,viridis,magma,jet}`.
