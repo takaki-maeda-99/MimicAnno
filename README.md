@@ -55,7 +55,10 @@ git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
 # One-shot bootstrap (submodules, core, unidac, frontend, gated weights).
-# Set HF_TOKEN or run `hf auth login` first for SAM3 / Gemma 4.
+# Authenticate to Hugging Face first. Required for gated repos (SAM3,
+# Gemma 4) and **strongly recommended for everything else** — anonymous
+# downloads share a per-IP rate limit that the full weights+datasets
+# fetch will trip. Either export HF_TOKEN=hf_xxx or run `hf auth login`.
 bash scripts/setup_envs.sh
 
 # Selective install (skip steps you don't need):

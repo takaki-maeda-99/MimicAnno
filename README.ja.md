@@ -55,7 +55,10 @@ git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
 # 一発セットアップ (submodules / core / unidac / frontend / gated weights)。
-# SAM3 と Gemma 4 のために事前に `HF_TOKEN` を export するか `hf auth login` を実行。
+# Hugging Face にログインしておく。gated repo (SAM3 / Gemma 4) には必須、
+# それ以外も **強く推奨** — 匿名 DL は IP 単位レート制限があり、weights+
+# datasets を一気に DL するとほぼ確実に弾かれる。
+# `export HF_TOKEN=hf_xxx` か `hf auth login` で OK。
 bash scripts/setup_envs.sh
 
 # 個別実行 (不要な step を skip):
