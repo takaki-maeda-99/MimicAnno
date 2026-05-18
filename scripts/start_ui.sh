@@ -107,7 +107,10 @@ wait_for_api() {
 }
 wait_for_api
 
-( cd "$REPO_ROOT/frontend" && MIMICANNO_API_PORT="$API_PORT" pnpm run dev --port "$VITE_PORT" ) &
+( cd "$REPO_ROOT/frontend" && \
+    MIMICANNO_API_PORT="$API_PORT" \
+    CHOKIDAR_USEPOLLING="${CHOKIDAR_USEPOLLING:-true}" \
+    pnpm run dev --port "$VITE_PORT" ) &
 VITE_PID=$!
 
 cleanup() {
