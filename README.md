@@ -77,6 +77,21 @@ bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
 > redirect) into `UniDAC/checkpoints/`. Or, if you already have it on
 > another machine, `scp` it across.
 
+> **Manual step — `unsloth_env` conda env.** The GEM4 batch wrappers
+> (`run_26B_gem4.sh` / `run_4B_gem4.sh`) load Gemma 4 via Unsloth,
+> which lives in a separate conda env. Unsloth's CUDA pinning is
+> fragile so `setup_envs.sh` doesn't try to install it automatically.
+> Bootstrap once:
+>
+> ```bash
+> conda create -n unsloth_env python=3.11 -y
+> conda activate unsloth_env
+> pip install unsloth
+> pip install -e .   # MimicAnno itself, so the wrappers can `import mimicanno`
+> ```
+>
+> Skip if you don't use the GEM4 wrappers.
+
 > **`.venv` is owned by `setup_envs.sh`.** Other helpers (`start_ui.sh`,
 > `mimicanno` CLI) read from the existing `.venv` without modifying
 > it. If `start_ui.sh` reports a `.venv` health-check failure, re-run

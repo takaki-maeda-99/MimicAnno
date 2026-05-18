@@ -76,6 +76,20 @@ bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
 > で申請 → メールで届く署名付き URL を `wget` (ブラウザ不可) で
 > `UniDAC/checkpoints/` に落とす。既に別マシンに有るなら `scp` でも可。
 
+> **手動ステップ — `unsloth_env` conda 環境**: GEM4 batch wrapper
+> (`run_26B_gem4.sh` / `run_4B_gem4.sh`) は Unsloth 経由で Gemma 4 を
+> ロードするため別 conda env が必要。Unsloth は CUDA 依存が壊れやすい
+> ので `setup_envs.sh` では自動化していません。初回のみ:
+>
+> ```bash
+> conda create -n unsloth_env python=3.11 -y
+> conda activate unsloth_env
+> pip install unsloth
+> pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
+> ```
+>
+> GEM4 wrapper を使わなければ skip 可。
+
 > **`.venv` の管理は `setup_envs.sh` だけが行います。** 他のヘルパー
 > (`start_ui.sh`、`mimicanno` CLI) は既存の `.venv` を読むだけで変更
 > しません。`start_ui.sh` が `.venv` health-check failure を報告したら、
