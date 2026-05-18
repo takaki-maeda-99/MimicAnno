@@ -1,41 +1,33 @@
-"""Hand pose estimation pipeline combining HaMeR + UniDAC depth.
+"""Hand pose estimation pipeline (MediaPipe HandLandmarker + UniDAC depth).
 
-Phase 2d status: _fuse implemented. estimate_hand (Phase 2e) is a stub.
+Pipeline overview:
+  1. ``_run_mediapipe`` runs MediaPipe Tasks API ``HandLandmarker`` on a BGR
+     uint8 frame and returns per-hand :class:`HandRaw` (2D pixel landmarks,
+     wrist-centred 3D world landmarks in metres, handedness).
+  2. ``_apply_metric_depth`` samples the precomputed UniDAC ERP depth at the
+     wrist pixel (with 3x3 neighbourhood median), back-projects through the
+     fisheye camera model to produce a metric ``cam_t``, and pairs it with the
+     palm-axis-derived rotation from ``_palm_frame``.
+  3. ``estimate_hand`` is the top-level API that wires the two together; when
+     ``depth`` is ``None`` it falls back to ``_passthrough_estimate`` (cam_t=0).
 
-Environment: HaMeR venv (``/misc/dl00/gayagaya/MimicAnno/hamer/.hamer/bin/python``).
-Run any caller (CLI or pytest) from this env with::
-
-    PYTHONPATH=/misc/dl00/gayagaya/MimicAnno:/misc/dl00/gayagaya/MimicAnno/UniDAC \\
-        /misc/dl00/gayagaya/MimicAnno/hamer/.hamer/bin/python -m pytest ...
-
-The module inserts ``<MimicAnno>/hamer`` onto ``sys.path`` at import time so
-the HaMeR low-level modules (``demo_video``, ``vitpose_model``) are importable
-without a separate PYTHONPATH dance, and it cd's into ``hamer/`` during
-pipeline construction so the renderer / detector configs that use relative
-paths resolve correctly.
+Runtime environments (see ``mimicanno/hand_pipeline/__init__.py``):
+  * MediaPipe path (``_run_mediapipe``, ``estimate_hand`` without depth):
+    ``mediapipe`` + ``opencv-python`` + ``numpy`` — installs cleanly into the
+    MimicAnno uv venv.
+  * UniDAC path (``_apply_metric_depth`` with real depth, ``_back_warp_depth``,
+    ``_sample_depth_at_pixels``): also needs ``torch`` + the ``unidac`` package
+    on ``PYTHONPATH``. Run those tests under ``conda activate unidac``.
 """
 from __future__ import annotations
 
-import contextlib
-import functools
 import math
 import os
-import sys
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # hand_pipeline → mimicanno → MimicAnno
-_HAMER_ROOT = _REPO_ROOT / "hamer"
-_UNIDAC_ROOT = _REPO_ROOT / "UniDAC"
-if _HAMER_ROOT.exists() and str(_HAMER_ROOT) not in sys.path:
-    sys.path.insert(0, str(_HAMER_ROOT))
-if _UNIDAC_ROOT.exists() and str(_UNIDAC_ROOT) not in sys.path:
-    sys.path.insert(0, str(_UNIDAC_ROOT))
 
 
 # UniDAC Preset A camera parameters. The forward pipeline (api.py:131-139) uses
@@ -57,192 +49,21 @@ _PRESET_A = {
 
 
 @dataclass
-class HamerRaw:
-    """Per-hand raw output from HaMeR (pre-fusion, pseudo-metric scale).
-
-    ``cam_t`` and ``vertices`` live in HaMeR's camera frame, but the metric
-    scale is set by HaMeR's heuristic focal length (pinhole assumption), which
-    is unreliable for fisheye input. Scale calibration happens in `_fuse`
-    (Phase 2d).
-    """
-    is_right: bool
-    betas: np.ndarray         # (10,)            float32
-    global_orient: np.ndarray # (3, 3)           float32 rotation matrix
-    hand_pose: np.ndarray     # (15, 3, 3)       float32 rotation matrices
-    cam_t: np.ndarray         # (3,)             float32 translation, pseudo-metric
-    vertices: np.ndarray      # (778, 3)         float32 MANO mesh (x-mirror applied)
-    joints_3d: np.ndarray     # (21, 3)          float32 in HaMeR cam frame
-    joints_2d: np.ndarray     # (21, 2)          float32 input-image pixels
-    bbox: np.ndarray          # (4,)             float32 xyxy input-image pixels
-
-
-@dataclass
 class HandEstimate:
-    """Per-hand metric output after UniDAC depth-based position correction.
-
-    All 3-D arrays are in HaMeR's camera frame.  ``cam_t`` is set by
-    back-projecting the wrist pixel through the fisheye camera model using the
-    UniDAC euclid-distance depth at that pixel (``wrist_depth_m``).  When
-    depth is unavailable ``cam_t`` falls back to HaMeR's pseudo-metric value
-    and ``wrist_depth_m`` is ``None``.
-    """
+    """Per-hand metric output after UniDAC depth-based wrist back-projection."""
     is_right: bool
-    betas: np.ndarray         # (10,)            float32
-    global_orient: np.ndarray # (3, 3)           float32 rotation matrix
-    hand_pose: np.ndarray     # (15, 3, 3)       float32 rotation matrices
-    cam_t: np.ndarray         # (3,)             float32 metric (or pseudo-metric) translation
-    vertices: np.ndarray      # (778, 3)         float32 MANO mesh in cam frame
-    joints_3d: np.ndarray     # (21, 3)          float32 in cam frame
-    joints_2d: np.ndarray     # (21, 2)          float32 input-image pixels (pinhole approx)
-    bbox: np.ndarray          # (4,)             float32 xyxy input-image pixels
-    # --- depth fusion fields (all have defaults so existing call sites still work) ---
-    wrist_depth_m: Optional[float] = None  # UniDAC euclid depth at wrist [m]; None if unavailable
-    depth_interpolated: bool = False       # True when wrist_depth_m was filled by interpolation
-    pinch_distance_m: Optional[float] = None  # |joints_local[4] - joints_local[8]| [m]; cam_t-independent
-    # --- deprecated: retained for backward-compatibility, always None / 0 ---
-    scale_factor: Optional[float] = None  # formerly _fuse() scale; now always None
-    n_valid_samples: int = 0              # formerly _fuse() sample count; now always 0
-
-
-@contextlib.contextmanager
-def _cwd(path: Path):
-    prev = os.getcwd()
-    try:
-        os.chdir(path)
-        yield
-    finally:
-        os.chdir(prev)
-
-
-@functools.lru_cache(maxsize=1)
-def _get_hamer_pipeline():
-    """Build the HaMeR pipeline dict once per process."""
-    from demo_video import build_pipeline  # type: ignore
-    with _cwd(_HAMER_ROOT):
-        return build_pipeline(body_detector="regnety")
-
-
-def _run_hamer(image: np.ndarray, *, rescale_factor: float = 2.0,
-               batch_size: int = 8) -> Optional[List[HamerRaw]]:
-    """Run HaMeR on a single image and return per-hand raw outputs.
-
-    Args:
-        image: ``(H, W, 3)`` uint8 BGR (``cv2.imread`` convention).
-        rescale_factor: HaMeR's ViTDet bbox expansion factor.
-        batch_size: forwarded to the inner DataLoader.
-
-    Returns:
-        A list of ``HamerRaw`` (one per detected hand). Empty list if HaMeR
-        detected no hands. The function does not currently surface a
-        distinguishable "pipeline failed" state separately from "no hands";
-        future callers can wrap exceptions.
-    """
-    import torch
-    from torch.utils.data import DataLoader
-
-    from demo_video import detect_hand_bboxes               # type: ignore
-    from hamer.datasets.vitdet_dataset import ViTDetDataset
-    from hamer.utils import recursive_to
-    from hamer.utils.renderer import cam_crop_to_full
-
-    if image.dtype != np.uint8:
-        raise ValueError(f"image must be uint8, got {image.dtype}")
-    if image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError(f"image must be HxWx3 BGR, got shape {image.shape}")
-
-    pipe = _get_hamer_pipeline()
-    model = pipe["model"]
-    model_cfg = pipe["model_cfg"]
-    device = pipe["device"]
-
-    with _cwd(_HAMER_ROOT):
-        bboxes, right = detect_hand_bboxes(image, pipe["detector"], pipe["cpm"])
-    if bboxes is None or len(bboxes) == 0:
-        return []
-
-    H, W = image.shape[:2]
-    img_max = float(max(H, W))
-    scaled_focal_length = (
-        model_cfg.EXTRA.FOCAL_LENGTH / model_cfg.MODEL.IMAGE_SIZE * img_max
-    )
-
-    with _cwd(_HAMER_ROOT):
-        dataset = ViTDetDataset(model_cfg, image, bboxes, right,
-                                rescale_factor=rescale_factor)
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                            num_workers=0)
-
-        results: List[HamerRaw] = []
-        bbox_idx = 0
-        for batch in loader:
-            batch = recursive_to(batch, device)
-            with torch.no_grad():
-                out = model(batch)
-
-            multiplier = (2 * batch["right"] - 1)
-            pred_cam = out["pred_cam"].clone()
-            pred_cam[:, 1] = multiplier * pred_cam[:, 1]
-            box_center = batch["box_center"].float()
-            box_size = batch["box_size"].float()
-            img_size_t = batch["img_size"].float()
-            cam_t_full = cam_crop_to_full(
-                pred_cam, box_center, box_size, img_size_t, scaled_focal_length,
-            ).detach().cpu().numpy()
-
-            joints = out["pred_keypoints_3d"].detach().cpu().numpy()
-            verts = out["pred_vertices"].detach().cpu().numpy()
-            mano_go = out["pred_mano_params"]["global_orient"].detach().cpu().numpy()
-            mano_hp = out["pred_mano_params"]["hand_pose"].detach().cpu().numpy()
-            mano_bt = out["pred_mano_params"]["betas"].detach().cpu().numpy()
-
-            n_in_batch = batch["img"].shape[0]
-            for n in range(n_in_batch):
-                is_right_n = bool(batch["right"][n].cpu().numpy().item())
-                sign = 2.0 * float(is_right_n) - 1.0
-
-                v = verts[n].astype(np.float32, copy=True)
-                v[:, 0] = sign * v[:, 0]
-
-                j3 = joints[n].astype(np.float32, copy=True)
-                j3[:, 0] = sign * j3[:, 0]
-                cam_t = cam_t_full[n].astype(np.float32)
-                j3_cam = j3 + cam_t[None, :]
-
-                fl = float(scaled_focal_length.item()
-                           if hasattr(scaled_focal_length, "item")
-                           else scaled_focal_length)
-                iw = float(img_size_t[n, 0].item())
-                ih = float(img_size_t[n, 1].item())
-                Z = j3_cam[:, 2]
-                safe_Z = np.where(Z > 1e-6, Z, 1.0)
-                u = fl * j3_cam[:, 0] / safe_Z + iw / 2.0
-                vv = fl * j3_cam[:, 1] / safe_Z + ih / 2.0
-                j2 = np.stack([u, vv], axis=-1).astype(np.float32)
-                j2[Z <= 1e-6] = np.float32("nan")
-
-                # Squeeze MANO global_orient from (1,3,3) -> (3,3).
-                go = mano_go[n].astype(np.float32)
-                if go.ndim == 3 and go.shape[0] == 1:
-                    go = go[0]
-
-                results.append(HamerRaw(
-                    is_right=is_right_n,
-                    betas=mano_bt[n].astype(np.float32),
-                    global_orient=go,
-                    hand_pose=mano_hp[n].astype(np.float32),
-                    cam_t=cam_t,
-                    vertices=v,
-                    joints_3d=j3_cam.astype(np.float32),
-                    joints_2d=j2,
-                    bbox=np.asarray(bboxes[bbox_idx], dtype=np.float32),
-                ))
-                bbox_idx += 1
-
-    return results
+    joints_2d: np.ndarray         # (21, 2) pixel coords
+    joints_3d: np.ndarray         # (21, 3) cam frame, metres
+    cam_t: np.ndarray             # (3,)    cam frame, metres
+    global_orient: np.ndarray     # (3, 3)  palm-axis-derived
+    bbox: np.ndarray              # (4,)    xyxy pixels
+    wrist_depth_m: Optional[float] = None
+    depth_interpolated: bool = False
+    pinch_distance_m: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
-# ERP -> input camera back-warp (Phase 2c).
+# ERP -> input camera back-warp.
 
 def _preset_a_cam_params(W: int, H: int) -> dict:
     """Build the UniDAC cam_params dict for Preset A at input resolution (W, H)."""
@@ -316,7 +137,7 @@ def _back_warp_depth(
         fisheye projection) are ``NaN``.
     """
     if preset != "A":
-        raise NotImplementedError(f"preset {preset!r} not supported in Phase 2c")
+        raise NotImplementedError(f"preset {preset!r} not supported")
     import cv2
     import torch
     from unidac.utils.erp_geometry import erp_patch_to_cam_fast  # type: ignore
@@ -387,7 +208,7 @@ def _sample_depth_at_pixels(
     Forward-projects each input pixel through Preset A's equidistant fisheye
     (k1..k4 = 0) and gnomonic patch transform, then bilinearly samples the
     ERP depth. Orders of magnitude cheaper than ``_back_warp_depth`` when only
-    a few hundred query pixels are needed (e.g. MANO vertices / joints).
+    a few hundred query pixels are needed (e.g. wrist + neighbours).
 
     Args:
         depth_erp: ``(H_erp, W_erp)`` float32 metric depth from UniDAC, e.g.
@@ -471,245 +292,7 @@ def _sample_depth_at_pixels(
 
 
 # ---------------------------------------------------------------------------
-# Phase B: wrist-pixel depth back-projection.
-
-def _apply_metric_depth(
-    hamer_raws: List[HamerRaw],
-    depth_erp: np.ndarray,
-    image_shape: Tuple[int, int],
-) -> List[HandEstimate]:
-    """Replace HaMeR's pseudo-metric cam_t with UniDAC metric depth at the wrist.
-
-    For each detected hand:
-    1. Sample UniDAC ERP depth at the wrist pixel (MANO joint 0) and its 8
-       neighbours; take the median of finite positive values.
-    2. Back-project (u, v, depth) through the equidistant fisheye model to get
-       a metric cam_t.  UniDAC outputs euclid (ray) distance, so
-       ``cam_t = depth * unit_ray``.
-    3. Shift joints_3d and vertices by the cam_t delta.
-
-    When depth is unavailable (all 9 samples are NaN/0), cam_t is left
-    unchanged and ``wrist_depth_m`` is ``None``.
-    """
-    if not hamer_raws:
-        return []
-
-    H, W = image_shape
-    cam = _preset_a_cam_params(W, H)
-    fx, fy, cx, cy = cam["fx"], cam["fy"], cam["cx"], cam["cy"]
-
-    # 3×3 neighbourhood offsets for robust wrist depth sampling.
-    _offsets = np.array(
-        [[du, dv] for du in (-1, 0, 1) for dv in (-1, 0, 1)],
-        dtype=np.float32,
-    )
-
-    results: List[HandEstimate] = []
-    for raw in hamer_raws:
-        wrist_uv = raw.joints_2d[0]  # MANO joint 0 = wrist (pinhole approx.)
-        if np.any(np.isnan(wrist_uv)):
-            depth_val: Optional[float] = None
-        else:
-            pts = wrist_uv[None, :] + _offsets          # (9, 2)
-            samples = _sample_depth_at_pixels(depth_erp, pts, image_shape)
-            finite_pos = samples[np.isfinite(samples) & (samples > 0)]
-            depth_val = float(np.median(finite_pos)) if finite_pos.size > 0 else None
-
-        if depth_val is not None:
-            u, v = float(wrist_uv[0]), float(wrist_uv[1])
-            xn = (u - cx) / fx
-            yn = (v - cy) / fy
-            theta = math.sqrt(xn * xn + yn * yn)
-            if theta < 1e-9:
-                rx, ry, rz = 0.0, 0.0, 1.0
-            else:
-                sin_t = math.sin(theta)
-                rx = sin_t * xn / theta
-                ry = sin_t * yn / theta
-                rz = math.cos(theta)
-            new_cam_t = np.array(
-                [rx * depth_val, ry * depth_val, rz * depth_val], dtype=np.float32
-            )
-            offset = new_cam_t - raw.cam_t
-            new_joints_3d = (raw.joints_3d + offset[None, :]).astype(np.float32)
-            new_vertices = (raw.vertices + new_cam_t[None, :]).astype(np.float32)
-        else:
-            new_cam_t = raw.cam_t.copy()
-            new_joints_3d = raw.joints_3d.copy()
-            new_vertices = (raw.vertices + raw.cam_t[None, :]).astype(np.float32)
-
-        # Pinch distance is cam_t-independent: compute from joints_local (= raw.joints_3d - raw.cam_t).
-        joints_local = raw.joints_3d - raw.cam_t[None, :]
-        pinch = float(np.linalg.norm(joints_local[4] - joints_local[8]))
-
-        results.append(HandEstimate(
-            is_right=raw.is_right,
-            betas=raw.betas.copy(),
-            global_orient=raw.global_orient.copy(),
-            hand_pose=raw.hand_pose.copy(),
-            cam_t=new_cam_t,
-            vertices=new_vertices,
-            joints_3d=new_joints_3d,
-            joints_2d=raw.joints_2d.copy(),
-            bbox=raw.bbox.copy(),
-            wrist_depth_m=depth_val,
-            pinch_distance_m=pinch,
-        ))
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Phase 2d: depth-based scale fusion (deprecated — kept for reference).
-
-_SCALE_WARN_LO = 0.01
-_SCALE_WARN_HI = 1.0
-
-
-def _fuse(
-    hamer_raws: List[HamerRaw],
-    depth_erp: np.ndarray,
-    image_shape: Tuple[int, int],
-) -> List[HandEstimate]:
-    """[DEPRECATED] Fuse HaMeR raw hand estimates with UniDAC metric depth.
-
-    Replaced by ``_apply_metric_depth``. Kept for reference and legacy tests.
-
-    Computes a single image-level scale factor as::
-
-        scale = median(unidac_z_valid) / median(hamer_z_valid)
-
-    where the medians pool the depth samples and HaMeR z-values from *all*
-    21 joints of *all* detected hands in the image. This one scale is then
-    applied only to ``cam_t``; MANO shape and pose are not altered.
-
-    Args:
-        hamer_raws: list of ``HamerRaw`` for all hands in one image.
-        depth_erp: ``(H_erp, W_erp)`` float32 UniDAC depth (Preset A: 512×704).
-        image_shape: ``(H, W)`` of the source camera frame.
-
-    Returns:
-        List of ``HandEstimate`` in the same order as ``hamer_raws``, each with
-        metric-corrected ``cam_t``, ``vertices``, and ``joints_3d``.
-        Returns an empty list if ``hamer_raws`` is empty or if all depth
-        samples are NaN (with a ``UserWarning`` in the latter case).
-    """
-    if not hamer_raws:
-        return []
-
-    # Forward-project all 21 joints of every hand into UniDAC depth.
-    all_j2d = np.concatenate([r.joints_2d for r in hamer_raws], axis=0)  # (N*21, 2)
-    all_j3d = np.concatenate([r.joints_3d for r in hamer_raws], axis=0)  # (N*21, 3)
-
-    unidac_z = _sample_depth_at_pixels(depth_erp, all_j2d, image_shape)  # (N*21,)
-    hamer_z = all_j3d[:, 2]                                               # (N*21,)
-
-    valid = np.isfinite(unidac_z) & np.isfinite(hamer_z) & (hamer_z > 1e-6)
-    if not valid.any():
-        warnings.warn(
-            "_fuse: all depth samples are NaN; cannot compute scale. "
-            "Returning empty list.",
-            UserWarning, stacklevel=2,
-        )
-        return []
-
-    scale = float(np.median(unidac_z[valid]) / np.median(hamer_z[valid]))
-
-    if not (_SCALE_WARN_LO <= scale <= _SCALE_WARN_HI):
-        warnings.warn(
-            f"_fuse: scale_factor={scale:.5f} is outside the expected range "
-            f"[{_SCALE_WARN_LO}, {_SCALE_WARN_HI}]. Check depth units.",
-            UserWarning, stacklevel=2,
-        )
-
-    results: List[HandEstimate] = []
-    for raw in hamer_raws:
-        new_cam_t = (raw.cam_t * np.float32(scale)).astype(np.float32)
-
-        # vertices are in MANO local frame (not offset by cam_t); place in cam frame.
-        new_vertices = (raw.vertices + new_cam_t[None, :]).astype(np.float32)
-
-        # joints_3d = joints_local + raw.cam_t; apply new translation instead.
-        joints_local = raw.joints_3d - raw.cam_t[None, :]
-        new_joints_3d = (joints_local + new_cam_t[None, :]).astype(np.float32)
-
-        results.append(HandEstimate(
-            is_right=raw.is_right,
-            betas=raw.betas.copy(),
-            global_orient=raw.global_orient.copy(),
-            hand_pose=raw.hand_pose.copy(),
-            cam_t=new_cam_t,
-            vertices=new_vertices,
-            joints_3d=new_joints_3d,
-            joints_2d=raw.joints_2d.copy(),
-            bbox=raw.bbox.copy(),
-            scale_factor=scale,
-            n_valid_samples=int(valid.sum()),
-        ))
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Phase 2e: top-level API.
-
-def _passthrough_estimate(raw: HamerRaw) -> HandEstimate:
-    """Wrap a HamerRaw as a HandEstimate with no depth correction (refine=False)."""
-    joints_local = raw.joints_3d - raw.cam_t[None, :]
-    pinch = float(np.linalg.norm(joints_local[4] - joints_local[8]))
-    return HandEstimate(
-        is_right=raw.is_right,
-        betas=raw.betas.copy(),
-        global_orient=raw.global_orient.copy(),
-        hand_pose=raw.hand_pose.copy(),
-        cam_t=raw.cam_t.copy(),
-        vertices=(raw.vertices + raw.cam_t[None, :]).astype(np.float32),
-        joints_3d=raw.joints_3d.copy(),
-        joints_2d=raw.joints_2d.copy(),
-        bbox=raw.bbox.copy(),
-        wrist_depth_m=None,
-        pinch_distance_m=pinch,
-    )
-
-
-def estimate_hand(
-    image: np.ndarray,
-    depth: np.ndarray,
-    *,
-    refine: bool = True,
-    return_intermediate: bool = False,
-):
-    """Top-level API: fisheye RGB + precomputed UniDAC depth → metric hand poses.
-
-    Args:
-        image: ``(H, W, 3)`` uint8 BGR frame (``cv2.imread`` convention).
-        depth: ``(H_erp, W_erp)`` float32 UniDAC depth in metres, as produced
-            by ``scripts/precompute_depth.py`` (Preset A: ``(512, 704)``).
-        refine: if ``True`` (default) apply UniDAC wrist-depth back-projection
-            via ``_apply_metric_depth``.  If ``False`` return pseudo-metric
-            HaMeR output (``wrist_depth_m=None``, useful for debugging).
-        return_intermediate: if ``True`` return a ``(estimates, hamer_raws)``
-            tuple; otherwise return only the ``list[HandEstimate]``.
-
-    Returns:
-        ``list[HandEstimate]`` (empty only if no hands detected; hands with
-        unavailable depth are included with ``wrist_depth_m=None``), or
-        ``(list[HandEstimate], list[HamerRaw])`` when
-        ``return_intermediate=True``.
-    """
-    hamer_raws = _run_hamer(image)
-
-    if not hamer_raws:
-        estimates: List[HandEstimate] = []
-    elif refine:
-        estimates = _apply_metric_depth(hamer_raws, depth, image.shape[:2])
-    else:
-        estimates = [_passthrough_estimate(r) for r in hamer_raws]
-
-    if return_intermediate:
-        return estimates, hamer_raws
-    return estimates
-
+# Palm-axis wrist rotation.
 
 def _palm_frame(joints_local: np.ndarray, is_right: bool) -> np.ndarray:
     """Derive a 3x3 wrist rotation from MediaPipe world landmarks.
@@ -736,6 +319,145 @@ def _palm_frame(joints_local: np.ndarray, is_right: bool) -> np.ndarray:
     side = side / side_norm
     forward = np.cross(side, normal)
     return np.stack([side, normal, forward], axis=1).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Wrist-pixel depth back-projection.
+
+def _apply_metric_depth(
+    raws: List["HandRaw"],
+    depth_erp: np.ndarray,
+    image_shape: Tuple[int, int],
+) -> List[HandEstimate]:
+    """Replace pseudo-metric cam_t with UniDAC metric depth at the wrist.
+
+    For each detected hand:
+    1. Sample UniDAC ERP depth at the wrist pixel (landmark 0) and its 8
+       neighbours; take the median of finite positive values.
+    2. Back-project (u, v, depth) through the equidistant fisheye model to get
+       a metric cam_t.  UniDAC outputs euclid (ray) distance, so
+       ``cam_t = depth * unit_ray``.
+    3. Combine with the palm-axis rotation to express joints in the camera
+       frame: ``joints_cam = joints_local @ R^T + cam_t``.
+
+    When depth is unavailable (all 9 samples are NaN/0), cam_t falls back to
+    zero and ``wrist_depth_m`` is ``None``.
+    """
+    if not raws:
+        return []
+
+    H, W = image_shape
+    cam = _preset_a_cam_params(W, H)
+    fx, fy, cx, cy = cam["fx"], cam["fy"], cam["cx"], cam["cy"]
+
+    # 3x3 neighbourhood offsets for robust wrist depth sampling.
+    _offsets = np.array(
+        [[du, dv] for du in (-1, 0, 1) for dv in (-1, 0, 1)],
+        dtype=np.float32,
+    )
+
+    results: List[HandEstimate] = []
+    for raw in raws:
+        wrist_uv = raw.joints_2d[0]  # landmark 0 = wrist
+        if np.any(np.isnan(wrist_uv)):
+            wrist_depth: Optional[float] = None
+        else:
+            pts = wrist_uv[None, :] + _offsets          # (9, 2)
+            samples = _sample_depth_at_pixels(depth_erp, pts, image_shape)
+            finite_pos = samples[np.isfinite(samples) & (samples > 0)]
+            wrist_depth = float(np.median(finite_pos)) if finite_pos.size > 0 else None
+
+        interpolated = False
+        if wrist_depth is not None:
+            u, v = float(wrist_uv[0]), float(wrist_uv[1])
+            xn = (u - cx) / fx
+            yn = (v - cy) / fy
+            theta = math.sqrt(xn * xn + yn * yn)
+            if theta < 1e-9:
+                rx, ry, rz = 0.0, 0.0, 1.0
+            else:
+                sin_t = math.sin(theta)
+                rx = sin_t * xn / theta
+                ry = sin_t * yn / theta
+                rz = math.cos(theta)
+            cam_t = np.array(
+                [rx * wrist_depth, ry * wrist_depth, rz * wrist_depth],
+                dtype=np.float32,
+            )
+        else:
+            cam_t = np.zeros(3, dtype=np.float32)
+
+        R = _palm_frame(raw.joints_local, raw.is_right)
+        joints_cam = (raw.joints_local @ R.T) + cam_t
+        pinch = float(np.linalg.norm(raw.joints_local[4] - raw.joints_local[8]))
+        results.append(HandEstimate(
+            is_right=raw.is_right,
+            joints_2d=raw.joints_2d,
+            joints_3d=joints_cam.astype(np.float32),
+            cam_t=cam_t.astype(np.float32),
+            global_orient=R,
+            bbox=raw.bbox,
+            wrist_depth_m=wrist_depth,
+            depth_interpolated=interpolated,
+            pinch_distance_m=pinch,
+        ))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Top-level API.
+
+def _passthrough_estimate(raw: "HandRaw") -> HandEstimate:
+    """Wrap a HandRaw as a HandEstimate with no depth correction."""
+    R = _palm_frame(raw.joints_local, raw.is_right)
+    joints_cam = raw.joints_local @ R.T  # cam_t = 0
+    pinch = float(np.linalg.norm(raw.joints_local[4] - raw.joints_local[8]))
+    return HandEstimate(
+        is_right=raw.is_right,
+        joints_2d=raw.joints_2d,
+        joints_3d=joints_cam.astype(np.float32),
+        cam_t=np.zeros(3, dtype=np.float32),
+        global_orient=R,
+        bbox=raw.bbox,
+        wrist_depth_m=None,
+        depth_interpolated=False,
+        pinch_distance_m=pinch,
+    )
+
+
+def estimate_hand(
+    image: np.ndarray,
+    depth: np.ndarray | None = None,
+    *,
+    return_intermediate: bool = False,
+) -> list[HandEstimate] | tuple[list[HandEstimate], list["HandRaw"]]:
+    """Top-level API: BGR uint8 image (+ optional UniDAC depth) -> metric hands.
+
+    Args:
+        image: ``(H, W, 3)`` uint8 BGR frame (``cv2.imread`` convention).
+        depth: optional ``(H_erp, W_erp)`` float32 UniDAC depth in metres
+            (Preset A: ``(512, 704)``). When ``None`` the returned
+            :class:`HandEstimate` carries ``cam_t = 0`` and ``wrist_depth_m =
+            None`` (palm-axis rotation is still produced).
+        return_intermediate: if ``True`` return ``(estimates, raws)``;
+            otherwise return only the ``list[HandEstimate]``.
+
+    Returns:
+        ``list[HandEstimate]`` (empty if no hands detected), or
+        ``(list[HandEstimate], list[HandRaw])`` when
+        ``return_intermediate=True``.
+    """
+    raws = _run_mediapipe(image)
+    if not raws:
+        estimates: list[HandEstimate] = []
+    elif depth is not None:
+        estimates = _apply_metric_depth(raws, depth, image.shape[:2])
+    else:
+        estimates = [_passthrough_estimate(r) for r in raws]
+    if return_intermediate:
+        return estimates, raws
+    return estimates
 
 
 # ---------------------------------------------------------------------------

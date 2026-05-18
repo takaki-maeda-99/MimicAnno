@@ -47,12 +47,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "UniDAC"))
 
 from mimicanno.hand_pipeline.pipeline import (
     HandEstimate,
-    HamerRaw,
+    HandRaw,
     _apply_metric_depth,
     _preset_a_cam_params,
-    _run_hamer,
+    _run_mediapipe,
     _sample_depth_at_pixels,
 )
+
+# Legacy alias kept until Task 11 rewrites the runner end-to-end.
+HamerRaw = HandRaw
+_run_hamer = _run_mediapipe
 
 
 # ---------------------------------------------------------------------------
