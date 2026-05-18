@@ -70,6 +70,13 @@ mimicanno annotate \
 
 Produces `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json`. Re-running with the same config and inputs is a no-op.
 
+If you re-run with a different config (different smoother/boundary YAML,
+adapter, etc.), a **new** `episode_NNNNNN__<short-hash>/` directory is
+created alongside the existing one — old runs are never overwritten.
+The viewer then shows a "N runs exist for this episode" chooser banner
+and the URL's `&hash=...` pins which version is currently being viewed.
+Drop the stale directories under `runs/<set>/` to clear it.
+
 Phases are cumulative: `--target-phase 1` (boundaries only, no VLM/SAM3 needed), `--target-phase 2` (+ VLM), `--target-phase 3` (+ SAM3, requires checkpoint), `--target-phase 4` (+ smoothing).
 
 CPU-only or driver-mismatched? Add `--vlm-device cpu --vlm-timeout-sec 600` (expect ~1 hour on CPU vs ~1 minute on a recent GPU for an 8-segment episode).
@@ -201,6 +208,22 @@ bash scripts/run_all_pipeline.sh
 ```
 
 Outputs land under `data/depth/<NAME>/` and `data/hands/<NAME>/`. Schema, field reference, and batch flags: [`docs/hand-pipeline.md`](docs/hand-pipeline.md).
+
+### Third-party data collection (MediaPipe)
+
+This pipeline uses **MediaPipe Solutions** for hand detection. MediaPipe processes video frames entirely on-device — your media is never sent to Google. However, MediaPipe sends **usage and performance metrics** to Google (SDK usage, inference counts, hardware performance, application identifiers, host system version). See Google's [MediaPipe APIs Terms of Service](https://ai.google.dev/edge/mediapipe/legal/tos) for details.
+
+**If you redistribute this software**, you are responsible for informing end users and obtaining consent where required by applicable law (e.g. GDPR, CCPA).
+
+### Offline / air-gapped deployment
+
+For environments without internet access, pre-fetch the MediaPipe model on a machine with connectivity:
+
+```bash
+scripts/fetch_mediapipe_model.sh /path/to/deployment/models/hand_landmarker.task
+```
+
+Then set `MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task` in the production environment. The pipeline checks this env var before attempting any network access; the URL is pinned to the `/1/` revision and the bundled fetch script uses the same pin for byte-identical reproducibility.
 
 ## Server
 

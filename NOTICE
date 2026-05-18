@@ -4,6 +4,9 @@ license texts.
 - MediaPipe (Google, Apache License 2.0) — https://github.com/google-ai-edge/mediapipe
   (upstream NOTICE not provided — Apache 2.0 §4(d) satisfied by full license text in THIRD_PARTY_LICENSES.)
   (Fetch attempted 2026-05-18; https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/NOTICE returned HTTP 404.)
+  MediaPipe Solutions APIs collect usage metrics (SDK use, inference counts,
+  hardware info, app metadata). Processing of input data (video frames)
+  happens on-device only. See https://ai.google.dev/edge/mediapipe/legal/tos.
 
 - UniDAC (research repository, MIT License) — vendored under UniDAC/
 - Segment Anything Model 3 (Meta, see SAM3 license terms) — vendored under sam3/
