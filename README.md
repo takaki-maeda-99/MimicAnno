@@ -100,7 +100,7 @@ redirect) into `UniDAC/checkpoints/`. Or `scp` it from another machine.
 Launch the review UI:
 
 ```bash
-bash scripts/start_ui.sh                                  # :8000 / :5173
+bash scripts/start_ui.sh
 API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
 bash scripts/start_ui.sh --runs-root /path/to/runs
 ```

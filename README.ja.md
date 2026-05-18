@@ -99,7 +99,7 @@ uv pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` でき�
 レビュー UI を起動:
 
 ```bash
-bash scripts/start_ui.sh                                  # :8000 / :5173
+bash scripts/start_ui.sh
 API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
 bash scripts/start_ui.sh --runs-root /path/to/runs
 ```
