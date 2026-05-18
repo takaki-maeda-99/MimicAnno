@@ -253,8 +253,6 @@ wrapped, run that directly:
 python scripts/batch_annotate.py --dataset so101 --gpu 0
 ```
 
-Outputs land at `runs/gem4_<task>_4B/` (same CLI shape as the 26B version).
-
 ### 4. Programmatic API
 
 ```python
