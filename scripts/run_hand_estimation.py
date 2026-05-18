@@ -397,9 +397,96 @@ def _generate_overlay(
 # ---------------------------------------------------------------------------
 # Main
 
+def _validate_depth_dir(depth_dir: Path) -> None:
+    """Validate that --depth points at a Phase A output root.
+
+    The runner constructs ``<depth_root>/frames/frame_NNNNNN.npy`` per-frame;
+    if the path resolves to something else, every depth lookup silently misses
+    and ``cam_t`` degrades to passthrough (the symptom that motivated this
+    validation). Failure modes caught here:
+
+    - The path itself does not exist.
+    - The path ends in ``/frames`` (user passed the inner subdir instead of
+      the Phase A root). Produces a Got/Expected hint pointing at the parent.
+    - The path exists but has no ``frames/`` subdirectory (incomplete Phase A
+      run, or wrong path entirely).
+    - The ``frames/`` subdirectory exists but contains no ``frame_*.npy``
+      files (Phase A did not write anything).
+    """
+    if not depth_dir.exists():
+        raise FileNotFoundError(
+            f"--depth path does not exist: {depth_dir}"
+        )
+
+    frames_subdir = depth_dir / "frames"
+
+    if not frames_subdir.is_dir():
+        # Auto-detect: if the path itself is named "frames", the user almost
+        # certainly meant the parent. Give a Got/Expected hint that mirrors
+        # the symmetric "missing frames/" case below.
+        if depth_dir.name == "frames":
+            raise FileNotFoundError(
+                "--depth path appears to include 'frames' subdirectory at the end:\n"
+                f"  Got:      {depth_dir}\n"
+                f"  Expected: {depth_dir.parent}\n"
+                "\n"
+                "The runner constructs '<depth_root>/frames/frame_NNNNNN.npy' "
+                "internally, so pass the parent directory containing 'frames/'.\n"
+                "(Auto-detected because depth_dir.name == 'frames'.)"
+            )
+        raise FileNotFoundError(
+            "--depth path is missing 'frames/' subdirectory:\n"
+            f"  Got:      {depth_dir}\n"
+            f"  Expected: {frames_subdir}/ to exist (with frame_NNNNNN.npy inside)\n"
+            "\n"
+            "Verify that Phase A (scripts/precompute_depth.py) completed for "
+            "this video. The runner reads per-frame depth from "
+            "<depth_root>/frames/frame_NNNNNN.npy."
+        )
+
+    if not any(frames_subdir.glob("frame_*.npy")):
+        raise FileNotFoundError(
+            "--depth 'frames/' subdirectory exists but contains no frame_*.npy files:\n"
+            f"  Got:      {frames_subdir}/\n"
+            f"  Expected: {frames_subdir}/frame_NNNNNN.npy (one per video frame)\n"
+            "\n"
+            "Verify that Phase A completed successfully and wrote depth files."
+        )
+
+
+def _check_depth_coverage(
+    n_depth_miss: int, n_detections: int, threshold: float
+) -> None:
+    """Raise if the per-detection depth-miss fraction exceeds ``threshold``.
+
+    ``n_detections`` is total per-hand detections across all frames
+    (left + right). ``n_depth_miss`` is the count among them whose
+    ``wrist_depth_m`` came back ``None`` after Pass 2's interpolation.
+
+    Intended to catch the catastrophic "every depth lookup missed" case
+    (e.g. --depth path silently produced no files) early, before a user
+    spends compute on a degraded run. Legitimate partial-depth scenarios
+    can override via ``--depth-miss-threshold``.
+    """
+    if n_detections <= 0:
+        return
+    miss_rate = n_depth_miss / n_detections
+    if miss_rate <= threshold:
+        return
+    raise RuntimeError(
+        f"Depth missing rate {miss_rate:.1%} "
+        f"({n_depth_miss}/{n_detections} detections) exceeds threshold "
+        f"{threshold:.1%}. Likely cause: --depth does not resolve to per-frame "
+        f"depth files; verify the path with the runner's startup validation "
+        f"hint, or use --depth-miss-threshold to widen the tolerance if a "
+        f"partial-depth run is intentional."
+    )
+
+
 def run(args: argparse.Namespace) -> dict:
     video_path = Path(args.video)
     depth_dir = Path(args.depth)
+    _validate_depth_dir(depth_dir)
     out_dir = Path(args.out)
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -597,6 +684,23 @@ def run(args: argparse.Namespace) -> dict:
           f"depth_missing={n_depth_miss} "
           f"interp=({n_left_interp},{n_right_interp})", flush=True)
 
+    # Prominent depth-coverage summary. Always printed on the normal path so
+    # operators see the number even when the run completes "successfully" —
+    # the symptom that motivated this fix was a silent 0% coverage hidden
+    # inside the depth_missing field. Threshold check below hard-fails on
+    # catastrophic cases.
+    total_det = n_left + n_right
+    if total_det > 0:
+        coverage = (total_det - n_depth_miss) / total_det
+        print(
+            f"  DEPTH coverage: {total_det - n_depth_miss}/{total_det} = "
+            f"{coverage:.1%} ({n_depth_miss} missing)",
+            flush=True,
+        )
+        _check_depth_coverage(
+            n_depth_miss, total_det, args.depth_miss_threshold
+        )
+
     # -----------------------------------------------------------------------
     # Signals
     # -----------------------------------------------------------------------
@@ -686,6 +790,11 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="skip hand estimation; regenerate signals.json from existing frames/*.pkl")
     ap.add_argument("--full-signals", action="store_true",
                     help="write schema_version 3 signals.json with cam_t + euler_deg + joints_2d (default: v1 pinch-only)")
+    ap.add_argument("--depth-miss-threshold", type=float, default=0.30,
+                    help="hard-fail if per-detection wrist_depth_m miss fraction "
+                         "exceeds this value (default: 0.30). Catches the "
+                         "catastrophic case where --depth silently produces zero "
+                         "coverage. Raise to 0.95 etc. for legitimate partial-depth runs.")
     ap.set_defaults(save_viz=True)
     return ap
 
