@@ -17,15 +17,25 @@ source "$SCRIPT_DIR/lib/log.sh"
 cd "$REPO_ROOT"
 
 RUNS_ROOT="${RUNS_ROOT:-$REPO_ROOT/runs}"
+HANDS_ROOT="${HANDS_ROOT:-$REPO_ROOT/outputs/hands}"
 API_PORT="${API_PORT:-8000}"
 VITE_PORT="${VITE_PORT:-5173}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --runs-root) RUNS_ROOT="$2"; shift 2 ;;
+        --runs-root)  RUNS_ROOT="$2";  shift 2 ;;
+        --hands-root) HANDS_ROOT="$2"; shift 2 ;;
         *) fail "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# --hands-root is only passed to the backend when the directory exists,
+# so a missing data/hands/ doesn't crash the server. Pass HANDS_ROOT=
+# (empty) to disable the hand routes entirely.
+api_args=(--runs-root "$RUNS_ROOT" --port "$API_PORT")
+if [[ -n "$HANDS_ROOT" && -d "$HANDS_ROOT" ]]; then
+    api_args+=(--hands-root "$HANDS_ROOT")
+fi
 
 # ---------------------------------------------------------------------------
 # Dependency self-check
@@ -69,7 +79,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Launch backend first, wait until it accepts connections, then frontend.
 # Skips the startup-race ECONNREFUSED noise the proxy would otherwise log.
-uv run --extra server mimicanno serve --runs-root "$RUNS_ROOT" --port "$API_PORT" &
+uv run --extra server mimicanno serve "${api_args[@]}" &
 API_PID=$!
 
 wait_for_api() {
