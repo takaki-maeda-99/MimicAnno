@@ -68,27 +68,24 @@ bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
 # 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
 
-> **手動ステップ — DINOv3 backbone**: UniDAC の Phase A は
-> `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
-> (約 1.2 GB) を必須参照しますが、Meta が license 署名 gate を
-> 掛けているので `setup_envs.sh` では自動取得できません。
-> <https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>
-> で申請 → メールで届く署名付き URL を `wget` (ブラウザ不可) で
-> `UniDAC/checkpoints/` に落とす。既に別マシンに有るなら `scp` でも可。
+bootstrap が自動化できない手動ステップが 2 つ — 下の Demo フローは両方使う:
 
-> **手動ステップ — `unsloth_env` conda 環境**: GEM4 batch wrapper
-> (`run_26B_gem4.sh` / `run_4B_gem4.sh`) は Unsloth 経由で Gemma 4 を
-> ロードするため別 conda env が必要。Unsloth は CUDA 依存が壊れやすい
-> ので `setup_envs.sh` では自動化していません。初回のみ:
->
-> ```bash
-> conda create -n unsloth_env python=3.11 -y
-> conda activate unsloth_env
-> pip install unsloth
-> pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
-> ```
->
-> GEM4 wrapper を使わなければ skip 可。
+**unsloth_env (GEM4 batch wrapper 用)**: Unsloth は CUDA 依存が壊れやすく
+script 化していません。初回のみ:
+
+```bash
+conda create -n unsloth_env python=3.11 -y
+conda activate unsloth_env
+pip install unsloth
+pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
+```
+
+**DINOv3 backbone (Hand pipeline Phase A 用)**: UniDAC が
+`UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
+(約 1.2 GB、Meta が license gate) を必須参照。
+<https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>
+で申請 → メールで届く署名付き URL を `wget` (ブラウザ不可) で
+`UniDAC/checkpoints/` に落とす。別マシンから `scp` でも可。
 
 > **`.venv` の管理は `setup_envs.sh` だけが行います。** 他のヘルパー
 > (`start_ui.sh`、`mimicanno` CLI) は既存の `.venv` を読むだけで変更

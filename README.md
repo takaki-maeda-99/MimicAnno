@@ -68,29 +68,25 @@ bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
 # Re-runs are idempotent (each step skips when its sentinel is satisfied).
 ```
 
-> **Manual step — DINOv3 backbone.** UniDAC's Phase A requires
-> `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
-> (~1.2 GB). Meta gates the file behind a license signature so
-> `setup_envs.sh` cannot fetch it automatically. Apply at
-> <https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>;
-> the email returns a signed URL — `wget` it (browsers won't follow the
-> redirect) into `UniDAC/checkpoints/`. Or, if you already have it on
-> another machine, `scp` it across.
+Two manual steps the bootstrap can't do automatically — the Demo flow
+below uses both:
 
-> **Manual step — `unsloth_env` conda env.** The GEM4 batch wrappers
-> (`run_26B_gem4.sh` / `run_4B_gem4.sh`) load Gemma 4 via Unsloth,
-> which lives in a separate conda env. Unsloth's CUDA pinning is
-> fragile so `setup_envs.sh` doesn't try to install it automatically.
-> Bootstrap once:
->
-> ```bash
-> conda create -n unsloth_env python=3.11 -y
-> conda activate unsloth_env
-> pip install unsloth
-> pip install -e .   # MimicAnno itself, so the wrappers can `import mimicanno`
-> ```
->
-> Skip if you don't use the GEM4 wrappers.
+**unsloth_env (for GEM4 batch wrappers)** — Unsloth's CUDA pinning is too
+fragile to script. Create the env once:
+
+```bash
+conda create -n unsloth_env python=3.11 -y
+conda activate unsloth_env
+pip install unsloth
+pip install -e .   # MimicAnno itself, so the wrappers can `import mimicanno`
+```
+
+**DINOv3 backbone (for Hand pipeline Phase A)** — UniDAC needs
+`UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
+(~1.2 GB), gated by Meta. Apply at
+<https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>;
+the email returns a signed URL — `wget` it (browsers won't follow the
+redirect) into `UniDAC/checkpoints/`. Or `scp` it from another machine.
 
 > **`.venv` is owned by `setup_envs.sh`.** Other helpers (`start_ui.sh`,
 > `mimicanno` CLI) read from the existing `.venv` without modifying
