@@ -80,6 +80,13 @@ if [[ "${SETUP_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Ensure standard I/O directories exist so the pipeline can write without
+# needing each script to mkdir -p its own. data/video/ is the GoPro source
+# (populated by --weights from Gayagaya/fisheye_videos_processed or by hand);
+# outputs/{depth,hands}/ are generated artifacts.
+mkdir -p data/video outputs/depth outputs/hands
+
+# ---------------------------------------------------------------------------
 # Step runner
 run_step() {
     local label="$1" script_path="$2"
