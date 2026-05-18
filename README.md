@@ -217,13 +217,22 @@ This pipeline uses **MediaPipe Solutions** for hand detection. MediaPipe process
 
 ### Offline / air-gapped deployment
 
-For environments without internet access, pre-fetch the MediaPipe model on a machine with connectivity:
+For environments without internet access, pre-fetch the MediaPipe model on a machine with connectivity. The `weights` step of `setup_envs.sh` handles it:
 
 ```bash
-scripts/fetch_mediapipe_model.sh /path/to/deployment/models/hand_landmarker.task
+bash scripts/setup_envs.sh --weights
+# or, to control the destination:
+MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task \
+    bash scripts/setup_envs.sh --weights
 ```
 
-Then set `MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task` in the production environment. The pipeline checks this env var before attempting any network access; the URL is pinned to the `/1/` revision and the bundled fetch script uses the same pin for byte-identical reproducibility.
+Then set `MIMICANNO_HAND_LANDMARKER_PATH=...` in the production environment. The runner's `_resolve_model_path()` resolves the asset in this order:
+
+1. `MIMICANNO_HAND_LANDMARKER_PATH` — explicit override; the file must exist or the runner fails fast.
+2. `~/.cache/mimicanno/hand_landmarker.task` — if present and size-verified, used without network access.
+3. Pinned URL download into the cache from step 2.
+
+The URL is pinned to the `/1/` revision for byte-identical reproducibility across machines, and step 1 short-circuits both step 2 and step 3 — air-gapped deployments only ever exercise step 1.
 
 ## Server
 

@@ -95,6 +95,34 @@ def _save_pkl_atomic(path: Path, data: List[HandEstimate]) -> None:
     tmp.rename(path)
 
 
+def _gaussian_smooth_with_nan(vals: np.ndarray, sigma: float) -> np.ndarray:
+    """NaN-tolerant Gaussian smoothing.
+
+    Equivalent to ``gaussian_filter1d`` over a sequence that contains NaN
+    holes, but the NaNs do not contaminate their neighbours: they're
+    treated as zero-weight samples and the smoothed value at each index
+    is the weighted mean of its window. Indices whose total weight is
+    effectively zero (no valid sample within sigma) come back as NaN.
+
+    The divide ``sm_v / sm_w`` is intentionally evaluated for every index
+    even where ``sm_w == 0``; the ``np.where`` afterwards discards those
+    NaN/inf entries. ``np.errstate`` suppresses the "invalid value /
+    divide by zero" RuntimeWarning that would otherwise fire on each
+    affected element.
+    """
+    if sigma <= 0 or len(vals) == 0:
+        return vals.copy()
+    from scipy.ndimage import gaussian_filter1d
+    nans = np.isnan(vals)
+    filled = np.where(nans, 0.0, vals)
+    weights = (~nans).astype(np.float64)
+    sm_v = gaussian_filter1d(filled, sigma=sigma, mode="nearest")
+    sm_w = gaussian_filter1d(weights, sigma=sigma, mode="nearest")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        quotient = sm_v / sm_w
+    return np.where(sm_w > 1e-9, quotient, np.nan)
+
+
 # ---------------------------------------------------------------------------
 # Pass 2: temporal depth interpolation
 
@@ -248,14 +276,7 @@ def _generate_signals(
     l_arr = np.array(left_pinch, dtype=np.float64)
 
     def _smooth_nan(vals: np.ndarray, sig: float) -> np.ndarray:
-        if sig <= 0 or len(vals) == 0:
-            return vals.copy()
-        nans = np.isnan(vals)
-        filled = np.where(nans, 0.0, vals)
-        weights = (~nans).astype(np.float64)
-        sm_v = gaussian_filter1d(filled, sigma=sig, mode="nearest")
-        sm_w = gaussian_filter1d(weights, sigma=sig, mode="nearest")
-        return np.where(sm_w > 1e-9, sm_v / sm_w, np.nan)
+        return _gaussian_smooth_with_nan(vals, sig)
 
     r_smooth = _smooth_nan(r_arr, sigma)
     l_smooth = _smooth_nan(l_arr, sigma)
