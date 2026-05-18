@@ -26,7 +26,7 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 
 ## インストール
 
-Linux + `uv`, `conda`, `python3.11+`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
+Linux + `uv`, `conda`, `python3.11+`, `node` (>=22、Vite 8 が Node 20 サポート打ち切り)、`pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
 
 ```bash
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
@@ -112,6 +112,16 @@ mimicanno export \
 ロードして全 episode で使い回すので、CLI 直叩きと比べてモデルロード
 時間 (~2 分/ep) を ep 回数分節約できる。`unsloth_env` conda 環境と
 `models/gem4_26B_adapter/` が必要。
+
+4B / 26B アダプタは Hugging Face で公開済:
+
+```bash
+hf download Gayagaya/gem4_4B_adapter  --local-dir models/gem4_4B_adapter
+hf download Gayagaya/gem4_26B_adapter --local-dir models/gem4_26B_adapter
+```
+
+リポ: <https://huggingface.co/Gayagaya/gem4_4B_adapter>,
+<https://huggingface.co/Gayagaya/gem4_26B_adapter>。
 
 タスクごとに 1 本 — `run_26B_gem4_<task>.sh`
 (`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`):

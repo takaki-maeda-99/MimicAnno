@@ -80,6 +80,44 @@ else
     fi
 fi
 
+# --- MediaPipe hand landmarker --------------------------------------------
+# Public (non-gated), but pre-fetching avoids the pipeline's first-run
+# network DL when the runtime host has no internet access. The /1/ pin
+# keeps model bytes reproducible across machines; bumping the revision
+# is an explicit change. ToS: https://ai.google.dev/edge/mediapipe/legal/tos
+MP_URL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+MP_DEST="${MIMICANNO_HAND_LANDMARKER_PATH:-$HOME/.cache/mimicanno/hand_landmarker.task}"
+if [[ -s "$MP_DEST" ]]; then
+    skip "MediaPipe hand landmarker cached at $MP_DEST"
+else
+    log "Downloading MediaPipe hand landmarker → $MP_DEST"
+    mkdir -p "$(dirname "$MP_DEST")"
+    if curl -fSL "$MP_URL" -o "$MP_DEST.tmp" && mv "$MP_DEST.tmp" "$MP_DEST"; then
+        ok "MediaPipe hand landmarker ready"
+    else
+        warn "MediaPipe model download failed. Pipeline will retry at first use."
+        rm -f "$MP_DEST.tmp"
+    fi
+fi
+
+# --- GEM4 QLoRA adapters (public) -----------------------------------------
+# Pulled from Gayagaya/gem4_{4B,26B}_adapter on the Hugging Face Hub.
+# Public repos, no auth required; HF_TOKEN is fine to have set but optional.
+for adapter in gem4_4B_adapter gem4_26B_adapter; do
+    dest="$REPO_ROOT/models/$adapter"
+    if [[ -s "$dest/adapter_model.safetensors" ]]; then
+        skip "$adapter cached at models/$adapter"
+    else
+        log "Downloading Gayagaya/$adapter → models/$adapter"
+        if uv run hf download "Gayagaya/$adapter" --local-dir "$dest"; then
+            ok "$adapter ready"
+        else
+            warn "$adapter download failed. The 26B/4B GEM4 wrapper scripts will not work without it."
+            USER_ACTION=1
+        fi
+    fi
+done
+
 if [[ "$USER_ACTION" -eq 1 ]]; then
     exit "$STEP_USER"
 fi

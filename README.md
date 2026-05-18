@@ -26,7 +26,7 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 
 ## Install
 
-Requires Linux + `uv`, `conda`, `python3.11+`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof`.
+Requires Linux + `uv`, `conda`, `python3.11+`, `node` (>=22, Vite 8 dropped Node 20 support), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof`.
 
 ```bash
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
@@ -112,6 +112,16 @@ Thin wrapper around `scripts/batch_annotate.py` that loads the 26B VLM
 **once** and reuses it across episodes — avoids the ~2 min/ep model
 load the CLI would otherwise pay. Requires the `unsloth_env` conda env
 and `models/gem4_26B_adapter/`.
+
+The 4B and 26B adapters are published on Hugging Face. Pull them with:
+
+```bash
+hf download Gayagaya/gem4_4B_adapter  --local-dir models/gem4_4B_adapter
+hf download Gayagaya/gem4_26B_adapter --local-dir models/gem4_26B_adapter
+```
+
+Repos: <https://huggingface.co/Gayagaya/gem4_4B_adapter>,
+<https://huggingface.co/Gayagaya/gem4_26B_adapter>.
 
 One script per task — `run_26B_gem4_<task>.sh` for
 `open_the_jar` / `pick_up_bottle` / `replace_the_cookie`:
