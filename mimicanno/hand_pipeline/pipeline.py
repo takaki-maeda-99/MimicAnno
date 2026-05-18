@@ -736,3 +736,177 @@ def _palm_frame(joints_local: np.ndarray, is_right: bool) -> np.ndarray:
     side = side / side_norm
     forward = np.cross(side, normal)
     return np.stack([side, normal, forward], axis=1).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# MediaPipe Tasks API backend
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HandRaw:
+    """Per-hand raw output from MediaPipe HandLandmarker (pre-depth-fusion)."""
+    is_right: bool
+    joints_2d: np.ndarray      # (21, 2) float32 pixel coords
+    joints_local: np.ndarray   # (21, 3) float32 metres, wrist-centred
+    bbox: np.ndarray           # (4,)    float32 xyxy
+    score: float               # MediaPipe handedness confidence
+
+
+_MP_LANDMARKER = None
+_MP_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
+
+# Acceptable size window for the float16 hand_landmarker.task asset (bytes).
+# The current released file is ~7.6 MB; allow some headroom for future versions.
+_MP_MODEL_SIZE_MIN = 5 * 1024 * 1024
+_MP_MODEL_SIZE_MAX = 20 * 1024 * 1024
+
+
+def _hand_landmarker_model_path() -> Path:
+    """Locate or atomically download the MediaPipe HandLandmarker .task asset.
+
+    Cached at ``~/.cache/mimicanno/hand_landmarker.task``. The download is:
+    - **atomic**: writes to ``<asset>.tmp.<pid>`` first, then ``os.replace`` to
+      the final name. A killed process never leaves a partially written
+      ``.task`` file in place.
+    - **size-verified**: an asset whose size falls outside
+      [``_MP_MODEL_SIZE_MIN``, ``_MP_MODEL_SIZE_MAX``] bytes is treated as
+      corrupted and re-downloaded (with the bad file removed first).
+    - **concurrent-safe**: a sibling ``<asset>.lock`` file is ``fcntl.flock``-ed
+      for the duration of the download/verify, so pytest-xdist workers or
+      multiple processes contend safely.
+
+    Subsequent calls hit the cache. First-run download is ~10 MB.
+    """
+    import fcntl
+    import urllib.request
+
+    cache_dir = Path.home() / ".cache" / "mimicanno"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    asset = cache_dir / "hand_landmarker.task"
+    lock_path = cache_dir / "hand_landmarker.task.lock"
+
+    def _size_ok(p: Path) -> bool:
+        try:
+            n = p.stat().st_size
+        except OSError:
+            return False
+        return _MP_MODEL_SIZE_MIN <= n <= _MP_MODEL_SIZE_MAX
+
+    # Fast path: cached and well-sized.
+    if asset.exists() and _size_ok(asset):
+        return asset
+
+    # Slow path under exclusive lock.
+    with open(lock_path, "w") as lock_fp:
+        fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+        # Re-check after acquiring the lock: another process may have just
+        # finished downloading.
+        if asset.exists() and _size_ok(asset):
+            return asset
+
+        # Clear a corrupt or wrong-sized file before retrying.
+        if asset.exists():
+            asset.unlink()
+
+        tmp_path = cache_dir / f"hand_landmarker.task.tmp.{os.getpid()}"
+        try:
+            urllib.request.urlretrieve(_MP_MODEL_URL, tmp_path)
+            if not _size_ok(tmp_path):
+                size = tmp_path.stat().st_size
+                raise RuntimeError(
+                    f"Downloaded hand_landmarker.task has unexpected size "
+                    f"({size} bytes); expected "
+                    f"{_MP_MODEL_SIZE_MIN}..{_MP_MODEL_SIZE_MAX}. "
+                    f"URL: {_MP_MODEL_URL}"
+                )
+            os.replace(tmp_path, asset)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+    return asset
+
+
+def _get_mediapipe_hands():
+    """Lazy MediaPipe HandLandmarker instance (single-process, IMAGE mode)."""
+    global _MP_LANDMARKER
+    if _MP_LANDMARKER is None:
+        from mediapipe.tasks.python.core.base_options import BaseOptions
+        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+            VisionTaskRunningMode,
+        )
+        from mediapipe.tasks.python.vision.hand_landmarker import (
+            HandLandmarker,
+            HandLandmarkerOptions,
+        )
+        options = HandLandmarkerOptions(
+            base_options=BaseOptions(
+                model_asset_path=str(_hand_landmarker_model_path())
+            ),
+            running_mode=VisionTaskRunningMode.IMAGE,
+            num_hands=2,
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        _MP_LANDMARKER = HandLandmarker.create_from_options(options)
+    return _MP_LANDMARKER
+
+
+def _run_mediapipe(image: np.ndarray) -> list[HandRaw]:
+    """Run MediaPipe HandLandmarker on a single BGR uint8 image.
+
+    Uses the MediaPipe Tasks API (``HandLandmarker``); the legacy
+    ``mediapipe.solutions.hands.Hands`` module was removed in mediapipe
+    0.10.x and is not available.
+
+    Args:
+        image: (H, W, 3) uint8 BGR (cv2.imread convention).
+
+    Returns:
+        One HandRaw per detected hand, empty list if nothing detected.
+
+    Raises:
+        ValueError: image dtype not uint8 or shape not (H, W, 3).
+    """
+    if image.dtype != np.uint8:
+        raise ValueError(f"image must be uint8, got {image.dtype}")
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(f"image must be HxWx3 BGR, got shape {image.shape}")
+
+    import cv2 as _cv2
+    import mediapipe as mp
+    rgb = _cv2.cvtColor(image, _cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    H, W = image.shape[:2]
+
+    result = _get_mediapipe_hands().detect(mp_image)
+    if not result.hand_landmarks:
+        return []
+
+    raws: list[HandRaw] = []
+    n = len(result.hand_landmarks)
+    for i in range(n):
+        lm = result.hand_landmarks[i]
+        wl = result.hand_world_landmarks[i]
+        hd = result.handedness[i][0]  # top category
+
+        joints_2d = np.array(
+            [[p.x * W, p.y * H] for p in lm], dtype=np.float32
+        )
+        joints_local = np.array(
+            [[p.x, p.y, p.z] for p in wl], dtype=np.float32
+        )
+        xs, ys = joints_2d[:, 0], joints_2d[:, 1]
+        bbox = np.array([xs.min(), ys.min(), xs.max(), ys.max()],
+                        dtype=np.float32)
+        raws.append(HandRaw(
+            is_right=(hd.category_name == "Right"),
+            joints_2d=joints_2d,
+            joints_local=joints_local,
+            bbox=bbox,
+            score=float(hd.score),
+        ))
+    return raws
