@@ -136,7 +136,7 @@ flow.
 bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
 
 # 2. Annotate one SO101 episode (Phase 1–4, ~1 min on GPU)
-mimicanno annotate \
+uv run mimicanno annotate \
   --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
   --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
   --task         "Put the tape into the bottle" \
@@ -167,7 +167,7 @@ Run against the SO101 episode that `setup_envs.sh --weights` already
 fetched into `data/SO101/`:
 
 ```bash
-mimicanno annotate \
+uv run mimicanno annotate \
   --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
   --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
   --task         "Put the tape into the bottle" \
@@ -195,7 +195,7 @@ CPU-only or driver-mismatched? Add `--vlm-device cpu --vlm-timeout-sec 600` (exp
 ### 2. Export to a SARM-trainable dataset
 
 ```bash
-mimicanno export \
+uv run mimicanno export \
   --dataset      path/to/dataset \
   --runs-root    ./runs \
   --target-phase 4 \

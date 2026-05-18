@@ -134,7 +134,7 @@ hf download takaki99/GEM4_replace_the_cookie      --local-dir data/GEM4_replace_
 bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
 
 # 2. SO101 episode 1 本をアノテーション (Phase 1–4、GPU で ~1 分)
-mimicanno annotate \
+uv run mimicanno annotate \
   --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
   --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
   --task         "Put the tape into the bottle" \
@@ -164,7 +164,7 @@ bash scripts/start_ui.sh
 `setup_envs.sh --weights` で自動 DL される `data/SO101/` の episode を使った具体例:
 
 ```bash
-mimicanno annotate \
+uv run mimicanno annotate \
   --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
   --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
   --task         "Put the tape into the bottle" \
@@ -192,7 +192,7 @@ CPU のみ・driver 不一致の環境では `--vlm-device cpu --vlm-timeout-sec
 ### 2. SARM 学習可能なデータセットへ export
 
 ```bash
-mimicanno export \
+uv run mimicanno export \
   --dataset      path/to/dataset \
   --runs-root    ./runs \
   --target-phase 4 \

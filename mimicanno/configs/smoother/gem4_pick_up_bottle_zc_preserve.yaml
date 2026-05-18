@@ -1,0 +1,8 @@
+# Phase 4 smoother: gem4 pick_up_bottle finer-segmentation profile.
+# SO101 zc_preserve と同パターン (gripper_zero_crossing を Op1 同名 merge から保護)
+
+min_segment_duration_sec: 0.30
+viterbi_enabled: true
+lambda_forbidden: 0.5
+merge_same_label_preserve_sources:
+  - gripper_zero_crossing

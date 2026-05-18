@@ -1,0 +1,22 @@
+# Phase 4 finer-segmentation: gem4 pick_up_bottle (Franka, 10 Hz)
+# opt-in zero-crossing detector. SO101 hyst=0.12 流用 (gem4 信号特性同水準)
+
+thresholds:
+  gripper_delta: 0.30
+  velocity_valley: 0.05
+weights:
+  gripper: 0.5
+  velocity: 0.25
+  acceleration: 0.15
+  action: 0.10
+score_threshold: 0.30
+merge_window_sec: 0.10
+
+zero_crossing:
+  enabled: true
+  signal: gripper
+  ref: midpoint
+  hysteresis: 0.12
+  span_eps: 0.05
+  merge_window_sec: 0.0
+  weight: 0.5
