@@ -258,8 +258,20 @@ python scripts/precompute_depth.py --video data/video/<NAME>.MP4
 # Phase B — 手姿勢推定
 python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4
 
-# 両 phase をすべての動画について GPU 並列で実行
+# 全 phase (A + B + depth-viz C) を data/video/ 内の魚眼動画全部について実行
 bash scripts/run_all_pipeline.sh
+
+# 動画名指定（.MP4 / .mp4 どっちでも OK）
+bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
+
+# GPU 単一 (デフォルト 0 0) / 2 GPU 並列
+bash scripts/run_all_pipeline.sh --gpus 0 1
+
+# 入出力 root を変える（CLI または VIDEO_DIR / DEPTH_DIR / HANDS_DIR env）
+bash scripts/run_all_pipeline.sh --video-dir data/demo_hand_video
+
+# Phase 個別スキップ
+bash scripts/run_all_pipeline.sh --skip-phase-a --skip-phase-b   # depth-viz だけ
 ```
 
 出力は `outputs/depth/<NAME>/` と `outputs/hands/<NAME>/` 配下。スキーマ・フィールド定義・バッチオプションは [`docs/hand-pipeline.md`](docs/hand-pipeline.md) を参照。

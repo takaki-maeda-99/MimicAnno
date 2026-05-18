@@ -258,8 +258,20 @@ python scripts/precompute_depth.py --video data/video/<NAME>.MP4
 # Phase B — hand pose estimation
 python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4
 
-# Both phases, all videos, parallel across GPUs
+# All phases (A + B + depth-viz C), every fisheye video in data/video/
 bash scripts/run_all_pipeline.sh
+
+# Specific video(s) only — accepts both .MP4 and .mp4
+bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
+
+# Single GPU (default 0 0) vs 2 GPUs in parallel
+bash scripts/run_all_pipeline.sh --gpus 0 1
+
+# Non-default I/O roots (CLI flags or VIDEO_DIR / DEPTH_DIR / HANDS_DIR env)
+bash scripts/run_all_pipeline.sh --video-dir data/demo_hand_video
+
+# Skip phases independently
+bash scripts/run_all_pipeline.sh --skip-phase-a --skip-phase-b   # depth-viz only
 ```
 
 Outputs land under `outputs/depth/<NAME>/` and `outputs/hands/<NAME>/`. Schema, field reference, and batch flags: [`docs/hand-pipeline.md`](docs/hand-pipeline.md).

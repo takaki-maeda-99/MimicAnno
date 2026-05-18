@@ -11,6 +11,12 @@
 #   # Specific videos only
 #   bash scripts/run_all_pipeline.sh GX010175 GX010176
 #
+#   # Use a non-default dataset root (e.g. data/demo_hand_video/*.MP4)
+#   bash scripts/run_all_pipeline.sh --video-dir data/demo_hand_video
+#
+#   # Override all I/O roots (also accept VIDEO_DIR / DEPTH_DIR / HANDS_DIR env)
+#   bash scripts/run_all_pipeline.sh --video-dir VID --depth-dir D --hands-dir H
+#
 #   # GPU indices (default: 0 0 → single GPU). Pass two distinct ids to
 #   # halve wall time by running batches in parallel.
 #   bash scripts/run_all_pipeline.sh --gpus 0 1
@@ -43,12 +49,18 @@ SKIP_PHASE_B=0
 SKIP_PHASE_C=0
 OVERWRITE=0
 VIDEOS=()
+VIDEO_DIR="${VIDEO_DIR:-data/video}"
+DEPTH_DIR="${DEPTH_DIR:-outputs/depth}"
+HANDS_DIR="${HANDS_DIR:-outputs/hands}"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --gpus)      GPU0=$2; GPU1=$3; shift 3 ;;
+        --video-dir) VIDEO_DIR=$2; shift 2 ;;
+        --depth-dir) DEPTH_DIR=$2; shift 2 ;;
+        --hands-dir) HANDS_DIR=$2; shift 2 ;;
         --skip-phase-a) SKIP_PHASE_A=1; shift ;;
         --skip-phase-b) SKIP_PHASE_B=1; shift ;;
         --skip-phase-c) SKIP_PHASE_C=1; shift ;;
@@ -65,30 +77,48 @@ done
 # Paths
 UNIDAC_PY=/home/gayagaya/anaconda3/envs/unidac/bin/python
 PP="$PWD:$PWD/UniDAC"
-VIDEO_DIR=data/video
-DEPTH_DIR=outputs/depth
-HANDS_DIR=outputs/hands
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Resolve a video stem ("GX010175") to its on-disk path; accepts both
+# .MP4 and .mp4 extensions. Prints the full path on stdout, or empty if
+# neither exists.
+resolve_video() {
+    local stem="$1"
+    if   [[ -f "$VIDEO_DIR/$stem.MP4" ]]; then echo "$VIDEO_DIR/$stem.MP4"
+    elif [[ -f "$VIDEO_DIR/$stem.mp4" ]]; then echo "$VIDEO_DIR/$stem.mp4"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Auto-detect fisheye videos (2704x1520) if none specified
 if [[ ${#VIDEOS[@]} -eq 0 ]]; then
     log "Auto-detecting fisheye videos in $VIDEO_DIR/ ..."
-    for f in "$VIDEO_DIR"/*.MP4; do
+    shopt -s nullglob
+    for f in "$VIDEO_DIR"/*.MP4 "$VIDEO_DIR"/*.mp4; do
         res=$(ffprobe "$f" 2>&1 | grep -oP '\d{4}x\d{4}' | head -1)
         if [[ "$res" == "2704x1520" ]]; then
-            VIDEOS+=("$(basename "$f" .MP4)")
+            stem="$(basename "$f")"
+            VIDEOS+=("${stem%.*}")
         else
             log "  skip $(basename "$f") ($res — not fisheye)"
         fi
     done
+    shopt -u nullglob
 fi
 
 if [[ ${#VIDEOS[@]} -eq 0 ]]; then
     log "No videos to process. Exiting."
     exit 0
 fi
+
+# Validate every named stem resolves to a .MP4 or .mp4 file under VIDEO_DIR.
+for v in "${VIDEOS[@]}"; do
+    if [[ -z "$(resolve_video "$v")" ]]; then
+        echo "error: no $VIDEO_DIR/$v.MP4 or $VIDEO_DIR/$v.mp4 found" >&2
+        exit 1
+    fi
+done
 
 log "Videos to process: ${VIDEOS[*]}"
 log "GPUs: cuda:$GPU0 (even batches) cuda:$GPU1 (odd batches)"
@@ -120,7 +150,7 @@ phase_c() {
     CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$PP \
         $UNIDAC_PY scripts/visualize_depth.py \
             --depth "$DEPTH_DIR/$name" \
-            --video "$VIDEO_DIR/$name.MP4" \
+            --video "$(resolve_video "$name")" \
             --out   "$out_mp4" \
             --no-side-by-side \
         >> "$logf" 2>&1
@@ -148,7 +178,7 @@ phase_a() {
 
     CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$PP \
         $UNIDAC_PY scripts/precompute_depth.py \
-            --input "$VIDEO_DIR/$name.MP4" \
+            --input "$(resolve_video "$name")" \
             --out   "$out" \
             --device cuda:0 \
             $overwrite_flag \
@@ -176,7 +206,7 @@ phase_b() {
 
     CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$PP \
         uv run python scripts/run_hand_estimation.py \
-            --video "$VIDEO_DIR/$name.MP4" \
+            --video "$(resolve_video "$name")" \
             --depth "$DEPTH_DIR/$name" \
             --out   "$out" \
             $overwrite_flag \
