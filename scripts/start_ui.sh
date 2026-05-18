@@ -67,9 +67,28 @@ echo "  UI        : http://localhost:${VITE_PORT}/?api=1"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Launch
-uv run mimicanno serve --runs-root "$RUNS_ROOT" --port "$API_PORT" &
+# Launch backend first, wait until it accepts connections, then frontend.
+# Skips the startup-race ECONNREFUSED noise the proxy would otherwise log.
+uv run --extra server mimicanno serve --runs-root "$RUNS_ROOT" --port "$API_PORT" &
 API_PID=$!
+
+wait_for_api() {
+    local url="http://127.0.0.1:${API_PORT}/api/run-sets"
+    local deadline=$(( SECONDS + 60 ))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$API_PID" 2>/dev/null; then
+            fail "API server exited before becoming ready."
+            exit 1
+        fi
+        if curl -sf -o /dev/null --max-time 1 "$url"; then
+            return 0
+        fi
+        sleep 0.3
+    done
+    fail "API server did not become ready within 60s ($url)."
+    exit 1
+}
+wait_for_api
 
 ( cd "$REPO_ROOT/frontend" && MIMICANNO_API_PORT="$API_PORT" pnpm run dev --port "$VITE_PORT" ) &
 VITE_PID=$!
