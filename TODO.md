@@ -10,7 +10,7 @@
 
 ### One-shot env setup + start_ui hardening ✅ **完了 (2026-05-17 PM)** — feat/setup-serve-scripts → main (FF, 14 commits)
 
-- `scripts/setup_envs.sh` を 6-step idempotent orchestrator に書き直し: `submodules → core → unidac → hamer → frontend → weights`。flags: `--all` (default), `--core/--unidac/--hamer/--frontend/--weights`, `--skip-weights`。
+- `scripts/setup_envs.sh` を idempotent orchestrator に書き直し: `submodules → core → unidac → frontend → weights`。flags: `--all` (default), `--core/--unidac/--frontend/--weights`, `--skip-weights`。
 - 新規 `scripts/lib/{log,preflight}.sh` + `scripts/setup/*.sh` で責務分離。`STEP_OK/FAIL/USER` exit code, `dry_run_short_circuit` helper, `SETUP_DRY_RUN=1` で CI smoke。
 - gated HF DL を `hf download` (← `huggingface-cli` は廃止) で SAM3 snapshot + Gemma 4 (`google/gemma-4-E2B-it`) を取得。HF auth は `HF_TOKEN` env or `hf auth login`。
 - `scripts/start_ui.sh`: deps check (`.venv/bin/mimicanno` + `frontend/node_modules/.modules.yaml`) + `lsof` port probe + `kill -- -$$` で vite 孫プロセス孤児を防止 + `pnpm run dev --port` (pnpm v11 で `--` separator は禁。詳細は memory `feedback-pnpm-v11-arg-separator`)。

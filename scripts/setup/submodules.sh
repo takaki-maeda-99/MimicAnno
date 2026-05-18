@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize git submodules (sam3, UniDAC, hamer) with SSH→HTTPS fallback.
+# Initialize git submodules (sam3, UniDAC) with SSH→HTTPS fallback.
 #
 # Exit codes: 0 success/skip, 1 fail, 2 user action required.
 
@@ -13,7 +13,7 @@ dry_run_short_circuit
 cd "$REPO_ROOT"
 
 # Sentinel: every required submodule has no leading '-' in status.
-REQUIRED_PATHS=(sam3 UniDAC hamer)
+REQUIRED_PATHS=(sam3 UniDAC)
 all_initialized() {
     local p status
     for p in "${REQUIRED_PATHS[@]}"; do
@@ -27,7 +27,7 @@ all_initialized() {
 }
 
 if all_initialized; then
-    skip "submodules already initialized (sam3, UniDAC, hamer)"
+    skip "submodules already initialized (sam3, UniDAC)"
     exit "$STEP_OK"
 fi
 

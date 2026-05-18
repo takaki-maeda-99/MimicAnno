@@ -1,11 +1,12 @@
 /**
- * MANO 21-joint hand skeleton drawing helper for canvas overlays.
+ * 21-joint hand skeleton drawing helper for canvas overlays.
  *
- * Bone topology matches scripts/run_hand_estimation.py:_MANO_SKELETON
- * exactly — wrist-rooted, 5 fingers, 4 bones each = 20 bones.
+ * Bone topology: wrist-rooted, 5 fingers, 4 bones each = 20 bones total.
+ * Joint indices follow the MediaPipe Hand Landmarker convention (0 = wrist,
+ * 1-4 thumb, 5-8 index, 9-12 middle, 13-16 ring, 17-20 pinky).
  */
 
-export const MANO_BONES: readonly (readonly [number, number])[] = [
+export const HAND_BONES: readonly (readonly [number, number])[] = [
   [0, 1], [1, 2], [2, 3], [3, 4],          // thumb
   [0, 5], [5, 6], [6, 7], [7, 8],          // index
   [0, 9], [9, 10], [10, 11], [11, 12],     // middle
@@ -29,7 +30,7 @@ export function drawHandSkeleton(args: {
   ctx.fillStyle = color;
   ctx.lineWidth = 2;
 
-  for (const [a, b] of MANO_BONES) {
+  for (const [a, b] of HAND_BONES) {
     const [ax, ay] = joints2d[a];
     const [bx, by] = joints2d[b];
     ctx.beginPath();

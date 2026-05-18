@@ -2,7 +2,7 @@
 
 Phase A of the MimicAnno hand pipeline. Runs inside ``conda activate unidac``.
 The resulting ``.npy`` files are consumed offline by
-``mimicanno.hand_pipeline.pipeline.estimate_hand`` (Phase B, HaMeR env).
+``mimicanno.hand_pipeline.pipeline.estimate_hand`` (Phase B, uv env).
 
 Output layout::
 

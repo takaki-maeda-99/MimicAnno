@@ -41,3 +41,15 @@ def two_hands_central_image():
     img = cv2.imread(str(TWO_HANDS_CENTRAL_IMAGE))
     assert img is not None, f"cv2 could not read {TWO_HANDS_CENTRAL_IMAGE}"
     return img
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _mediapipe_hand_model_prewarm():
+    """Download MediaPipe HandLandmarker model once per session.
+
+    Runs before any test in tests/hand_pipeline/. Hits the network only if
+    the user-level cache is empty.
+    """
+    from mimicanno.hand_pipeline.pipeline import _hand_landmarker_model_path
+
+    _hand_landmarker_model_path()

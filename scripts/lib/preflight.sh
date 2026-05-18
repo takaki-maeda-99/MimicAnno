@@ -6,7 +6,7 @@
 #   source scripts/lib/preflight.sh
 #   require_tool git                       # fail-fast
 #   check_optional ffmpeg "unidac runtime" # warn-only
-#   require_tool_for hamer python3.10      # fail only when --hamer/--all is selected
+#   require_tool_for unidac conda          # fail only when --unidac/--all is selected
 
 # require_tool <tool> [hint]
 # Exits 1 immediately if missing. Use for tools needed unconditionally.
@@ -63,7 +63,7 @@ print_driver_hint() {
     if command -v nvidia-smi &>/dev/null; then
         local drv
         drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo unknown)"
-        log "NVIDIA driver: $drv (HaMeR uses cu124 torch wheel; UniDAC uses cu118)"
+        log "NVIDIA driver: $drv (UniDAC uses cu118 torch wheel)"
     else
         warn "nvidia-smi not found — GPU steps may fail at runtime."
     fi

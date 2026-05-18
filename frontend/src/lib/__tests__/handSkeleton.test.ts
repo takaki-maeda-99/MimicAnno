@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { MANO_BONES, drawHandSkeleton } from "../handSkeleton";
+import { HAND_BONES, drawHandSkeleton } from "../handSkeleton";
 
 function mkPoints(): [number, number][] {
   return Array.from({ length: 21 }, (_, i) => [i * 10, i * 5] as [number, number]);
@@ -22,12 +22,12 @@ function fakeCtx() {
   } as unknown as CanvasRenderingContext2D;
 }
 
-describe("MANO_BONES", () => {
+describe("HAND_BONES", () => {
   it("has exactly 20 bones", () => {
-    expect(MANO_BONES.length).toBe(20);
+    expect(HAND_BONES.length).toBe(20);
   });
   it("each bone references joints in 0..20", () => {
-    for (const [a, b] of MANO_BONES) {
+    for (const [a, b] of HAND_BONES) {
       expect(a).toBeGreaterThanOrEqual(0);
       expect(a).toBeLessThan(21);
       expect(b).toBeGreaterThanOrEqual(0);
