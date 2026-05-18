@@ -77,7 +77,8 @@ script 化していません。初回のみ:
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
 uv pip install unsloth
-uv pip install -e '.[sam3]'   # [sam3] extra: batch_annotate.py が vendored sam3 を import できるように
+uv pip install -e '.[sam3]'           # [sam3] extra: batch_annotate.py が vendored sam3 を import できるように
+uv pip install 'setuptools<81'        # sam3 は pkg_resources を使うので setuptools 81 以降では動かない
 ```
 
 `uv pip` で unsloth の CUDA 制約に弾かれた場合は plain pip にフォールバック
