@@ -79,6 +79,23 @@ API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
 bash scripts/start_ui.sh --runs-root /path/to/runs
 ```
 
+## データ取得
+
+clone 直後はデータが手元にありません。`setup_envs.sh` の `weights`
+step がモデル重みと一緒に public dataset 2 つを DL します:
+
+| HF dataset | 配置先 | 内容 |
+|---|---|---|
+| `Gayagaya/SO101_dataset` | `data/SO101/` | LeRobot v3 SO101 (33 ep / 4960 frames) |
+| `Gayagaya/fisheye_videos_processed` | `data/video/` | 顔ぼかし済み GoPro Max Lens Mod fisheye 動画（現状 placeholder、redaction 完了後に populate） |
+
+手動で DL:
+
+```bash
+hf download Gayagaya/SO101_dataset --local-dir data/SO101 --repo-type dataset
+hf download Gayagaya/fisheye_videos_processed --local-dir data/video --repo-type dataset
+```
+
 ## クイックスタート
 
 ### 1. エピソード 1 本にアノテーション

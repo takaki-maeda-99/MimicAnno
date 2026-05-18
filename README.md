@@ -79,6 +79,23 @@ API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
 bash scripts/start_ui.sh --runs-root /path/to/runs
 ```
 
+## Getting data
+
+A fresh clone has no data. The `weights` step of `setup_envs.sh`
+fetches two public datasets in addition to model weights:
+
+| HF dataset | Local path | Contents |
+|---|---|---|
+| `Gayagaya/SO101_dataset` | `data/SO101/` | LeRobot v3 SO101 episodes (33 ep, 4960 frames) |
+| `Gayagaya/fisheye_videos_processed` | `data/video/` | Face-blurred GoPro Max Lens Mod fisheye videos (placeholder; populated when the redaction pass completes) |
+
+Or pull them manually:
+
+```bash
+hf download Gayagaya/SO101_dataset --local-dir data/SO101 --repo-type dataset
+hf download Gayagaya/fisheye_videos_processed --local-dir data/video --repo-type dataset
+```
+
 ## Quickstart
 
 ### 1. Annotate one episode

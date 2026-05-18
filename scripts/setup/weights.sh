@@ -118,6 +118,37 @@ for adapter in gem4_4B_adapter gem4_26B_adapter; do
     fi
 done
 
+# --- Public datasets ------------------------------------------------------
+# SO101 raw LeRobot v3 dataset + face-blurred fisheye videos. Both are
+# public Hugging Face datasets; no auth required.
+declare -A DATASETS=(
+    ["SO101_dataset"]="$REPO_ROOT/data/SO101"
+    ["fisheye_videos_processed"]="$REPO_ROOT/data/video"
+)
+for ds in "${!DATASETS[@]}"; do
+    dest="${DATASETS[$ds]}"
+    # Idempotency: if the dest looks populated already, skip.
+    if [[ -d "$dest" ]] && [[ -n "$(ls "$dest" 2>/dev/null | head -1)" ]]; then
+        skip "$ds cached at ${dest#$REPO_ROOT/}"
+        continue
+    fi
+    log "Downloading Gayagaya/$ds → ${dest#$REPO_ROOT/}"
+    mkdir -p "$dest"
+    if uv run hf download "Gayagaya/$ds" --local-dir "$dest" --repo-type dataset; then
+        # Empty repo (e.g. placeholder before processed videos are uploaded)
+        # ends up with only .gitattributes — treat as "not yet ready".
+        n_files=$(find "$dest" -type f -not -name ".gitattributes" -not -path "*/.cache/*" | wc -l)
+        if [[ "$n_files" -eq 0 ]]; then
+            warn "$ds is empty on the Hub (placeholder?). Skipping."
+            rmdir "$dest" 2>/dev/null || true
+        else
+            ok "$ds ready ($n_files files)"
+        fi
+    else
+        warn "$ds download failed (network? gated?). Pipeline may still work without it."
+    fi
+done
+
 if [[ "$USER_ACTION" -eq 1 ]]; then
     exit "$STEP_USER"
 fi
