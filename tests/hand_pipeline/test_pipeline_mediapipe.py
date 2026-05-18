@@ -46,3 +46,25 @@ def test_run_mediapipe_rejects_wrong_shape():
     img = np.zeros((360, 640), dtype=np.uint8)
     with pytest.raises(ValueError):
         _run_mediapipe(img)
+
+
+@pytest.mark.skip(reason="threshold pending — see PR 2 description and future rectify spec")
+def test_mediapipe_detection_rate_gx010085():
+    """Lower-bound check on detection rate across fixture frames.
+
+    Threshold is currently a placeholder; PR 2 records the empirical
+    measurement in its description. A follow-up rectify spec will improve
+    detection rate before any CI gate is promoted.
+    """
+    threshold = 0.0  # placeholder; rectify follow-up will set this
+
+    det = sorted(FIXTURES.glob("det_frame_*.jpg"))
+    assert det, "fixture set missing"
+    n_total = len(det)
+    n_hit = 0
+    for p in det:
+        img = cv2.imread(str(p))
+        if _run_mediapipe(img):
+            n_hit += 1
+    rate = n_hit / n_total
+    assert rate >= threshold, f"detection rate {rate:.2%} < {threshold:.2%}"
