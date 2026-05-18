@@ -709,3 +709,30 @@ def estimate_hand(
     if return_intermediate:
         return estimates, hamer_raws
     return estimates
+
+
+def _palm_frame(joints_local: np.ndarray, is_right: bool) -> np.ndarray:
+    """Derive a 3x3 wrist rotation from MediaPipe world landmarks.
+
+    Column convention: R = [side | normal | forward], a proper rotation.
+    """
+    wrist  = joints_local[0]
+    index  = joints_local[5]
+    middle = joints_local[9]
+    pinky  = joints_local[17]
+    forward_raw = middle - wrist
+    cross_raw   = np.cross(index - wrist, pinky - wrist)
+    if (np.linalg.norm(cross_raw) < 1e-6
+            or np.linalg.norm(forward_raw) < 1e-6):
+        return np.eye(3, dtype=np.float32)
+    normal = cross_raw / np.linalg.norm(cross_raw)
+    if not is_right:
+        normal = -normal
+    forward = forward_raw / np.linalg.norm(forward_raw)
+    side = np.cross(normal, forward)
+    side_norm = np.linalg.norm(side)
+    if side_norm < 1e-6:
+        return np.eye(3, dtype=np.float32)
+    side = side / side_norm
+    forward = np.cross(side, normal)
+    return np.stack([side, normal, forward], axis=1).astype(np.float32)
