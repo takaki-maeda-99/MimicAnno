@@ -13,8 +13,19 @@ fi
 
 rm -f "$HERE"/det_frame_*.jpg "$HERE"/depth_frame_*.jpg "$HERE"/depth_frame_*.npz
 
-# Detection-rate set: 25 frames at 640x360 q=80
-for i in 0 6 12 18 24 30 36 42 48 54 60 66 72 78 84 90 96 102 108 114 120 126 132 138 144; do
+# Detection-rate set: 25 frames at 640x360 q=80, frame index [90, 102, ..., 378]
+#
+# Range rationale (GX010085 specifics; see PR 3 description for full empirical
+# backing):
+# - Stable working phase covers frames 90-989. We sample the first ~10s of it.
+# - Excludes intro frames 0-89 (no-hand / hand-transition: hand enters the
+#   scene at frame ~66, MediaPipe stabilises by frame ~90).
+# - Excludes 1080-1199 (heavy occlusion + grasping pose; MediaPipe limitation,
+#   not a model-regression signal — documented in
+#   test_mediapipe_detection_rate_gx010085 docstring).
+# - Sampling every 12 frames keeps temporal locality tight while covering
+#   ~10 seconds of stable detection.
+for i in 90 102 114 126 138 150 162 174 186 198 210 222 234 246 258 270 282 294 306 318 330 342 354 366 378; do
   ffmpeg -hide_banner -loglevel error -y \
     -i "$VIDEO" -vf "select='eq(n,$i)',scale=640:360" -vframes 1 -q:v 5 \
     "$HERE/det_frame_$(printf '%03d' "$i").jpg"

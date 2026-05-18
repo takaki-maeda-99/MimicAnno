@@ -48,15 +48,37 @@ def test_run_mediapipe_rejects_wrong_shape():
         _run_mediapipe(img)
 
 
-@pytest.mark.skip(reason="threshold pending — see PR 2 description and future rectify spec")
 def test_mediapipe_detection_rate_gx010085():
-    """Lower-bound check on detection rate across fixture frames.
+    """Model-regression gate: MediaPipe must detect at least one hand in 95%
+    of the GX010085 detection-rate fixture frames.
 
-    Threshold is currently a placeholder; PR 2 records the empirical
-    measurement in its description. A follow-up rectify spec will improve
-    detection rate before any CI gate is promoted.
+    Fixture scope. The 25 fixture frames cover the stable working phase of
+    GX010085 (frame indices 90..378, every 12 frames) where the hand is
+    clearly visible. The empirical baseline on this fixture is 25/25 = 100%;
+    the threshold is set at 95% (measured minus 5 percentage points) per the
+    project's model-regression policy.
+
+    What this test does NOT measure.
+
+    - Content quality on real, full-length videos. The full-video detection
+      rate on GX010085 is ~73% because (a) the intro frames 0..65 have no
+      hand in view and (b) the work segment 1080..1199 contains heavy
+      occlusion (hand wrapped around a held object) that MediaPipe handles
+      poorly regardless of camera projection.
+    - Fisheye-periphery robustness. Failures attributable to peripheral
+      bbox positions are a small minority (~18% of failure frames in the
+      full-run analysis); rectifying the fisheye projection would help only
+      that minority and is deferred.
+
+    Both above are content/architecture concerns, not model-regression
+    concerns; mixing them into this gate would mask real MediaPipe
+    regressions in the clear-visibility regime. Future work that needs an
+    end-to-end content-quality metric should add a separate test.
+
+    Detailed empirical backing (failure-mode breakdown, contact-sheet
+    observations, decision logic) is recorded in the PR 3 description.
     """
-    threshold = 0.0  # placeholder; rectify follow-up will set this
+    threshold = 0.95  # measured 100% on GX010085 working phase − 5pp margin
 
     det = sorted(FIXTURES.glob("det_frame_*.jpg"))
     assert det, "fixture set missing"
