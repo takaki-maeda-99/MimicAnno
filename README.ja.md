@@ -156,20 +156,8 @@ bash scripts/start_ui.sh
 
 ### 1. エピソード 1 本にアノテーション
 
-`setup_envs.sh --weights` で自動 DL される `data/SO101/` の episode を使った具体例:
-
-```bash
-uv run mimicanno annotate \
-  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
-  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
-  --task         "Put the tape into the bottle" \
-  --robot        generic \
-  --robot-config tests/exports/fixtures/so101_robot_config.yaml \
-  --target-phase 4 \
-  --vlm-model    "google/gemma-4-E2B-it" \
-  --sam3-checkpoint sam3/checkpoints/sam3.pt \
-  --runs-root    ./runs
-```
+[デモ §2](#デモ) の SO101 例を参照 — 同じコマンドを
+`data/SO101/episode_000000` で実行する形。
 
 `runs/<canonical_name>/{manifest,annotation,boundaries,signals,tracks}.json` を生成します。同じ config + 同じ入力での再実行は no-op (冪等)。
 
