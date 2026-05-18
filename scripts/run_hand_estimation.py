@@ -602,8 +602,13 @@ def run(args: argparse.Namespace) -> dict:
                     print(f"  ! frame {frame_idx}: failed to load depth: {e!r}",
                           file=sys.stderr)
 
+            # MediaPipe VIDEO mode wants monotonically-increasing timestamps;
+            # frame_idx is already monotonic in this loop, so converting to ms
+            # via the source fps is safe.
+            timestamp_ms = int(round(frame_idx * 1000.0 / video_meta["fps"]))
+
             try:
-                raws = _run_mediapipe(bgr)
+                raws = _run_mediapipe(bgr, timestamp_ms=timestamp_ms)
                 if raws and depth_erp is not None:
                     hands = _apply_metric_depth(raws, depth_erp, image_shape)
                 elif raws:

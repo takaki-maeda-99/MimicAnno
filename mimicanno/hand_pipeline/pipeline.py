@@ -426,11 +426,15 @@ def _passthrough_estimate(raw: "HandRaw") -> HandEstimate:
     )
 
 
+_DEFAULT_TS_COUNTER = [0]
+
+
 def estimate_hand(
     image: np.ndarray,
     depth: np.ndarray | None = None,
     *,
     return_intermediate: bool = False,
+    timestamp_ms: int | None = None,
 ) -> list[HandEstimate] | tuple[list[HandEstimate], list["HandRaw"]]:
     """Top-level API: BGR uint8 image (+ optional UniDAC depth) -> metric hands.
 
@@ -442,13 +446,23 @@ def estimate_hand(
             None`` (palm-axis rotation is still produced).
         return_intermediate: if ``True`` return ``(estimates, raws)``;
             otherwise return only the ``list[HandEstimate]``.
+        timestamp_ms: monotonically-increasing video timestamp passed to
+            MediaPipe VIDEO mode. ``None`` (the default) uses an internal
+            auto-incrementing counter so single-frame ad-hoc calls work
+            without the caller managing timestamps. Production runners
+            (Pass 1 in ``scripts/run_hand_estimation.py``) should pass an
+            explicit ``int(frame_idx * 1000 / fps)`` for true temporal
+            consistency.
 
     Returns:
         ``list[HandEstimate]`` (empty if no hands detected), or
         ``(list[HandEstimate], list[HandRaw])`` when
         ``return_intermediate=True``.
     """
-    raws = _run_mediapipe(image)
+    if timestamp_ms is None:
+        _DEFAULT_TS_COUNTER[0] += 100
+        timestamp_ms = _DEFAULT_TS_COUNTER[0]
+    raws = _run_mediapipe(image, timestamp_ms=int(timestamp_ms))
     if not raws:
         estimates: list[HandEstimate] = []
     elif depth is not None:
@@ -610,8 +624,35 @@ def _download_and_cache_model() -> Path:
     return asset
 
 
+_DELEGATE_ENV = "MIMICANNO_MEDIAPIPE_DELEGATE"
+
+
+def _resolve_delegate():
+    """Return the MediaPipe BaseOptions.Delegate honouring the env override.
+
+    Default is GPU; set ``MIMICANNO_MEDIAPIPE_DELEGATE=CPU`` to fall back
+    (intended for OpenGL-less hosts and the WSL/macOS hand-pipeline-on-CPU
+    development path). The value comparison is case-insensitive.
+    """
+    from mediapipe.tasks.python.core.base_options import BaseOptions
+
+    raw = os.environ.get(_DELEGATE_ENV, "GPU").upper()
+    if raw == "CPU":
+        return BaseOptions.Delegate.CPU
+    return BaseOptions.Delegate.GPU
+
+
 def _get_mediapipe_hands():
-    """Lazy MediaPipe HandLandmarker instance (single-process, IMAGE mode)."""
+    """Lazy MediaPipe HandLandmarker (single-process, VIDEO mode).
+
+    VIDEO mode requires monotonically-increasing ``timestamp_ms`` values
+    on every ``detect_for_video`` call against this instance. The pipeline
+    iterates the input video sequentially (Pass 1 in
+    ``scripts/run_hand_estimation.py``), so monotonicity is naturally
+    satisfied; tests that exercise multiple frames must use ascending
+    timestamps too. See the conftest fixture
+    ``_reset_mediapipe_landmarker_per_test`` for the per-test reset trick.
+    """
     global _MP_LANDMARKER
     if _MP_LANDMARKER is None:
         from mediapipe.tasks.python.core.base_options import BaseOptions
@@ -624,9 +665,10 @@ def _get_mediapipe_hands():
         )
         options = HandLandmarkerOptions(
             base_options=BaseOptions(
-                model_asset_path=str(_resolve_model_path())
+                model_asset_path=str(_resolve_model_path()),
+                delegate=_resolve_delegate(),
             ),
-            running_mode=VisionTaskRunningMode.IMAGE,
+            running_mode=VisionTaskRunningMode.VIDEO,
             num_hands=2,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
@@ -636,15 +678,25 @@ def _get_mediapipe_hands():
     return _MP_LANDMARKER
 
 
-def _run_mediapipe(image: np.ndarray) -> list[HandRaw]:
-    """Run MediaPipe HandLandmarker on a single BGR uint8 image.
+def _run_mediapipe(image: np.ndarray, timestamp_ms: int) -> list[HandRaw]:
+    """Run MediaPipe HandLandmarker on a single BGR uint8 image (VIDEO mode).
 
-    Uses the MediaPipe Tasks API (``HandLandmarker``); the legacy
+    Uses the MediaPipe Tasks API (``HandLandmarker``) in VIDEO running
+    mode. VIDEO mode adds temporal context across frames — the model's
+    per-frame palm detector skips re-running when an existing track is
+    confident enough — and stabilises the handedness classifier across
+    short flips (motion blur, momentary occlusion). The legacy
     ``mediapipe.solutions.hands.Hands`` module was removed in mediapipe
     0.10.x and is not available.
 
     Args:
         image: (H, W, 3) uint8 BGR (cv2.imread convention).
+        timestamp_ms: monotonically-increasing presentation timestamp in
+            milliseconds. MediaPipe rejects out-of-order timestamps for
+            the same detector instance. Typical production value:
+            ``int(round(frame_idx * 1000.0 / fps))``. Tests get a fresh
+            detector per case (see ``_reset_mediapipe_landmarker_per_test``)
+            so any non-negative monotonic sequence works in isolation.
 
     Returns:
         One HandRaw per detected hand, empty list if nothing detected.
@@ -663,7 +715,7 @@ def _run_mediapipe(image: np.ndarray) -> list[HandRaw]:
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     H, W = image.shape[:2]
 
-    result = _get_mediapipe_hands().detect(mp_image)
+    result = _get_mediapipe_hands().detect_for_video(mp_image, int(timestamp_ms))
     if not result.hand_landmarks:
         return []
 
