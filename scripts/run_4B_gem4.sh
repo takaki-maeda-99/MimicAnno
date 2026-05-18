@@ -28,8 +28,14 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Resolve unsloth_env python without hardcoding $HOME or $USER.
 # 1. Honor an explicit UNSLOTH_PY override.
-# 2. Probe standard $HOME conda env paths.
-# 3. Fail fast with an actionable error.
+# 2. Use the currently-active conda env if it's unsloth_env.
+# 3. Probe standard $HOME conda env paths.
+# 4. Fail fast with an actionable error.
+if [[ -z "${UNSLOTH_PY:-}" ]]; then
+    if [[ "${CONDA_DEFAULT_ENV:-}" == "unsloth_env" && -x "${CONDA_PREFIX:-}/bin/python" ]]; then
+        UNSLOTH_PY="$CONDA_PREFIX/bin/python"
+    fi
+fi
 if [[ -z "${UNSLOTH_PY:-}" ]]; then
     for candidate in \
         "$HOME/anaconda3/envs/unsloth_env/bin/python" \
