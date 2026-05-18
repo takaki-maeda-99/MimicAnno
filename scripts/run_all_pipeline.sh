@@ -53,7 +53,6 @@ done
 # ---------------------------------------------------------------------------
 # Paths
 UNIDAC_PY=/home/gayagaya/anaconda3/envs/unidac/bin/python
-HAMER_PY=hamer/.hamer/bin/python
 PP="$PWD:$PWD/UniDAC"
 VIDEO_DIR=data/video/new
 DEPTH_DIR=data/depth
@@ -131,7 +130,7 @@ phase_b() {
     [[ $OVERWRITE -eq 1 ]] && overwrite_flag="--overwrite"
 
     CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$PP \
-        $HAMER_PY scripts/run_hand_estimation.py \
+        uv run python scripts/run_hand_estimation.py \
             --video "$VIDEO_DIR/$name.MP4" \
             --depth "$DEPTH_DIR/$name" \
             --out   "$out" \

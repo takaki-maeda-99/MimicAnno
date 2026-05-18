@@ -1,11 +1,12 @@
-"""Phase B: HaMeR hand pose estimation with UniDAC metric depth.
+"""Phase B: MediaPipe hand-landmark estimation with UniDAC metric depth.
 
-Reads precomputed UniDAC depth (.npy) from Phase A and runs HaMeR frame-by-frame.
-Wrist depth is sampled directly from UniDAC (euclid distance) and back-projected
-through the fisheye camera model to produce metric cam_t.
+Reads precomputed UniDAC depth (.npy) from Phase A and runs the MediaPipe
+HandLandmarker backend frame-by-frame. Wrist depth is sampled directly from
+UniDAC (euclid distance) and back-projected through the fisheye camera model
+to produce metric cam_t.
 
 Two-pass architecture:
-  Pass 1: per-frame HaMeR + depth sampling → frames/frame_NNNNNN.pkl
+  Pass 1: per-frame MediaPipe + depth sampling → frames/frame_NNNNNN.pkl
   Pass 2: temporal gap-filling (≤ max_interp_gap frames) for each hand side
   Viz:    overlay.mp4 generated after Pass 2
 
@@ -17,9 +18,7 @@ Output layout::
 
 Usage::
 
-    CUDA_VISIBLE_DEVICES=2 \\
-    PYTHONPATH=/home/gayagaya/MimicAnno:/home/gayagaya/MimicAnno/UniDAC \\
-    hamer/.hamer/bin/python scripts/run_hand_estimation.py \\
+    uv run python scripts/run_hand_estimation.py \\
         --video data/video/new/GX010085.MP4 \\
         --depth data/depth/GX010085 \\
         --out   data/hands/GX010085
@@ -28,14 +27,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import pickle
 import signal
 import subprocess
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -47,16 +43,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "UniDAC"))
 
 from mimicanno.hand_pipeline.pipeline import (
     HandEstimate,
-    HandRaw,
     _apply_metric_depth,
-    _preset_a_cam_params,
     _run_mediapipe,
-    _sample_depth_at_pixels,
 )
-
-# Legacy alias kept until Task 11 rewrites the runner end-to-end.
-HamerRaw = HandRaw
-_run_hamer = _run_mediapipe
 
 
 # ---------------------------------------------------------------------------
@@ -109,22 +98,50 @@ def _save_pkl_atomic(path: Path, data: List[HandEstimate]) -> None:
 # ---------------------------------------------------------------------------
 # Pass 2: temporal depth interpolation
 
+def _slerp_rotation(R0: np.ndarray, R1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between two 3x3 rotation matrices.
+
+    Uses scipy.spatial.transform.Rotation.slerp when available; falls back to a
+    linear blend + re-orthonormalisation (via SVD) if scipy.slerp is unusable.
+    """
+    try:
+        from scipy.spatial.transform import Rotation, Slerp
+        key = Rotation.from_matrix(np.stack([R0.astype(float), R1.astype(float)]))
+        out = Slerp([0.0, 1.0], key)([t]).as_matrix()[0]
+        return out.astype(np.float32)
+    except Exception:
+        blended = (1.0 - t) * R0.astype(float) + t * R1.astype(float)
+        u, _, vt = np.linalg.svd(blended)
+        R = u @ vt
+        if np.linalg.det(R) < 0:
+            u[:, -1] *= -1
+            R = u @ vt
+        return R.astype(np.float32)
+
+
 def _interpolate_side(
     frame_indices: List[int],
     estimates: Dict[int, Optional[HandEstimate]],
-    raws: Dict[int, Optional[HamerRaw]],
-    image_shape: Tuple[int, int],
     max_gap: int,
 ) -> None:
-    """Fill short depth gaps for one hand side (left or right) in-place."""
+    """Fill short depth gaps for one hand side (left or right) in-place.
+
+    For each contiguous run of frames where the hand was detected but
+    ``wrist_depth_m`` is ``None`` (UniDAC missed at the wrist pixel), linearly
+    interpolate ``wrist_depth_m``, ``cam_t``, ``joints_3d``, and
+    ``pinch_distance_m`` between the bracketing frames, and SLERP the
+    ``global_orient`` rotation. Gaps longer than ``max_gap`` or at the video
+    boundary are skipped.
+    """
     n = len(frame_indices)
-    for gap_start in range(n):
+    gap_start = 0
+    while gap_start < n:
         fi = frame_indices[gap_start]
         h = estimates.get(fi)
-        # Looking for start of a gap: HaMeR detected but depth missing
         if h is None or h.wrist_depth_m is not None:
+            gap_start += 1
             continue
-        # h exists but wrist_depth_m is None → depth gap
+        # h detected but wrist_depth_m is None → start of a gap
         gap_end = gap_start
         while gap_end < n:
             fj = frame_indices[gap_end]
@@ -135,70 +152,56 @@ def _interpolate_side(
         gap_len = gap_end - gap_start
 
         if gap_len > max_gap:
-            continue  # too long to interpolate
+            gap_start = gap_end
+            continue
 
         prev_idx = gap_start - 1
         next_idx = gap_end
         if prev_idx < 0 or next_idx >= n:
-            continue  # at video boundary
-
-        fi_prev = frame_indices[prev_idx]
-        fi_next = frame_indices[next_idx]
-        h_prev = estimates.get(fi_prev)
-        h_next = estimates.get(fi_next)
-        if h_prev is None or h_prev.wrist_depth_m is None:
+            gap_start = gap_end
             continue
-        if h_next is None or h_next.wrist_depth_m is None:
+
+        h_prev = estimates.get(frame_indices[prev_idx])
+        h_next = estimates.get(frame_indices[next_idx])
+        if (h_prev is None or h_prev.wrist_depth_m is None
+                or h_next is None or h_next.wrist_depth_m is None):
+            gap_start = gap_end
             continue
 
         d0, d1 = h_prev.wrist_depth_m, h_next.wrist_depth_m
+        c0, c1 = h_prev.cam_t.astype(np.float32), h_next.cam_t.astype(np.float32)
+        j0, j1 = h_prev.joints_3d.astype(np.float32), h_next.joints_3d.astype(np.float32)
+        R0, R1 = h_prev.global_orient, h_next.global_orient
+        p0 = h_prev.pinch_distance_m
+        p1 = h_next.pinch_distance_m
 
         for k in range(gap_len):
-            fi_k = frame_indices[gap_start + k]
-            raw_k = raws.get(fi_k)
-            if raw_k is None:
-                continue  # HaMeR missed this frame; can't interpolate pose
             t = (k + 1) / (gap_len + 1)
-            interp_depth = d0 * (1 - t) + d1 * t
-
-            # Recompute cam_t from interpolated depth + raw wrist 2D position
-            H, W = image_shape
-            cam = _preset_a_cam_params(W, H)
-            wrist_uv = raw_k.joints_2d[0]
-            if np.any(np.isnan(wrist_uv)):
-                continue
-            fx, fy, cx, cy = cam["fx"], cam["fy"], cam["cx"], cam["cy"]
-            u, v = float(wrist_uv[0]), float(wrist_uv[1])
-            xn = (u - cx) / fx
-            yn = (v - cy) / fy
-            theta = math.sqrt(xn * xn + yn * yn)
-            if theta < 1e-9:
-                rx, ry, rz = 0.0, 0.0, 1.0
-            else:
-                sin_t = math.sin(theta)
-                rx = sin_t * xn / theta
-                ry = sin_t * yn / theta
-                rz = math.cos(theta)
-            new_cam_t = np.array(
-                [rx * interp_depth, ry * interp_depth, rz * interp_depth],
-                dtype=np.float32,
-            )
-            offset = new_cam_t - raw_k.cam_t
+            fi_k = frame_indices[gap_start + k]
             h_k = estimates[fi_k]
+            if h_k is None:
+                continue
+            interp_depth = float(d0 * (1.0 - t) + d1 * t)
+            new_cam_t = ((1.0 - t) * c0 + t * c1).astype(np.float32)
+            new_joints = ((1.0 - t) * j0 + t * j1).astype(np.float32)
+            new_R = _slerp_rotation(R0, R1, t)
+            if p0 is not None and p1 is not None:
+                new_pinch = float((1.0 - t) * p0 + t * p1)
+            else:
+                new_pinch = h_k.pinch_distance_m
             estimates[fi_k] = HandEstimate(
                 is_right=h_k.is_right,
-                betas=h_k.betas,
-                global_orient=h_k.global_orient,
-                hand_pose=h_k.hand_pose,
-                cam_t=new_cam_t,
-                vertices=(raw_k.vertices + new_cam_t[None, :]).astype(np.float32),
-                joints_3d=(h_k.joints_3d + offset[None, :]).astype(np.float32),
                 joints_2d=h_k.joints_2d,
+                joints_3d=new_joints,
+                cam_t=new_cam_t,
+                global_orient=new_R,
                 bbox=h_k.bbox,
                 wrist_depth_m=interp_depth,
                 depth_interpolated=True,
-                pinch_distance_m=h_k.pinch_distance_m,  # cam_t-independent; carry over unchanged
+                pinch_distance_m=new_pinch,
             )
+
+        gap_start = gap_end
 
 
 # ---------------------------------------------------------------------------
@@ -312,26 +315,29 @@ def _generate_signals(
 # ---------------------------------------------------------------------------
 # Viz overlay
 
-_MANO_SKELETON = [
+_HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),          # thumb
     (0, 5), (5, 6), (6, 7), (7, 8),           # index
-    (0, 9), (9, 10), (10, 11), (11, 12),      # middle
-    (0, 13), (13, 14), (14, 15), (15, 16),    # ring
-    (0, 17), (17, 18), (18, 19), (19, 20),    # pinky
-]
-_FINGER_COLORS = [
-    (0, 128, 255), (0, 255, 0), (255, 0, 128),
-    (255, 200, 0), (128, 0, 255),
+    (5, 9), (9, 10), (10, 11), (11, 12),      # middle
+    (9, 13), (13, 14), (14, 15), (15, 16),    # ring
+    (13, 17), (17, 18), (18, 19), (19, 20),   # pinky
+    (0, 17),                                  # palm closure
 ]
 
 
 def _draw_hands(bgr: np.ndarray, hands: List[HandEstimate], draw_all_kp: bool) -> None:
+    """Draw MediaPipe 21-keypoint hand skeleton onto a BGR frame."""
     for h in hands:
-        color = (0, 0, 220) if h.is_right else (220, 0, 0)  # red=right, blue=left
+        color = (0, 255, 0) if h.is_right else (255, 128, 0)
         j2d = h.joints_2d
-        # wrist circle
+        # skeleton
+        for a, b in _HAND_CONNECTIONS:
+            pa = tuple(int(x) for x in j2d[a])
+            pb = tuple(int(x) for x in j2d[b])
+            cv2.line(bgr, pa, pb, color, 2, cv2.LINE_AA)
+        # wrist marker
         wrist = tuple(int(x) for x in j2d[0])
-        cv2.circle(bgr, wrist, 8, color, -1)
+        cv2.circle(bgr, wrist, 6, color, -1)
         # depth label
         depth_str = (
             f"{h.wrist_depth_m:.2f}m{'[I]' if h.depth_interpolated else ''}"
@@ -343,14 +349,7 @@ def _draw_hands(bgr: np.ndarray, hands: List[HandEstimate], draw_all_kp: bool) -
         b = h.bbox.astype(int)
         cv2.rectangle(bgr, (b[0], b[1]), (b[2], b[3]), color, 1)
         if draw_all_kp:
-            # skeleton
-            for finger_idx, (pa, pb) in enumerate(_MANO_SKELETON):
-                fc = _FINGER_COLORS[finger_idx // 4]
-                pa2 = tuple(int(x) for x in j2d[pa])
-                pb2 = tuple(int(x) for x in j2d[pb])
-                cv2.line(bgr, pa2, pb2, fc, 1)
-            # joints
-            for j in range(1, 21):
+            for j in range(21):
                 pt = tuple(int(x) for x in j2d[j])
                 cv2.circle(bgr, pt, 3, color, -1)
 
@@ -453,11 +452,9 @@ def run(args: argparse.Namespace) -> dict:
     # -----------------------------------------------------------------------
     # Pass 1
     # -----------------------------------------------------------------------
-    # Buffer for Pass 2: frame_idx → {left: HandEstimate|None, right: ...}
+    # Buffer for Pass 2: frame_idx → HandEstimate|None per side
     left_estimates: Dict[int, Optional[HandEstimate]] = {}
     right_estimates: Dict[int, Optional[HandEstimate]] = {}
-    left_raws: Dict[int, Optional[HamerRaw]] = {}
-    right_raws: Dict[int, Optional[HamerRaw]] = {}
     all_frame_indices: List[int] = []
 
     t_start = time.time()
@@ -498,38 +495,26 @@ def run(args: argparse.Namespace) -> dict:
                           file=sys.stderr)
 
             try:
-                hamer_raws = _run_hamer(
-                    bgr,
-                    rescale_factor=args.rescale_factor,
-                    batch_size=args.batch_size,
-                )
-                if hamer_raws and depth_erp is not None:
-                    hands = _apply_metric_depth(hamer_raws, depth_erp, image_shape)
-                elif hamer_raws:
+                raws = _run_mediapipe(bgr)
+                if raws and depth_erp is not None:
+                    hands = _apply_metric_depth(raws, depth_erp, image_shape)
+                elif raws:
                     # No depth available: passthrough (wrist_depth_m=None)
                     from mimicanno.hand_pipeline.pipeline import _passthrough_estimate
-                    hands = [_passthrough_estimate(r) for r in hamer_raws]
+                    hands = [_passthrough_estimate(r) for r in raws]
                 else:
                     hands = []
 
                 # Populate per-side buffers
                 left_h = right_h = None
-                left_r = right_r = None
                 for h in hands:
                     if h.is_right:
                         right_h = h
                     else:
                         left_h = h
-                for r in (hamer_raws or []):
-                    if r.is_right:
-                        right_r = r
-                    else:
-                        left_r = r
 
                 left_estimates[frame_idx] = left_h
                 right_estimates[frame_idx] = right_h
-                left_raws[frame_idx] = left_r
-                right_raws[frame_idx] = right_r
 
                 _save_pkl_atomic(pkl_path, hands)
                 n_done += 1
@@ -568,10 +553,8 @@ def run(args: argparse.Namespace) -> dict:
     # Pass 2: temporal interpolation
     # -----------------------------------------------------------------------
     print("Pass 2: interpolating depth gaps…", flush=True)
-    _interpolate_side(all_frame_indices, left_estimates, left_raws,
-                      image_shape, args.max_interp_gap)
-    _interpolate_side(all_frame_indices, right_estimates, right_raws,
-                      image_shape, args.max_interp_gap)
+    _interpolate_side(all_frame_indices, left_estimates, args.max_interp_gap)
+    _interpolate_side(all_frame_indices, right_estimates, args.max_interp_gap)
 
     # Rewrite pkl files with interpolated values; collect stats
     frame_results: Dict[int, List[HandEstimate]] = {}
@@ -649,7 +632,7 @@ def run(args: argparse.Namespace) -> dict:
 
 
 def run_signals_only(args: argparse.Namespace) -> None:
-    """Regenerate signals.json from existing frames/*.pkl without re-running HaMeR."""
+    """Regenerate signals.json from existing frames/*.pkl without re-running detection."""
     out_dir = Path(args.out)
     frames_dir = out_dir / "frames"
     meta_path = out_dir / "meta.json"
@@ -679,7 +662,7 @@ def run_signals_only(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Phase B: HaMeR hand estimation with UniDAC metric depth.",
+        description="Phase B: MediaPipe hand-landmark estimation with UniDAC metric depth.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -697,14 +680,10 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="draw all 21 joints + skeleton (default: wrist only)")
     ap.add_argument("--overwrite", action="store_true",
                     help="reprocess frames whose .pkl already exists")
-    ap.add_argument("--rescale-factor", type=float, default=2.0,
-                    help="HaMeR ViTDet bbox expansion factor (default: 2.0)")
-    ap.add_argument("--batch-size", type=int, default=8,
-                    help="HaMeR DataLoader batch size (default: 8)")
     ap.add_argument("--pinch-smooth-sigma", type=float, default=2.0,
                     help="Gaussian smoothing sigma [frames] for pinch_distance_m in signals.json (0 = no smoothing, default: 2.0)")
     ap.add_argument("--signals-only", action="store_true",
-                    help="skip HaMeR estimation; regenerate signals.json from existing frames/*.pkl")
+                    help="skip hand estimation; regenerate signals.json from existing frames/*.pkl")
     ap.add_argument("--full-signals", action="store_true",
                     help="write schema_version 3 signals.json with cam_t + euler_deg + joints_2d (default: v1 pinch-only)")
     ap.set_defaults(save_viz=True)
