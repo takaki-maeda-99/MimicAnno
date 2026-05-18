@@ -2,7 +2,7 @@
 # One-shot environment setup for MimicAnno.
 #
 # Steps (in order, when selected):
-#   submodules → core → unidac → frontend → assets
+#   submodules → core → unidac (opt-in) → frontend → assets
 #
 # Usage:
 #   bash scripts/setup_envs.sh                # --all (default)
@@ -33,7 +33,7 @@ EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --all)       DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_ASSETS=1; EXPLICIT=1; shift ;;
+        --all)       DO_SUBMODULES=1; DO_CORE=1; DO_FRONTEND=1; DO_ASSETS=1; EXPLICIT=1; shift ;;
         --core)      DO_CORE=1;     EXPLICIT=1; shift ;;
         --unidac)    DO_UNIDAC=1;   EXPLICIT=1; shift ;;
         --frontend)  DO_FRONTEND=1; EXPLICIT=1; shift ;;
@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$EXPLICIT" -eq 0 ]]; then
-    DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_ASSETS=1
+    DO_SUBMODULES=1; DO_CORE=1; DO_FRONTEND=1; DO_ASSETS=1
 fi
 if [[ "$SKIP_ASSETS" -eq 1 ]]; then
     DO_ASSETS=0

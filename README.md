@@ -54,7 +54,7 @@ sudo apt-get install -y ffmpeg lsof
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
-# One-shot bootstrap (submodules, core, unidac, frontend, gated assets).
+# One-shot bootstrap (submodules, core, frontend, assets (unidac opt-in via --unidac)).
 # Authenticate to Hugging Face first. Required for gated repos (SAM3,
 # Gemma 4) and **strongly recommended for everything else** — anonymous
 # downloads share a per-IP rate limit that the full weights+datasets

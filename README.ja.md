@@ -54,7 +54,7 @@ sudo apt-get install -y ffmpeg lsof
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
-# 一発セットアップ (submodules / core / unidac / frontend / gated assets)。
+# 一発セットアップ (submodules / core / frontend / assets (unidac は --unidac で個別))。
 # Hugging Face にログインしておく。gated repo (SAM3 / Gemma 4) には必須、
 # それ以外も **強く推奨** — 匿名 DL は IP 単位レート制限があり、weights+
 # datasets を一気に DL するとほぼ確実に弾かれる。
