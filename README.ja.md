@@ -110,6 +110,35 @@ hf download takaki99/GEM4_pick_up_bottle          --local-dir data/GEM4_pick_up_
 hf download takaki99/GEM4_replace_the_cookie      --local-dir data/GEM4_replace_the_cookie --repo-type dataset
 ```
 
+## デモ
+
+`bash scripts/setup_envs.sh` 完走後の動作確認用エンドツーエンドフロー。
+各コマンドは冪等で再実行しても no-op。
+
+```bash
+# 1. 同梱の魚眼動画で hand pipeline (Phase A → C、~5 分 / 1 GPU)
+bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
+
+# 2. SO101 episode 1 本をアノテーション (Phase 1–4、GPU で ~1 分)
+mimicanno annotate \
+  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
+  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
+  --task         "Put the tape into the bottle" \
+  --robot        generic \
+  --robot-config tests/exports/fixtures/so101_robot_config.yaml \
+  --target-phase 4 \
+  --vlm-model    "google/gemma-4-E2B-it" \
+  --sam3-checkpoint sam3/checkpoints/sam3.pt \
+  --runs-root    ./runs
+
+# 3. レビュー UI を起動して結果を確認
+bash scripts/start_ui.sh
+# ブラウザで http://localhost:5173/
+```
+
+3 つとも成功すればインストール健全。詳細フラグや他データセット用途は
+次節を参照。
+
 ## クイックスタート
 
 ### 1. エピソード 1 本にアノテーション

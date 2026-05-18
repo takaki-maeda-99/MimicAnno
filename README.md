@@ -111,6 +111,36 @@ hf download takaki99/GEM4_pick_up_bottle          --local-dir data/GEM4_pick_up_
 hf download takaki99/GEM4_replace_the_cookie      --local-dir data/GEM4_replace_the_cookie --repo-type dataset
 ```
 
+## Demo
+
+End-to-end smoke test after a fresh `bash scripts/setup_envs.sh`. Each
+command is a no-op on re-run, so it doubles as the install-verification
+flow.
+
+```bash
+# 1. Hand pipeline on the bundled demo fisheye video (Phase A → C, ~5 min / 1 GPU)
+bash scripts/run_all_pipeline.sh demo_hand_video_2.7k
+
+# 2. Annotate one SO101 episode (Phase 1–4, ~1 min on GPU)
+mimicanno annotate \
+  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
+  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
+  --task         "Put the tape into the bottle" \
+  --robot        generic \
+  --robot-config tests/exports/fixtures/so101_robot_config.yaml \
+  --target-phase 4 \
+  --vlm-model    "google/gemma-4-E2B-it" \
+  --sam3-checkpoint sam3/checkpoints/sam3.pt \
+  --runs-root    ./runs
+
+# 3. Launch the review UI to inspect both outputs
+bash scripts/start_ui.sh
+# Open http://localhost:5173/
+```
+
+If all three succeed, the install is healthy. Detailed flags and other
+datasets are covered in the next section.
+
 ## Quickstart
 
 ### 1. Annotate one episode
