@@ -11,11 +11,20 @@
 #   # Specific videos only
 #   bash scripts/run_all_pipeline.sh GX010175 GX010176
 #
-#   # Override GPU indices (default: 2 3)
+#   # GPU indices (default: 0 0 → single GPU). Pass two distinct ids to
+#   # halve wall time by running batches in parallel.
 #   bash scripts/run_all_pipeline.sh --gpus 0 1
+#   bash scripts/run_all_pipeline.sh --gpus 2 3
 #
 #   # Skip Phase A (depth already precomputed)
 #   bash scripts/run_all_pipeline.sh --skip-phase-a
+#
+#   # Skip Phase B / C independently
+#   bash scripts/run_all_pipeline.sh --skip-phase-b
+#   bash scripts/run_all_pipeline.sh --skip-phase-c
+#
+#   # Only (re)generate the depth viz mp4s for an existing run
+#   bash scripts/run_all_pipeline.sh --skip-phase-a --skip-phase-b
 #
 #   # Overwrite existing outputs
 #   bash scripts/run_all_pipeline.sh --overwrite
@@ -27,10 +36,11 @@ cd "$(dirname "$0")/.."
 
 # ---------------------------------------------------------------------------
 # Defaults
-GPU0=2
-GPU1=3
+GPU0=0
+GPU1=0
 SKIP_PHASE_A=0
 SKIP_PHASE_B=0
+SKIP_PHASE_C=0
 OVERWRITE=0
 VIDEOS=()
 
@@ -41,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --gpus)      GPU0=$2; GPU1=$3; shift 3 ;;
         --skip-phase-a) SKIP_PHASE_A=1; shift ;;
         --skip-phase-b) SKIP_PHASE_B=1; shift ;;
+        --skip-phase-c) SKIP_PHASE_C=1; shift ;;
         --overwrite) OVERWRITE=1; shift ;;
         --help|-h)
             sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
@@ -54,9 +65,9 @@ done
 # Paths
 UNIDAC_PY=/home/gayagaya/anaconda3/envs/unidac/bin/python
 PP="$PWD:$PWD/UniDAC"
-VIDEO_DIR=data/video/new
-DEPTH_DIR=data/depth
-HANDS_DIR=data/hands
+VIDEO_DIR=data/video
+DEPTH_DIR=outputs/depth
+HANDS_DIR=outputs/hands
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
@@ -81,6 +92,40 @@ fi
 
 log "Videos to process: ${VIDEOS[*]}"
 log "GPUs: cuda:$GPU0 (even batches) cuda:$GPU1 (odd batches)"
+
+# ---------------------------------------------------------------------------
+# Phase C helper: render fisheye-space depth mp4 + transcode to h264.
+# Produces data/depth/<name>/viz_depth.mp4 which the viewer expects.
+phase_c() {
+    local name=$1 gpu=$2
+    local out_mp4="$DEPTH_DIR/$name/viz_depth.mp4"
+    local existing="$DEPTH_DIR/$name/viz/depth_fisheye.mp4"
+    local logf="/tmp/phaseC_${name}.log"
+
+    if [[ $OVERWRITE -eq 0 ]] && [[ -e "$out_mp4" ]]; then
+        log "Phase C $name: viz_depth.mp4 exists, skip"
+        return 0
+    fi
+
+    # precompute_depth.py already renders the fisheye-space mp4 at
+    # viz/depth_fisheye.mp4. Reuse it via symlink instead of repaying
+    # the back-warp pass.
+    if [[ -e "$existing" ]]; then
+        ln -sf "viz/depth_fisheye.mp4" "$out_mp4"
+        log "Phase C $name: symlinked viz/depth_fisheye.mp4 → viz_depth.mp4"
+        return 0
+    fi
+
+    log "Phase C $name → cuda:$gpu  (log: $logf)"
+    CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$PP \
+        $UNIDAC_PY scripts/visualize_depth.py \
+            --depth "$DEPTH_DIR/$name" \
+            --video "$VIDEO_DIR/$name.MP4" \
+            --out   "$out_mp4" \
+            --no-side-by-side \
+        >> "$logf" 2>&1
+    log "Phase C $name done"
+}
 
 # ---------------------------------------------------------------------------
 # Phase A helper
@@ -172,6 +217,23 @@ if [[ $SKIP_PHASE_B -eq 0 ]]; then
     PID_B1=$!
     wait $PID_B0 $PID_B1
     log "=== Phase B complete ==="
+fi
+
+# ---------------------------------------------------------------------------
+# Phase C: depth visualization (browser-playable mp4) — split across both GPUs.
+if [[ $SKIP_PHASE_C -eq 0 ]]; then
+    log "=== Phase C start (depth viz) ==="
+    ( for v in "${GPU0_VIDEOS[@]}"; do phase_c "$v" $GPU0; done ) &
+    PID_C0=$!
+    ( for v in "${GPU1_VIDEOS[@]}"; do phase_c "$v" $GPU1; done ) &
+    PID_C1=$!
+    wait $PID_C0 $PID_C1
+    log "=== Phase C complete ==="
+
+    log "=== Transcoding viz mp4s to h264 (browser playback) ==="
+    uv run python scripts/transcode_viz_to_h264.py "$DEPTH_DIR" >/tmp/transcode.log 2>&1 || \
+        log "  transcode step had errors, see /tmp/transcode.log"
+    log "=== Transcode complete ==="
 fi
 
 log "All done. Summary:"
