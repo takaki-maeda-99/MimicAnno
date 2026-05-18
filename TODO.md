@@ -8,6 +8,18 @@
 
 ## 残タスク
 
+### start_ui.sh venv-safety ✅ **完了 (2026-05-18 PM)** — fix/start-ui-venv-safety → main (PR #33, merge `13e1ac1`)
+
+- 問題: `bash scripts/start_ui.sh` が `uv run --extra server` で `.venv` を narrow extras set に再 sync → `[sam3]`/`[vlm]`/`[dev]` 由来パッケージ削除 → `mimicanno serve` 起動時に `ImportError: cannot import name 'mask' from 'pycocotools'` で死亡
+- 対策 (恒久対策 1+2 を両方実装):
+  1. `mimicanno/cli.py` の `pipeline`/`exports.*`/`preflight` top-level import を `annotate_cmd`/`export_cmd` の関数本体内 lazy import に降ろし (serve_cmd 既存 pattern を踏襲)、`mimicanno serve` を `[server]` extras 単独で起動可能に
+  2. `scripts/start_ui.sh:82` を `uv run --no-sync --extra server` に変更し uv が venv を勝手に sync しないことを保証
+  3. `deps_check` に `timeout 30 mimicanno serve --help` の preflight smoke を追加、失敗時は `bash scripts/setup_envs.sh --core` を案内
+  4. README.md / README.ja.md の Install に「`.venv` は `setup_envs.sh` だけが管理」note 追加
+  5. 結合変更: `mock.patch("mimicanno.cli.X")` の 10 site を `mimicanno.<source>.X` に retarget (cli.py refactor との coupling のため同 PR 内)
+- 実測効果: pycocotools / fastapi いずれかを削除しても `mimicanno serve --help` exit 0 → 原因となった failure mode は **構造的に発生不可能** に
+- spec/plan: `docs/superpowers/specs/2026-05-18-start-ui-venv-safety-design.md`, `docs/superpowers/plans/2026-05-18-start-ui-venv-safety-plan.md`
+
 ### One-shot env setup + start_ui hardening ✅ **完了 (2026-05-17 PM)** — feat/setup-serve-scripts → main (FF, 14 commits)
 
 - `scripts/setup_envs.sh` を idempotent orchestrator に書き直し: `submodules → core → unidac → frontend → weights`。flags: `--all` (default), `--core/--unidac/--frontend/--weights`, `--skip-weights`。
@@ -82,6 +94,46 @@
 ### gem4 設定整理（低優先）
 
 `mimicanno/configs/robot/gem4_*.yaml` × 3 の clean-up（docs/別 PR）。
+
+### Pipeline GPU-Util 改善: prefetch + NVDEC + shared memory (難易度高 / 優先低)
+
+**背景**: 4B QLoRA 5 並列実走で GPU-Util がしばしば 0% に落ちる。1 ep あたり GPU busy ~55s (SAM3+VLM)、CPU/I/O ~20s (OpenCV video decode / NFS read / annotation.json write / boundary+smoother CPU)。5 並列時は NFS 競合でさらに悪化。
+
+**現状計測 (2026-05-18, GPU 0-4 並列)**:
+- 4B QLoRA: ~75-90 s/ep
+- 26B: ~100-110 s/ep
+- SAM3 propagation: ~30s/ep (model size 無関係)
+- Video decode (OpenCV): ~5-10s/ep
+- NFS write fsync: ~3-5s/ep
+
+**改善 3 段 (ROI 順)**:
+
+1. **prefetch overlap (CPU I/O を GPU compute と並行化)** — DataLoader-style worker で ep N+1 の video decode + parquet load を ep N の VLM 推論中に走らせる
+   - 効果単独: 4B 75→55s (1.36x, 27% 速化)、26B 105→85s (1.24x, 19% 速化)
+   - 実装: `pipeline.py` を generator + `concurrent.futures.ThreadPoolExecutor` で書き直し、~300 行 + test、1 週間
+2. **NVDEC video decode (CPU→GPU)** — decord / PyAV+hwaccel / NVIDIA DALI で frame を最初から GPU tensor 化
+   - 効果 (prefetch と併用): 4B 75→50s (1.5x, 33%)、26B 105→80s (1.31x, 24%)
+   - 実装: `mimicanno/video.py` の OpenCV 経路差し替え、~150 行 + 数日
+3. **Shared memory video distributor** — 5 並列が同じ video を別々に decode → 1 プロセスが decode して `/dev/shm` 経由で配信
+   - 効果 (1+2 と併用): 5 並列実測で 4B 90→55s (40% 速化)
+   - 実装: architecture 変更、+500 行 + 数週間
+
+**他 (低 ROI)**: cuDF parquet load、CuPy boundary/smoother、GPUDirect Storage (NFS server 側対応必要)
+
+**着手条件**: SFT loop / Phase 6 で「データ準備の遅さがボトルネック」になった時。現状の labeling コストは 700ep × 90s × 並列 5 = ~3.5h で許容範囲。
+
+### VLM labeler batching (難易度中 / 優先低)
+
+**背景**: 現状 `vlm_labeler.label_segment()` は 1 segment ずつ `generate(batch_size=1)`。1 ep に 2-5 segments、1 segment ごとに GPU compute + Python orchestration の switching コスト。
+
+**改善案**: 1 ep の全 segments prompts を pad して 1 回の `generate(batch_size=N)` で投げる
+- 効果: VLM 部分 ~30s → ~10s、全体 4B 75s → ~55s (27% 速化、≈ prefetch 単独と同程度)
+- 難易度: 中 (segment prompts の padding + decode 後の per-segment split、~400 行)
+- 多 ep batching (N ep を一気に送る) は memory 線形増 + NFS 競合悪化のため非推奨
+
+**着手条件**: prefetch overlap (上記) と組み合わせる時。単独 ROI は prefetch と同等なので、prefetch から先に。
+
+**他選択肢 (高 ROI、難度高)**: prefetch + batch + shared memory の合わせ技で 5 並列 4B 90→40s (~2.3x 速化) が現実的上限。
 
 ### SAM3 grounding retry 改善 (T13 follow-up、低優先)
 
