@@ -100,16 +100,18 @@ mimicanno export \
 時間 (~2 分/ep) を ep 回数分節約できる。`unsloth_env` conda 環境と
 `models/gem4_26B_adapter/` が必要。
 
+タスクごとに 1 本 — `run_26B_gem4_<task>.sh`
+(`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`):
+
 ```bash
 # GPU 1 枚で 1 タスクの全 episode を流す
-GPU=0 bash scripts/run_26B_gem4.sh open_the_jar
+GPU=0 bash scripts/run_26B_gem4_open_the_jar.sh
 
 # 2 GPU で episode 範囲を分割して並列実行
-GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
-GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
+GPU=0 START=0   END=151 bash scripts/run_26B_gem4_pick_up_bottle.sh &
+GPU=1 START=152 END=303 bash scripts/run_26B_gem4_pick_up_bottle.sh
 ```
 
-タスク: `open_the_jar` | `pick_up_bottle` | `replace_the_cookie`。
 出力先デフォルトは `runs/gem4_<task>_26B/`。SO101 等 wrapper が無い
 データセットは `batch_annotate.py` を直接呼ぶ:
 
@@ -118,16 +120,15 @@ python scripts/batch_annotate.py --dataset so101 --gpu 0
 ```
 
 **4B ベースライン** (素の Gemma 4 E4B-it を transformers で直接ロード、
-QLoRA なし) は parallel な wrapper を使う。26B より高速だが精度寄りでは
-ない。リポジトリの `.venv` (uv) で動く、`unsloth_env` 不要:
+QLoRA なし) は `scripts/batch_annotate_4B.py` を直接呼ぶ。26B より高速
+だが精度寄りではない。リポジトリの `.venv` (uv) で動く、`unsloth_env` 不要:
 
 ```bash
-GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
-GPU=0 START=0 END=103 bash scripts/run_4B_gem4.sh pick_up_bottle &
+uv run python scripts/batch_annotate_4B.py --dataset gem4_open_the_jar --gpu 0
+uv run python scripts/batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 0 --start 0 --end 103
 ```
 
-出力先は `runs/gem4_<task>_4B/`。実体は `scripts/batch_annotate_4B.py`
-(26B 版と同じ CLI shape)。
+出力先は `runs/gem4_<task>_4B/` (26B 版と同じ CLI shape)。
 
 ### 4. プログラマティック API
 

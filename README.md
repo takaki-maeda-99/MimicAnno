@@ -100,34 +100,35 @@ Thin wrapper around `scripts/batch_annotate.py` that loads the 26B VLM
 load the CLI would otherwise pay. Requires the `unsloth_env` conda env
 and `models/gem4_26B_adapter/`.
 
+One script per task — `run_26B_gem4_<task>.sh` for
+`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`:
+
 ```bash
 # All episodes of one task, one GPU
-GPU=0 bash scripts/run_26B_gem4.sh open_the_jar
+GPU=0 bash scripts/run_26B_gem4_open_the_jar.sh
 
 # Split episode range across two GPUs in parallel
-GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
-GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
+GPU=0 START=0   END=151 bash scripts/run_26B_gem4_pick_up_bottle.sh &
+GPU=1 START=152 END=303 bash scripts/run_26B_gem4_pick_up_bottle.sh
 ```
 
-Tasks: `open_the_jar` | `pick_up_bottle` | `replace_the_cookie`. Outputs
-land at `runs/gem4_<task>_26B/`. For SO101 or anything else not wrapped,
-run `scripts/batch_annotate.py` directly:
+Outputs land at `runs/gem4_<task>_26B/`. For SO101 or anything else not
+wrapped, run `scripts/batch_annotate.py` directly:
 
 ```bash
 python scripts/batch_annotate.py --dataset so101 --gpu 0
 ```
 
-For the **4B baseline** (Gemma 4 E4B-it via transformers, no QLoRA),
-use the parallel wrapper. Faster than 26B but lower quality. Runs in
-the repo's `.venv` (uv), no `unsloth_env` needed:
+For the **4B baseline** (Gemma 4 E4B-it via transformers, no QLoRA), call
+`scripts/batch_annotate_4B.py` directly. Faster than 26B but lower
+quality. Runs in the repo's `.venv` (uv), no `unsloth_env` needed:
 
 ```bash
-GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
-GPU=0 START=0 END=103 bash scripts/run_4B_gem4.sh pick_up_bottle &
+uv run python scripts/batch_annotate_4B.py --dataset gem4_open_the_jar --gpu 0
+uv run python scripts/batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 0 --start 0 --end 103
 ```
 
-Outputs land at `runs/gem4_<task>_4B/`. The underlying runner is
-`scripts/batch_annotate_4B.py` (same CLI shape as the 26B version).
+Outputs land at `runs/gem4_<task>_4B/` (same CLI shape as the 26B version).
 
 ### 4. Programmatic API
 
