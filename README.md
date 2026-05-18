@@ -91,18 +91,24 @@ bash scripts/start_ui.sh --runs-root /path/to/runs
 ## Getting data
 
 A fresh clone has no data. The `weights` step of `setup_envs.sh`
-fetches two public datasets in addition to model weights:
+fetches these public datasets in addition to model weights:
 
 | HF dataset | Local path | Contents |
 |---|---|---|
 | `Gayagaya/SO101_dataset` | `data/SO101/` | LeRobot v3 SO101 episodes (33 ep, 4960 frames) |
-| `Gayagaya/fisheye_videos_processed` | `data/video/` | Face-blurred GoPro Max Lens Mod fisheye videos (placeholder; populated when the redaction pass completes) |
+| `Gayagaya/fisheye_videos_processed` | `data/video/` | Face-blurred GoPro Max Lens Mod fisheye videos (currently only the demo clip; full set follows) |
+| `takaki99/GEM4_open_the_jar` | `data/GEM4_open_the_jar/` | LeRobot v3, ~208 ep |
+| `takaki99/GEM4_pick_up_bottle` | `data/GEM4_pick_up_bottle/` | LeRobot v3, ~304 ep |
+| `takaki99/GEM4_replace_the_cookie` | `data/GEM4_replace_the_cookie/` | LeRobot v3, ~216 ep |
 
 Or pull them manually:
 
 ```bash
-hf download Gayagaya/SO101_dataset --local-dir data/SO101 --repo-type dataset
-hf download Gayagaya/fisheye_videos_processed --local-dir data/video --repo-type dataset
+hf download Gayagaya/SO101_dataset                --local-dir data/SO101                  --repo-type dataset
+hf download Gayagaya/fisheye_videos_processed     --local-dir data/video                  --repo-type dataset
+hf download takaki99/GEM4_open_the_jar            --local-dir data/GEM4_open_the_jar      --repo-type dataset
+hf download takaki99/GEM4_pick_up_bottle          --local-dir data/GEM4_pick_up_bottle    --repo-type dataset
+hf download takaki99/GEM4_replace_the_cookie      --local-dir data/GEM4_replace_the_cookie --repo-type dataset
 ```
 
 ## Quickstart

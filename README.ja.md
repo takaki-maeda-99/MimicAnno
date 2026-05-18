@@ -90,18 +90,24 @@ bash scripts/start_ui.sh --runs-root /path/to/runs
 ## データ取得
 
 clone 直後はデータが手元にありません。`setup_envs.sh` の `weights`
-step がモデル重みと一緒に public dataset 2 つを DL します:
+step がモデル重みと一緒に public dataset を DL します:
 
 | HF dataset | 配置先 | 内容 |
 |---|---|---|
 | `Gayagaya/SO101_dataset` | `data/SO101/` | LeRobot v3 SO101 (33 ep / 4960 frames) |
-| `Gayagaya/fisheye_videos_processed` | `data/video/` | 顔ぼかし済み GoPro Max Lens Mod fisheye 動画（現状 placeholder、redaction 完了後に populate） |
+| `Gayagaya/fisheye_videos_processed` | `data/video/` | 顔ぼかし済み GoPro Max Lens Mod fisheye 動画（現状 demo 1 本のみ、追加予定） |
+| `takaki99/GEM4_open_the_jar` | `data/GEM4_open_the_jar/` | LeRobot v3、約 208 ep |
+| `takaki99/GEM4_pick_up_bottle` | `data/GEM4_pick_up_bottle/` | LeRobot v3、約 304 ep |
+| `takaki99/GEM4_replace_the_cookie` | `data/GEM4_replace_the_cookie/` | LeRobot v3、約 216 ep |
 
 手動で DL:
 
 ```bash
-hf download Gayagaya/SO101_dataset --local-dir data/SO101 --repo-type dataset
-hf download Gayagaya/fisheye_videos_processed --local-dir data/video --repo-type dataset
+hf download Gayagaya/SO101_dataset                --local-dir data/SO101                  --repo-type dataset
+hf download Gayagaya/fisheye_videos_processed     --local-dir data/video                  --repo-type dataset
+hf download takaki99/GEM4_open_the_jar            --local-dir data/GEM4_open_the_jar      --repo-type dataset
+hf download takaki99/GEM4_pick_up_bottle          --local-dir data/GEM4_pick_up_bottle    --repo-type dataset
+hf download takaki99/GEM4_replace_the_cookie      --local-dir data/GEM4_replace_the_cookie --repo-type dataset
 ```
 
 ## クイックスタート

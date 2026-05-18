@@ -150,33 +150,35 @@ for adapter in gem4_4B_adapter gem4_26B_adapter; do
 done
 
 # --- Public datasets ------------------------------------------------------
-# SO101 raw LeRobot v3 dataset + face-blurred fisheye videos. Both are
-# public Hugging Face datasets; no auth required.
+# Each entry is "<hf_repo_id> -> <local path under repo root>". All public,
+# no auth required. Empty placeholder repos (only .gitattributes) are
+# detected and reported, not failed.
 declare -A DATASETS=(
-    ["SO101_dataset"]="$REPO_ROOT/data/SO101"
-    ["fisheye_videos_processed"]="$REPO_ROOT/data/video"
+    ["Gayagaya/SO101_dataset"]="$REPO_ROOT/data/SO101"
+    ["Gayagaya/fisheye_videos_processed"]="$REPO_ROOT/data/video"
+    ["takaki99/GEM4_open_the_jar"]="$REPO_ROOT/data/GEM4_open_the_jar"
+    ["takaki99/GEM4_pick_up_bottle"]="$REPO_ROOT/data/GEM4_pick_up_bottle"
+    ["takaki99/GEM4_replace_the_cookie"]="$REPO_ROOT/data/GEM4_replace_the_cookie"
 )
-for ds in "${!DATASETS[@]}"; do
-    dest="${DATASETS[$ds]}"
-    # Idempotency: if the dest looks populated already, skip.
+for repo_id in "${!DATASETS[@]}"; do
+    dest="${DATASETS[$repo_id]}"
+    label="${dest#$REPO_ROOT/}"
     if [[ -d "$dest" ]] && [[ -n "$(ls "$dest" 2>/dev/null | head -1)" ]]; then
-        skip "$ds cached at ${dest#$REPO_ROOT/}"
+        skip "$repo_id cached at $label"
         continue
     fi
-    log "Downloading Gayagaya/$ds → ${dest#$REPO_ROOT/}"
+    log "Downloading $repo_id → $label"
     mkdir -p "$dest"
-    if uv run hf download "Gayagaya/$ds" --local-dir "$dest" --repo-type dataset; then
-        # Empty repo (e.g. placeholder before processed videos are uploaded)
-        # ends up with only .gitattributes — treat as "not yet ready".
+    if uv run hf download "$repo_id" --local-dir "$dest" --repo-type dataset; then
         n_files=$(find "$dest" -type f -not -name ".gitattributes" -not -path "*/.cache/*" | wc -l)
         if [[ "$n_files" -eq 0 ]]; then
-            warn "$ds is empty on the Hub (placeholder?). Skipping."
+            warn "$repo_id is empty on the Hub (placeholder?). Skipping."
             rmdir "$dest" 2>/dev/null || true
         else
-            ok "$ds ready ($n_files files)"
+            ok "$repo_id ready ($n_files files)"
         fi
     else
-        warn "$ds download failed (network? gated?). Pipeline may still work without it."
+        warn "$repo_id download failed (network? gated?). Pipeline may still work without it."
     fi
 done
 
