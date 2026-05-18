@@ -1,9 +1,10 @@
 #!/bin/bash
-# UniDAC conda env + editable install + weights download.
+# UniDAC conda env + editable install. Weights download is handled by
+# scripts/setup/weights.sh (girish1511/UniDAC for unidac.pt; DINOv3
+# backbone is a manual step per README).
 #
-# Idempotency sentinels:
+# Idempotency sentinel:
 #   - conda env "unidac" exists AND `import unidac` succeeds → skip env setup
-#   - UniDAC/checkpoints/unidac.pt non-zero → skip weights DL
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -43,29 +44,6 @@ else
     ok "unidac env ready"
 fi
 
-# --- weights ---------------------------------------------------------------
-WEIGHTS="$REPO_ROOT/UniDAC/checkpoints/unidac.pt"
-if [[ -s "$WEIGHTS" ]]; then
-    skip "UniDAC weights present at $(realpath --relative-to="$REPO_ROOT" "$WEIGHTS")"
-    exit "$STEP_OK"
-fi
-
-# NOTE: replace UNIDAC_CKPT_URL with the actual public release URL recorded in
-# UniDAC/README.md at implementation time. If unknown, leave UNIDAC_CKPT_URL
-# empty and the step will WARN (exit 2) for manual download.
-UNIDAC_CKPT_URL="${UNIDAC_CKPT_URL:-}"
-if [[ -z "$UNIDAC_CKPT_URL" ]]; then
-    warn "UniDAC weights URL not configured (UNIDAC_CKPT_URL env var)."
-    warn "Manually download UniDAC checkpoint to: $WEIGHTS"
-    exit "$STEP_USER"
-fi
-
-mkdir -p "$(dirname "$WEIGHTS")"
-log "Downloading UniDAC weights from $UNIDAC_CKPT_URL…"
-if curl -fL --retry 3 -o "$WEIGHTS" "$UNIDAC_CKPT_URL"; then
-    ok "UniDAC weights downloaded"
-    exit "$STEP_OK"
-fi
-
-fail "UniDAC weights download failed."
-exit "$STEP_FAIL"
+# UniDAC checkpoint and DINOv3 backbone are pulled by the `weights` step
+# (scripts/setup/weights.sh). Nothing else to do here.
+exit "$STEP_OK"
