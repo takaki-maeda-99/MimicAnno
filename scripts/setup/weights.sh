@@ -123,13 +123,12 @@ DINOV3_FILE="dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 if [[ -s "$UNIDAC_CKPT_DIR/$DINOV3_FILE" ]]; then
     skip "DINOv3 backbone cached at UniDAC/checkpoints/$DINOV3_FILE"
 else
-    log "Downloading facebook/dinov3/$DINOV3_FILE → UniDAC/checkpoints/"
-    if uv run hf download facebook/dinov3 "$DINOV3_FILE" --local-dir "$UNIDAC_CKPT_DIR"; then
-        ok "DINOv3 backbone ready"
-    else
-        warn "DINOv3 backbone download failed (gated; request access at https://huggingface.co/facebook/dinov3)."
-        USER_ACTION=1
-    fi
+    warn "DINOv3 backbone is license-gated by Meta and cannot be fetched"
+    warn "automatically. Apply at"
+    warn "  https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/"
+    warn "and place the file at UniDAC/checkpoints/$DINOV3_FILE"
+    warn "(or scp it from another machine that already has it)."
+    USER_ACTION=1
 fi
 
 # --- GEM4 QLoRA adapters (public) -----------------------------------------

@@ -65,6 +65,14 @@ bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
 # 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
 
+> **手動ステップ — DINOv3 backbone**: UniDAC の Phase A は
+> `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
+> (約 1.2 GB) を必須参照しますが、Meta が license 署名 gate を
+> 掛けているので `setup_envs.sh` では自動取得できません。
+> <https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>
+> で申請 → メールで届く署名付き URL を `wget` (ブラウザ不可) で
+> `UniDAC/checkpoints/` に落とす。既に別マシンに有るなら `scp` でも可。
+
 > **`.venv` の管理は `setup_envs.sh` だけが行います。** 他のヘルパー
 > (`start_ui.sh`、`mimicanno` CLI) は既存の `.venv` を読むだけで変更
 > しません。`start_ui.sh` が `.venv` health-check failure を報告したら、

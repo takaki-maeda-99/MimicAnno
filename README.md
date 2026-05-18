@@ -65,6 +65,15 @@ bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
 # Re-runs are idempotent (each step skips when its sentinel is satisfied).
 ```
 
+> **Manual step — DINOv3 backbone.** UniDAC's Phase A requires
+> `UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth`
+> (~1.2 GB). Meta gates the file behind a license signature so
+> `setup_envs.sh` cannot fetch it automatically. Apply at
+> <https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/>;
+> the email returns a signed URL — `wget` it (browsers won't follow the
+> redirect) into `UniDAC/checkpoints/`. Or, if you already have it on
+> another machine, `scp` it across.
+
 > **`.venv` is owned by `setup_envs.sh`.** Other helpers (`start_ui.sh`,
 > `mimicanno` CLI) read from the existing `.venv` without modifying
 > it. If `start_ui.sh` reports a `.venv` health-check failure, re-run
