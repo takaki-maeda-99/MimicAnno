@@ -100,6 +100,38 @@ else
     fi
 fi
 
+# --- UniDAC checkpoints ---------------------------------------------------
+# Two files are required for Phase A (depth precompute):
+#   - UniDAC/checkpoints/unidac.pt                                   (public)
+#   - UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth (gated)
+UNIDAC_CKPT_DIR="$REPO_ROOT/UniDAC/checkpoints"
+mkdir -p "$UNIDAC_CKPT_DIR"
+
+if [[ -s "$UNIDAC_CKPT_DIR/unidac.pt" ]]; then
+    skip "UniDAC checkpoint cached at UniDAC/checkpoints/unidac.pt"
+else
+    log "Downloading girish1511/UniDAC/unidac.pt → UniDAC/checkpoints/"
+    if uv run hf download girish1511/UniDAC unidac.pt --local-dir "$UNIDAC_CKPT_DIR"; then
+        ok "UniDAC checkpoint ready"
+    else
+        warn "UniDAC checkpoint download failed."
+        USER_ACTION=1
+    fi
+fi
+
+DINOV3_FILE="dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
+if [[ -s "$UNIDAC_CKPT_DIR/$DINOV3_FILE" ]]; then
+    skip "DINOv3 backbone cached at UniDAC/checkpoints/$DINOV3_FILE"
+else
+    log "Downloading facebook/dinov3/$DINOV3_FILE → UniDAC/checkpoints/"
+    if uv run hf download facebook/dinov3 "$DINOV3_FILE" --local-dir "$UNIDAC_CKPT_DIR"; then
+        ok "DINOv3 backbone ready"
+    else
+        warn "DINOv3 backbone download failed (gated; request access at https://huggingface.co/facebook/dinov3)."
+        USER_ACTION=1
+    fi
+fi
+
 # --- GEM4 QLoRA adapters (public) -----------------------------------------
 # Pulled from Gayagaya/gem4_{4B,26B}_adapter on the Hugging Face Hub.
 # Public repos, no auth required; HF_TOKEN is fine to have set but optional.
