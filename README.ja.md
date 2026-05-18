@@ -131,12 +131,16 @@ mimicanno annotate \
   --sam3-checkpoint sam3/checkpoints/sam3.pt \
   --runs-root    ./runs
 
-# 3. レビュー UI を起動して結果を確認
+# 3. GEM4 episode を Gemma 4 QLoRA アダプタで一括アノテーション
+#    (unsloth_env 必須、下記は 1 ep 切り出しで ~2 分)
+GPU=0 START=0 END=0 bash scripts/run_4B_gem4.sh open_the_jar
+
+# 4. レビュー UI を起動して結果を確認
 bash scripts/start_ui.sh
 # ブラウザで http://localhost:5173/
 ```
 
-3 つとも成功すればインストール健全。詳細フラグや他データセット用途は
+4 つとも成功すればインストール健全。詳細フラグや他データセット用途は
 次節を参照。
 
 ## クイックスタート

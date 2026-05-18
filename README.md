@@ -133,12 +133,16 @@ mimicanno annotate \
   --sam3-checkpoint sam3/checkpoints/sam3.pt \
   --runs-root    ./runs
 
-# 3. Launch the review UI to inspect both outputs
+# 3. Batch-annotate one GEM4 episode with the Gemma 4 QLoRA adapter
+#    (requires unsloth_env; ~2 min for the single-ep slice below)
+GPU=0 START=0 END=0 bash scripts/run_4B_gem4.sh open_the_jar
+
+# 4. Launch the review UI to inspect all outputs
 bash scripts/start_ui.sh
 # Open http://localhost:5173/
 ```
 
-If all three succeed, the install is healthy. Detailed flags and other
+If all four succeed, the install is healthy. Detailed flags and other
 datasets are covered in the next section.
 
 ## Quickstart
