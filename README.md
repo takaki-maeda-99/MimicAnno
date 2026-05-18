@@ -109,16 +109,19 @@ hf download Gayagaya/fisheye_videos_processed --local-dir data/video --repo-type
 
 ### 1. Annotate one episode
 
+Run against the SO101 episode that `setup_envs.sh --weights` already
+fetched into `data/SO101/`:
+
 ```bash
 mimicanno annotate \
-  --video        path/to/dataset/videos/.../episode_000000.mp4 \
-  --parquet      path/to/dataset/data/.../episode_000000.parquet \
+  --video        data/SO101/videos/chunk-000/observation.images.front/episode_000000.mp4 \
+  --parquet      data/SO101/data/chunk-000/episode_000000.parquet \
   --task         "Put the tape into the bottle" \
   --robot        generic \
   --robot-config tests/exports/fixtures/so101_robot_config.yaml \
   --target-phase 4 \
-  --vlm-model    "google/gemma-4-E2B-it@<sha>" \
-  --sam3-checkpoint /path/to/sam3.ckpt \
+  --vlm-model    "google/gemma-4-E2B-it" \
+  --sam3-checkpoint sam3/checkpoints/sam3.pt \
   --runs-root    ./runs
 ```
 
