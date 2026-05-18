@@ -28,6 +28,28 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 
 Linux + `uv`, `conda`, `python3.11+`, `node` (>=22、Vite 8 が Node 20 サポート打ち切り)、`pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
 
+<details>
+<summary>未インストールなら (one-liners — Ubuntu/Debian)</summary>
+
+```bash
+# uv (Python toolchain)
+curl -Ls https://astral.sh/uv/install.sh | sh
+
+# Node 22 (nvm) + pnpm (corepack)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+. "$HOME/.nvm/nvm.sh"
+nvm install 22
+corepack enable && corepack prepare pnpm@latest --activate
+
+# Miniforge (conda)
+curl -L -O https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh
+bash Miniforge3-$(uname)-$(uname -m).sh
+
+# ffmpeg + lsof (apt — distro 違うなら適宜)
+sudo apt-get install -y ffmpeg lsof
+```
+</details>
+
 ```bash
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
