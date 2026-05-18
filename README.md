@@ -198,16 +198,16 @@ It fuses **MediaPipe Hand Landmarker** (2D keypoints + palm-axis-derived wrist r
 ```bash
 # Phase A — depth precomputation
 conda activate unidac
-python scripts/precompute_depth.py --video data/video/new/<NAME>.MP4
+python scripts/precompute_depth.py --video data/video/<NAME>.MP4
 
 # Phase B — hand pose estimation
-python scripts/run_hand_estimation.py --video data/video/new/<NAME>.MP4
+python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4
 
 # Both phases, all videos, parallel across GPUs
 bash scripts/run_all_pipeline.sh
 ```
 
-Outputs land under `data/depth/<NAME>/` and `data/hands/<NAME>/`. Schema, field reference, and batch flags: [`docs/hand-pipeline.md`](docs/hand-pipeline.md).
+Outputs land under `outputs/depth/<NAME>/` and `outputs/hands/<NAME>/`. Schema, field reference, and batch flags: [`docs/hand-pipeline.md`](docs/hand-pipeline.md).
 
 ### Third-party data collection (MediaPipe)
 

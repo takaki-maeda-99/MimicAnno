@@ -198,16 +198,16 @@ GoPro Hero 11 Max Lens Mod の魚眼動画 (2704×1520, 29.97 fps, OPENCV_FISHEY
 ```bash
 # Phase A — 深度前計算
 conda activate unidac
-python scripts/precompute_depth.py --video data/video/new/<NAME>.MP4
+python scripts/precompute_depth.py --video data/video/<NAME>.MP4
 
 # Phase B — 手姿勢推定
-python scripts/run_hand_estimation.py --video data/video/new/<NAME>.MP4
+python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4
 
 # 両 phase をすべての動画について GPU 並列で実行
 bash scripts/run_all_pipeline.sh
 ```
 
-出力は `data/depth/<NAME>/` と `data/hands/<NAME>/` 配下。スキーマ・フィールド定義・バッチオプションは [`docs/hand-pipeline.md`](docs/hand-pipeline.md) を参照。
+出力は `outputs/depth/<NAME>/` と `outputs/hands/<NAME>/` 配下。スキーマ・フィールド定義・バッチオプションは [`docs/hand-pipeline.md`](docs/hand-pipeline.md) を参照。
 
 ### Third-party data collection (MediaPipe)
 
