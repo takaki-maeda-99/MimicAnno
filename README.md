@@ -43,6 +43,12 @@ bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
 # Re-runs are idempotent (each step skips when its sentinel is satisfied).
 ```
 
+> **`.venv` is owned by `setup_envs.sh`.** Other helpers (`start_ui.sh`,
+> `mimicanno` CLI) read from the existing `.venv` without modifying
+> it. If `start_ui.sh` reports a `.venv` health-check failure, re-run
+> `bash scripts/setup_envs.sh --core` to restore the full extras set
+> (`dev`, `vlm`, `sam3`, `server`).
+
 Launch the review UI:
 
 ```bash

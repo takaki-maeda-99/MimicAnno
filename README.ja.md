@@ -43,6 +43,12 @@ bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
 # 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
 
+> **`.venv` の管理は `setup_envs.sh` だけが行います。** 他のヘルパー
+> (`start_ui.sh`、`mimicanno` CLI) は既存の `.venv` を読むだけで変更
+> しません。`start_ui.sh` が `.venv` health-check failure を報告したら、
+> `bash scripts/setup_envs.sh --core` を再実行して full extras
+> (`dev`, `vlm`, `sam3`, `server`) を入れ直してください。
+
 レビュー UI を起動:
 
 ```bash
