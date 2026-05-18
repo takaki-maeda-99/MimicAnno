@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 data/
+outputs/
 logs/
 
 # Virtual env
@@ -64,3 +65,4 @@ docs/phase1-real-data-verification.md
 *.bin
 !tests/**/*.mp4
 !tests/**/*.parquet
+_archive/
