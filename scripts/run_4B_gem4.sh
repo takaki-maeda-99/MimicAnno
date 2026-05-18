@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# GEM4 — Gemma 4 E4B-it (base, no adapter) 推論 (thin wrapper around batch_annotate_4B.py).
+# GEM4 — 4B Unsloth QLoRA アダプタで推論 (thin wrapper around batch_annotate_4B.py).
 #
-# Loads the base Gemma 4 E4B-it model once and reuses it across episodes.
-# Faster than 26B; uses the same phase-label task prompts. Outputs land at
-# `runs/gem4_<task>_4B/`.
+# Loads the 4B QLoRA-fine-tuned adapter once via Unsloth and reuses it
+# across episodes. Faster than 26B but precision-tuned on the same
+# phase-label task. Outputs land at `runs/gem4_<task>_4B/`.
 #
-# Requires: `unsloth_env` conda env and the base model at the path baked
-# into `batch_annotate_4B.py` (`GEMMA_4B_PATH`).
+# Requires: `unsloth_env` conda env, the 4B adapter at
+# `models/gem4_4B_adapter/` (override via ADAPTER env var). Set
+# `ADAPTER=` (empty) to skip the adapter and run the base Gemma 4 E4B-it.
 #
 # Usage:
 #   GPU=0 bash scripts/run_4B_gem4.sh <task>
@@ -54,6 +55,8 @@ if [[ -z "${UNSLOTH_PY:-}" || ! -x "${UNSLOTH_PY:-}" ]]; then
     exit 1
 fi
 PYTHON="$UNSLOTH_PY"
+# ADAPTER unset → default to the 4B adapter dir. ADAPTER= (empty) → base model.
+ADAPTER="${ADAPTER-$REPO/models/gem4_4B_adapter}"
 
 cd "$REPO"
 
@@ -61,6 +64,7 @@ cd "$REPO"
 export BATCH_RUNS_ROOT="${BATCH_RUNS_ROOT:-$REPO/runs/gem4_${TASK_KEY}_4B}"
 
 args=(--dataset "gem4_${TASK_KEY}" --gpu "$GPU")
+[[ -n "$ADAPTER" ]] && args+=(--adapter "$ADAPTER")
 [[ -n "${START:-}" ]] && args+=(--start "$START")
 [[ -n "${END:-}"   ]] && args+=(--end   "$END")
 

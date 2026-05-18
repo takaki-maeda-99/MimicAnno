@@ -74,24 +74,42 @@ def main() -> int:
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--end", type=int, default=None)
     p.add_argument("--gpu", type=int, required=True)
+    p.add_argument(
+        "--adapter",
+        type=str,
+        default=None,
+        help="Optional path to a 4B QLoRA adapter dir (containing adapter_config.json). "
+             "If set, loads via Unsloth instead of base Gemma 4 E4B-it.",
+    )
     args = p.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+    # Unsloth must be imported before torch grabs the CUDA context when
+    # we are going to load a LoRA adapter through it. Mirrors batch_annotate.py.
+    if args.adapter:
+        import unsloth  # noqa: F401
+
     ds = DATASETS[args.dataset]
     end = args.end if args.end is not None else ds["default_end"]
 
-    # --- pre-flight: 4B はローカルパスを @<fake_sha> で渡す (LoRA ではない通常モデル) ---
+    # --- pre-flight: adapter があれば LoRA、無ければ base model ---
     from mimicanno.preflight import resolve_vlm_model, resolve_sam3_checkpoint
-    fake_sha = hashlib.sha1(b"gemma-4-E4B-it-local").hexdigest()
-    vlm_arg = f"{GEMMA_4B_PATH}@{fake_sha}"
+    if args.adapter:
+        adapter_path = Path(args.adapter)
+        fake_sha = hashlib.sha1(b"gem4-4B-adapter:" + str(adapter_path).encode()).hexdigest()
+        vlm_arg = f"{adapter_path}@{fake_sha}"
+    else:
+        fake_sha = hashlib.sha1(b"gemma-4-E4B-it-local").hexdigest()
+        vlm_arg = f"{GEMMA_4B_PATH}@{fake_sha}"
     pre = resolve_vlm_model(vlm_arg, offline=True)
     sam3_sha = resolve_sam3_checkpoint(SAM3_PATH)
-    log.info(f"preflight ok: is_lora={pre.is_lora_adapter} (should be False)")
+    log.info(f"preflight ok: is_lora={pre.is_lora_adapter}")
 
     # --- VLM を1回だけロード ---
-    log.info("loading Gemma 4 E4B-it (one-time)...")
+    log.info("loading 4B QLoRA adapter (one-time)..." if args.adapter
+             else "loading Gemma 4 E4B-it (one-time)...")
     t0 = time.time()
     from mimicanno.config import (
         VLMConfig, AnnotationConfig, BoundaryConfig, MaskOverlayConfig,
@@ -103,7 +121,7 @@ def main() -> int:
         model_id=pre.model_id,
         resolved_checkpoint=pre.resolved_checkpoint,
         fixture_path=pre.fixture_path,
-        is_lora_adapter=False,
+        is_lora_adapter=pre.is_lora_adapter,
         device="cuda",
         keyframes_per_segment=4,
         max_retries=3,
