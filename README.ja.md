@@ -217,13 +217,22 @@ bash scripts/run_all_pipeline.sh
 
 ### Offline / air-gapped deployment
 
-ネット接続のない環境で動かす場合、接続可能なマシンで先に MediaPipe モデルを取得しておきます:
+ネット接続のない環境で動かす場合、接続可能なマシンで先に MediaPipe モデルを取得しておきます。`setup_envs.sh` の `weights` step に含まれてる:
 
 ```bash
-scripts/fetch_mediapipe_model.sh /path/to/deployment/models/hand_landmarker.task
+bash scripts/setup_envs.sh --weights
+# 保存先を指定したい時:
+MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task \
+    bash scripts/setup_envs.sh --weights
 ```
 
-本番環境で `MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task` を設定すれば、パイプラインはネットワーク download をスキップしてこのファイルを使います。URL は `/1/` リビジョンに pin してあり、同梱の fetch スクリプトも同じ pin を使うので、再現可能なバイト列が得られます。
+本番環境で `MIMICANNO_HAND_LANDMARKER_PATH=...` を設定すると、runner の `_resolve_model_path()` は以下の順で asset を解決します:
+
+1. `MIMICANNO_HAND_LANDMARKER_PATH` — 明示的な override。ファイルが無ければ即 fail。
+2. `~/.cache/mimicanno/hand_landmarker.task` — 存在しサイズ検証を通れば、ネットワークアクセス無しで使用。
+3. pin された URL から step 2 の cache に download。
+
+URL は `/1/` リビジョンに pin されており再現可能なバイト列が得られます。step 1 は step 2/3 を短絡するので、air-gapped 環境では step 1 のみが実行されます。
 
 ## サーバ
 

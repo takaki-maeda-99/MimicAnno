@@ -477,7 +477,7 @@ class HandRaw:
 _MP_LANDMARKER = None
 
 # Environment variable that lets production / air-gapped deployments point at
-# a pre-fetched .task asset. See scripts/fetch_mediapipe_model.sh and README
+# a pre-fetched .task asset. See scripts/setup_envs.sh --weights and README
 # (Axis B → Offline / air-gapped deployment).
 _MP_HAND_LANDMARKER_ENV = "MIMICANNO_HAND_LANDMARKER_PATH"
 
@@ -503,7 +503,7 @@ def _resolve_model_path() -> Path:
     1. Environment variable ``MIMICANNO_HAND_LANDMARKER_PATH`` — if set, must
        point at an existing file. Intended for production / air-gapped
        deployments that pre-fetch the model with
-       ``scripts/fetch_mediapipe_model.sh``.
+       ``scripts/setup_envs.sh --weights``.
     2. User cache ``~/.cache/mimicanno/hand_landmarker.task`` — if present
        AND size-verified.
     3. Network download from the pinned URL into the user cache, with atomic
@@ -578,13 +578,21 @@ def _download_and_cache_model() -> Path:
             except Exception as exc:
                 raise RuntimeError(
                     f"MediaPipe model download failed from {_MP_MODEL_URL}: "
-                    f"{exc!r}. If you are in an air-gapped environment, "
-                    f"pre-fetch the file on a host with network access via "
-                    f"scripts/fetch_mediapipe_model.sh and set the environment "
-                    f"variable {_MP_HAND_LANDMARKER_ENV} to its path. See the "
-                    f"README (Axis B → Offline / air-gapped deployment) for "
-                    f"details. MediaPipe Solutions is in Preview, so model "
-                    f"URLs may change; see "
+                    f"{exc!r}.\n"
+                    f"\n"
+                    f"Resolution order used by _resolve_model_path:\n"
+                    f"  1. {_MP_HAND_LANDMARKER_ENV} env var (if set)\n"
+                    f"  2. ~/.cache/mimicanno/hand_landmarker.task (if present)\n"
+                    f"  3. download from the pinned URL (this step just failed)\n"
+                    f"\n"
+                    f"If you are in an air-gapped environment, pre-fetch the "
+                    f"file on a host with network access via "
+                    f"scripts/setup_envs.sh --weights and set the environment "
+                    f"variable {_MP_HAND_LANDMARKER_ENV} to its path; that "
+                    f"short-circuits both the cache lookup and the URL "
+                    f"download. See the README (Axis B → Offline / air-gapped "
+                    f"deployment) for details. MediaPipe Solutions is in "
+                    f"Preview, so model URLs may change; see "
                     f"https://ai.google.dev/edge/mediapipe/legal/tos."
                 ) from exc
             if not _size_ok(tmp_path):
