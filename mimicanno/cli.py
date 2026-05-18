@@ -535,7 +535,7 @@ def serve_cmd(
     ),
     hands_root: Optional[Path] = typer.Option(
         None, "--hands-root",
-        help="hand pipeline output root (data/hands/). Enables /api/hands/ routes.",
+        help="hand pipeline output root (outputs/hands/). Enables /api/hands/ routes.",
     ),
     jobs_dir: Optional[Path] = typer.Option(
         None, "--jobs-dir",
