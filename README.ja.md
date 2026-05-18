@@ -375,7 +375,7 @@ MIMICANNO_REVIEWER=takaki uv run --extra server mimicanno serve \
 
 PATCH 成功時は `runs/index.json.lock` の file lock 下で annotation → manifest → index を atomic に書き換え、新しい `ETag` を返します。内部レイアウト・契約・テスト階層は [`mimicanno/server/README.md`](mimicanno/server/README.md) を参照。
 
-フロントエンド: ビューアを `?api=1` 付きで開くと `/api/runs/` 経由でフェッチし、編集 UI が有効になります。
+フロントエンドはデフォルトで `/api/runs/` を使います。`?api=0` で静的 `runs/` ファイル参照に切替 (read-only、編集 UI 無効)。
 
 ## 開発
 

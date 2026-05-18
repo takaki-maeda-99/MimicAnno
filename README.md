@@ -377,7 +377,7 @@ Endpoints (edit, `If-Match: "<run_hash>"` required):
 
 Each successful PATCH atomically rewrites annotation → manifest → index under a `runs/index.json.lock` file lock and returns the new `ETag`. Internal layout, contracts, and test stratification: [`mimicanno/server/README.md`](mimicanno/server/README.md).
 
-Frontend toggle: visit the viewer with `?api=1` to route fetches through `/api/runs/` and enable edit affordances.
+Frontend uses `/api/runs/` by default; append `?api=0` to read static `runs/` files instead (read-only, no edit affordances).
 
 ## Development
 
