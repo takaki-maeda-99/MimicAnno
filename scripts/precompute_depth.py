@@ -14,13 +14,13 @@ Output layout::
 Usage (run from MimicAnno/ with PYTHONPATH set)::
 
     # 1) mp4 input, every frame
-    python scripts/precompute_depth.py --input data/video/new/GX010085.MP4 --out data/depth/GX010085/
+    python scripts/precompute_depth.py --input data/video/GX010085.MP4 --out outputs/depth/GX010085/
 
     # 2) with visualization videos
-    python scripts/precompute_depth.py --input data/video/new/GX010085.MP4 --out data/depth/GX010085/ --save-viz
+    python scripts/precompute_depth.py --input data/video/GX010085.MP4 --out outputs/depth/GX010085/ --save-viz
 
     # 3) resume a half-finished run (existing .npy files are skipped)
-    python scripts/precompute_depth.py --input data/video/new/GX010085.MP4 --out data/depth/GX010085/
+    python scripts/precompute_depth.py --input data/video/GX010085.MP4 --out outputs/depth/GX010085/
 
     # Add --overwrite to re-process, --limit N for a quick smoke run, --stride K to subsample.
     # --viz-depth-range MIN MAX sets the colormap range (default: 0.3 5.0 metres).

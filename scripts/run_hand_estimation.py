@@ -19,9 +19,9 @@ Output layout::
 Usage::
 
     uv run python scripts/run_hand_estimation.py \\
-        --video data/video/new/GX010085.MP4 \\
-        --depth data/depth/GX010085 \\
-        --out   data/hands/GX010085
+        --video data/video/GX010085.MP4 \\
+        --depth outputs/depth/GX010085 \\
+        --out   outputs/hands/GX010085
 """
 from __future__ import annotations
 

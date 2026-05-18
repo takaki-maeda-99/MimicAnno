@@ -16,8 +16,8 @@ For each file:
     original name with libx264 + yuv420p + faststart
 
 Usage:
-    python scripts/transcode_viz_to_h264.py data/depth/
-    python scripts/transcode_viz_to_h264.py data/depth/ --dry-run
+    python scripts/transcode_viz_to_h264.py outputs/depth/
+    python scripts/transcode_viz_to_h264.py outputs/depth/ --dry-run
 
 The .bak files are left on disk so the operation is reversible; clean up
 with `find <root> -name '*.bak' -delete` once you're satisfied.

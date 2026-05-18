@@ -8,21 +8,21 @@ Usage::
 
     # single frame (PNG)
     python scripts/visualize_depth.py \
-        --depth data/depth/GX010085 \
-        --video data/video/new/GX010085.MP4 \
-        --out   data/depth/GX010085/viz_frame0.png \
+        --depth outputs/depth/GX010085 \
+        --video data/video/GX010085.MP4 \
+        --out   outputs/depth/GX010085/viz_frame0.png \
         --frames 0
 
     # full video (side-by-side original + depth)
     python scripts/visualize_depth.py \
-        --depth data/depth/GX010085 \
-        --video data/video/new/GX010085.MP4 \
-        --out   data/depth/GX010085/viz.mp4
+        --depth outputs/depth/GX010085 \
+        --video data/video/GX010085.MP4 \
+        --out   outputs/depth/GX010085/viz.mp4
 
     # depth only, every 5th frame, half resolution
     python scripts/visualize_depth.py \
-        --depth data/depth/GX010086 \
-        --out   data/depth/GX010086/viz_depth_only.mp4 \
+        --depth outputs/depth/GX010086 \
+        --out   outputs/depth/GX010086/viz_depth_only.mp4 \
         --stride 5 --scale 0.5 --no-side-by-side
 
 Run inside the unidac env with PYTHONPATH set::
