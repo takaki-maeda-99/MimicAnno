@@ -52,6 +52,13 @@ deps_check() {
         fail "frontend deps not installed. Run: bash scripts/setup_envs.sh --frontend"
         exit 1
     fi
+    if ! "$REPO_ROOT/.venv/bin/mimicanno" serve --help >/dev/null 2>&1; then
+        fail ".venv health check failed: 'mimicanno serve --help' did not exit 0.
+       Likely cause: a prior 'uv run --extra X' shrunk the venv and
+       removed packages from [sam3] / [vlm] / [dev] extras.
+       Fix: bash scripts/setup_envs.sh --core"
+        exit 1
+    fi
 }
 
 probe_port() {
@@ -79,7 +86,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Launch backend first, wait until it accepts connections, then frontend.
 # Skips the startup-race ECONNREFUSED noise the proxy would otherwise log.
-uv run --extra server mimicanno serve "${api_args[@]}" &
+uv run --no-sync --extra server mimicanno serve "${api_args[@]}" &
 API_PID=$!
 
 wait_for_api() {
