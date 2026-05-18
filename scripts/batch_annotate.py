@@ -88,7 +88,14 @@ def main() -> int:
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--end", type=int, default=None)
     p.add_argument("--gpu", type=int, required=True)
+    p.add_argument(
+        "--adapter",
+        type=Path,
+        default=None,
+        help="Path to Unsloth QLoRA adapter dir (default: gem4_26B_adapter)",
+    )
     args = p.parse_args()
+    adapter_path = args.adapter or ADAPTER_PATH
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -102,8 +109,8 @@ def main() -> int:
 
     # --- pre-flight (sha 解決のみ; モデルロードはここでは不要) ---
     from mimicanno.preflight import resolve_vlm_model, resolve_sam3_checkpoint
-    fake_sha = hashlib.sha1(b"gem4-26B-adapter").hexdigest()
-    vlm_arg = f"{ADAPTER_PATH}@{fake_sha}"
+    fake_sha = hashlib.sha1(str(adapter_path).encode()).hexdigest()
+    vlm_arg = f"{adapter_path}@{fake_sha}"
     pre = resolve_vlm_model(vlm_arg, offline=True)
     sam3_sha = resolve_sam3_checkpoint(SAM3_PATH)
     log.info(f"preflight ok: is_lora={pre.is_lora_adapter}, sam3_sha={sam3_sha[:20]}...")
