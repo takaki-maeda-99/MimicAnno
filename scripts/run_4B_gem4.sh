@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GEM4 — 4B Unsloth QLoRA アダプタで推論 (thin wrapper around batch_annotate_4B.py).
+# GEM4 — 4B Unsloth QLoRA アダプタで推論 (thin wrapper around batch_annotate.py).
 #
 # Loads the 4B QLoRA-fine-tuned adapter once via Unsloth and reuses it
 # across episodes. Faster than 26B but precision-tuned on the same
@@ -68,4 +68,4 @@ args=(--dataset "gem4_${TASK_KEY}" --gpu "$GPU")
 [[ -n "${START:-}" ]] && args+=(--start "$START")
 [[ -n "${END:-}"   ]] && args+=(--end   "$END")
 
-exec "$PYTHON" scripts/batch_annotate_4B.py "${args[@]}"
+exec "$PYTHON" scripts/batch_annotate.py "${args[@]}"
