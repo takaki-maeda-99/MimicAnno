@@ -129,6 +129,7 @@ export default function RunList({ runSet }: Props = {}) {
               window.location.search = next.toString();
             }}
           >
+            <option value=".">all (merged)</option>
             {runSets.map((rs) => (
               <option key={rs.name} value={rs.name}>
                 {rs.label}
@@ -142,7 +143,6 @@ export default function RunList({ runSet }: Props = {}) {
           <tr>
             <th>episode</th>
             <th>run_set</th>
-            <th>run_hash</th>
             <th>generated_at</th>
             <th>task</th>
           </tr>
@@ -163,7 +163,6 @@ export default function RunList({ runSet }: Props = {}) {
                   </a>
                 </td>
                 <td>{e.run_set ?? "—"}</td>
-                <td><code>{e.run_hash_short}</code></td>
                 <td>{e.generated_at}</td>
                 <td>{e.task_text}</td>
               </tr>

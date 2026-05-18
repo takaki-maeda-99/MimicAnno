@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  HandEpisodeEntry,
   HandIndexDoc,
   HandMetaDoc,
   HandSignalFrame,
@@ -218,6 +219,7 @@ function HandDataPanel({
 
 export default function HandViewer({ episodeId }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [episodes, setEpisodes] = useState<HandEpisodeEntry[]>([]);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [widthPx, setWidthPx] = useState(0);
@@ -291,6 +293,8 @@ export default function HandViewer({ episodeId }: Props) {
         if (!cancelled) setState({ kind: "unavailable" });
         return;
       }
+
+      if (!cancelled) setEpisodes(indexDoc.episodes);
 
       const epEntry = indexDoc.episodes.find((e) => e.episode_id === episodeId);
       if (!epEntry) {
@@ -392,6 +396,48 @@ export default function HandViewer({ episodeId }: Props) {
       <div className="back-link">
         <a href="/">← runs</a>
       </div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
+        <aside
+          className="hand-sidebar"
+          style={{
+            width: "200px",
+            flexShrink: 0,
+            maxHeight: "85vh",
+            overflowY: "auto",
+            borderRight: "1px solid #dee2e6",
+            paddingRight: "6px",
+          }}
+        >
+          <h4 style={{ margin: "4px 0" }}>hand episodes</h4>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {episodes
+              .slice()
+              .sort((a, b) => a.episode_id.localeCompare(b.episode_id))
+              .map((e) => {
+                const isCurrent = e.episode_id === episodeId;
+                const href = `?hand=${encodeURIComponent(e.episode_id)}`;
+                return (
+                  <li key={e.episode_id}>
+                    <a
+                      href={href}
+                      style={{
+                        display: "block",
+                        padding: "3px 6px",
+                        borderRadius: "4px",
+                        fontWeight: isCurrent ? 600 : 400,
+                        color: isCurrent ? "#0d47a1" : "#5a9bf6",
+                        background: isCurrent ? "#dbeafe" : "transparent",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {e.episode_id}
+                    </a>
+                  </li>
+                );
+              })}
+          </ul>
+        </aside>
+        <div style={{ flex: 1, minWidth: 0 }}>
       <div className="hand-viewer-layout">
         <div className="hand-viewer-left" ref={rowRef}>
           <VideoWithAxes
@@ -450,6 +496,8 @@ export default function HandViewer({ episodeId }: Props) {
             <div className="depth-unavailable">Depth video not found</div>
           )}
           <HandDataPanel frameKey={frameKey} signals={signals} />
+        </div>
+      </div>
         </div>
       </div>
     </div>

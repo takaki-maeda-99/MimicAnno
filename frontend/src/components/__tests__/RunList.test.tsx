@@ -106,9 +106,11 @@ it("shows run-set dropdown when multiple run-sets are available", async () => {
   await waitFor(() => screen.getByRole("combobox", { name: /run.set/i }));
   const select = screen.getByRole("combobox", { name: /run.set/i });
   const options = select.querySelectorAll("option");
-  expect(options).toHaveLength(2);
-  expect(options[0].value).toBe("so101_phase4_v5");
-  expect(options[1].value).toBe("piper_phase4_v5");
+  expect(options).toHaveLength(3);
+  expect(options[0].value).toBe(".");
+  expect(options[0].textContent).toBe("all (merged)");
+  expect(options[1].value).toBe("so101_phase4_v5");
+  expect(options[2].value).toBe("piper_phase4_v5");
 });
 
 it("does not show run-set dropdown in legacy mode (single entry)", async () => {
