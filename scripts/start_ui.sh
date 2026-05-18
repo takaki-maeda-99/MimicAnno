@@ -52,11 +52,11 @@ deps_check() {
         fail "frontend deps not installed. Run: bash scripts/setup_envs.sh --frontend"
         exit 1
     fi
-    if ! "$REPO_ROOT/.venv/bin/mimicanno" serve --help >/dev/null 2>&1; then
-        fail ".venv health check failed: 'mimicanno serve --help' did not exit 0.
-       Likely cause: a prior 'uv run --extra X' shrunk the venv and
-       removed packages from [sam3] / [vlm] / [dev] extras.
-       Fix: bash scripts/setup_envs.sh --core"
+    if ! timeout 30 "$REPO_ROOT/.venv/bin/mimicanno" serve --help >/dev/null 2>&1; then
+        fail ".venv health check failed: 'mimicanno serve --help' did not exit 0 within 30s."
+        printf '       Likely cause: a prior `uv run --extra X` shrunk the venv and\n' >&2
+        printf '       removed packages from [sam3] / [vlm] / [dev] extras.\n' >&2
+        printf '       Fix: bash scripts/setup_envs.sh --core\n' >&2
         exit 1
     fi
 }
