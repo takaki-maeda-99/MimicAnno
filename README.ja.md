@@ -54,7 +54,7 @@ sudo apt-get install -y ffmpeg lsof
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
-# 一発セットアップ (submodules / core / unidac / frontend / gated weights)。
+# 一発セットアップ (submodules / core / unidac / frontend / gated assets)。
 # Hugging Face にログインしておく。gated repo (SAM3 / Gemma 4) には必須、
 # それ以外も **強く推奨** — 匿名 DL は IP 単位レート制限があり、weights+
 # datasets を一気に DL するとほぼ確実に弾かれる。
@@ -63,7 +63,7 @@ bash scripts/setup_envs.sh
 
 # 個別実行 (不要な step を skip):
 bash scripts/setup_envs.sh --core --frontend     # UI のみ
-bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
+bash scripts/setup_envs.sh --all --skip-assets  # モデル DL を skip
 
 # 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
@@ -99,7 +99,7 @@ uv pip install 'setuptools<81'        # sam3 は pkg_resources を使うので s
 
 ## データ取得
 
-clone 直後はデータが手元にありません。`setup_envs.sh` の `weights`
+clone 直後はデータが手元にありません。`setup_envs.sh` の `assets`
 step がモデル重みと一緒に public dataset を DL します:
 
 | HF dataset | 配置先 | 内容 |
@@ -200,7 +200,7 @@ wrapper はいずれも VLM (Gemma 4 系) をプロセス内 **1 回だけ**
 ロードして全 episode で使い回すので、エピソード単位 CLI と比べて
 モデルロード時間 (~2 分/ep) を ep 回数分節約できる。
 
-4B / 26B Unsloth QLoRA アダプタは `setup_envs.sh --weights` が
+4B / 26B Unsloth QLoRA アダプタは `setup_envs.sh --assets` が
 <https://huggingface.co/Gayagaya/gem4_4B_adapter> と
 <https://huggingface.co/Gayagaya/gem4_26B_adapter> から自動 DL。
 手動取得:
@@ -331,13 +331,13 @@ bash scripts/run_all_pipeline.sh --skip-phase-a --skip-phase-b   # depth-viz だ
 
 ### Offline / air-gapped deployment
 
-ネット接続のない環境で動かす場合、接続可能なマシンで先に MediaPipe モデルを取得しておきます。`setup_envs.sh` の `weights` step に含まれてる:
+ネット接続のない環境で動かす場合、接続可能なマシンで先に MediaPipe モデルを取得しておきます。`setup_envs.sh` の `assets` step に含まれてる:
 
 ```bash
-bash scripts/setup_envs.sh --weights
+bash scripts/setup_envs.sh --assets
 # 保存先を指定したい時:
 MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task \
-    bash scripts/setup_envs.sh --weights
+    bash scripts/setup_envs.sh --assets
 ```
 
 本番環境で `MIMICANNO_HAND_LANDMARKER_PATH=...` を設定すると、runner の `_resolve_model_path()` は以下の順で asset を解決します:

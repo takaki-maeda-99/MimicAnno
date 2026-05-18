@@ -1,9 +1,10 @@
 #!/bin/bash
-# Download gated HF weights: SAM3 snapshot + Gemma 4.
+# Download model weights + public datasets from Hugging Face.
+# Includes: SAM3, Gemma 4, MediaPipe, UniDAC + DINOv3, GEM4 4B/26B
+# QLoRA adapters, SO101 / fisheye / GEM4 datasets.
 #
-# Idempotency sentinels:
-#   - sam3/checkpoints/sam3.pt AND model.safetensors both >0 bytes → skip SAM3
-#   - huggingface_hub.try_to_load_from_cache returns a path → skip Gemma
+# Each block has its own idempotency check (file size, HF cache hit,
+# or local dir non-empty) so re-runs are no-ops.
 #
 # Auth: requires HF_TOKEN env OR prior `hf auth login`. On miss, WARN.
 
@@ -19,7 +20,7 @@ cd "$REPO_ROOT"
 
 # Must have core synced (huggingface_hub lives in --extra vlm/sam3).
 if [[ ! -x ".venv/bin/python" ]]; then
-    fail "weights step requires uv-managed .venv. Run setup_envs.sh --core first."
+    fail "assets step requires uv-managed .venv. Run setup_envs.sh --core first."
     exit "$STEP_FAIL"
 fi
 
@@ -52,7 +53,7 @@ else
             ok "SAM3 snapshot ready"
         else
             warn "SAM3 snapshot downloaded but missing expected files (sam3.pt / model.safetensors)."
-            warn "Try SAM3_HF_REPO=<other-id> bash scripts/setup/weights.sh"
+            warn "Try SAM3_HF_REPO=<other-id> bash scripts/setup/assets.sh"
             USER_ACTION=1
         fi
     else

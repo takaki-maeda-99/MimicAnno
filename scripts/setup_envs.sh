@@ -2,15 +2,15 @@
 # One-shot environment setup for MimicAnno.
 #
 # Steps (in order, when selected):
-#   submodules → core → unidac → frontend → weights
+#   submodules → core → unidac → frontend → assets
 #
 # Usage:
 #   bash scripts/setup_envs.sh                # --all (default)
 #   bash scripts/setup_envs.sh --core         # MimicAnno core (uv) only
 #   bash scripts/setup_envs.sh --unidac
-#   bash scripts/setup_envs.sh --all --skip-weights
+#   bash scripts/setup_envs.sh --all --skip-assets
 #
-# Auth (for weights step):
+# Auth (for assets step):
 #   Either export HF_TOKEN or run `hf auth login` beforehand.
 
 set -euo pipefail
@@ -27,18 +27,18 @@ DO_SUBMODULES=0
 DO_CORE=0
 DO_UNIDAC=0
 DO_FRONTEND=0
-DO_WEIGHTS=0
-SKIP_WEIGHTS=0
+DO_ASSETS=0
+SKIP_ASSETS=0
 EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --all)       DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_WEIGHTS=1; EXPLICIT=1; shift ;;
+        --all)       DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_ASSETS=1; EXPLICIT=1; shift ;;
         --core)      DO_CORE=1;     EXPLICIT=1; shift ;;
         --unidac)    DO_UNIDAC=1;   EXPLICIT=1; shift ;;
         --frontend)  DO_FRONTEND=1; EXPLICIT=1; shift ;;
-        --weights)   DO_WEIGHTS=1;  EXPLICIT=1; shift ;;
-        --skip-weights) SKIP_WEIGHTS=1; shift ;;
+        --assets)   DO_ASSETS=1;  EXPLICIT=1; shift ;;
+        --skip-assets) SKIP_ASSETS=1; shift ;;
         --help|-h)
             sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -47,18 +47,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$EXPLICIT" -eq 0 ]]; then
-    DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_WEIGHTS=1
+    DO_SUBMODULES=1; DO_CORE=1; DO_UNIDAC=1; DO_FRONTEND=1; DO_ASSETS=1
 fi
-if [[ "$SKIP_WEIGHTS" -eq 1 ]]; then
-    DO_WEIGHTS=0
+if [[ "$SKIP_ASSETS" -eq 1 ]]; then
+    DO_ASSETS=0
 fi
-# --weights implies --core (hf lives in .venv)
-if [[ "$DO_WEIGHTS" -eq 1 && "$DO_CORE" -eq 0 ]]; then
+# --assets implies --core (hf lives in .venv)
+if [[ "$DO_ASSETS" -eq 1 && "$DO_CORE" -eq 0 ]]; then
     DO_CORE=1
-    log "--weights implies --core; adding core step."
+    log "--assets implies --core; adding core step."
 fi
 # Anything but pure --core implies --submodules so the dirs exist.
-if [[ "$DO_SUBMODULES" -eq 0 && ("$DO_UNIDAC" -eq 1 || "$DO_WEIGHTS" -eq 1) ]]; then
+if [[ "$DO_SUBMODULES" -eq 0 && ("$DO_UNIDAC" -eq 1 || "$DO_ASSETS" -eq 1) ]]; then
     DO_SUBMODULES=1
     log "Selected steps depend on submodules; adding submodules step."
 fi
@@ -67,7 +67,7 @@ fi
 # Preflight
 log "=== Preflight ==="
 require_tool git
-[[ "$DO_CORE" -eq 1 || "$DO_WEIGHTS" -eq 1 ]] && require_tool uv "curl -Ls https://astral.sh/uv/install.sh | sh"
+[[ "$DO_CORE" -eq 1 || "$DO_ASSETS" -eq 1 ]] && require_tool uv "curl -Ls https://astral.sh/uv/install.sh | sh"
 [[ "$DO_UNIDAC" -eq 1 ]] && require_tool conda "Install miniforge or anaconda"
 [[ "$DO_FRONTEND" -eq 1 ]] && { require_tool node "Install Node >=20"; require_tool pnpm "corepack enable && corepack prepare pnpm@latest --activate"; }
 [[ "$DO_UNIDAC" -eq 1 ]] && check_optional curl "UniDAC weights DL"
@@ -82,7 +82,7 @@ fi
 # ---------------------------------------------------------------------------
 # Ensure standard I/O directories exist so the pipeline can write without
 # needing each script to mkdir -p its own. data/video/ is the GoPro source
-# (populated by --weights from Gayagaya/fisheye_videos_processed or by hand);
+# (populated by --assets from Gayagaya/fisheye_videos_processed or by hand);
 # outputs/{depth,hands}/ are generated artifacts.
 mkdir -p data/video outputs/depth outputs/hands
 
@@ -123,7 +123,7 @@ step_and_track() {
 [[ "$DO_CORE"       -eq 1 ]] && step_and_track core       "$SCRIPT_DIR/setup/core.sh"
 [[ "$DO_UNIDAC"     -eq 1 ]] && step_and_track unidac     "$SCRIPT_DIR/setup/unidac.sh"
 [[ "$DO_FRONTEND"   -eq 1 ]] && step_and_track frontend   "$SCRIPT_DIR/setup/frontend.sh"
-[[ "$DO_WEIGHTS"    -eq 1 ]] && step_and_track weights    "$SCRIPT_DIR/setup/weights.sh"
+[[ "$DO_ASSETS"    -eq 1 ]] && step_and_track assets    "$SCRIPT_DIR/setup/assets.sh"
 
 summary_print
 

@@ -54,7 +54,7 @@ sudo apt-get install -y ffmpeg lsof
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
-# One-shot bootstrap (submodules, core, unidac, frontend, gated weights).
+# One-shot bootstrap (submodules, core, unidac, frontend, gated assets).
 # Authenticate to Hugging Face first. Required for gated repos (SAM3,
 # Gemma 4) and **strongly recommended for everything else** — anonymous
 # downloads share a per-IP rate limit that the full weights+datasets
@@ -63,7 +63,7 @@ bash scripts/setup_envs.sh
 
 # Selective install (skip steps you don't need):
 bash scripts/setup_envs.sh --core --frontend     # UI-only path
-bash scripts/setup_envs.sh --all --skip-weights  # no model DLs
+bash scripts/setup_envs.sh --all --skip-assets  # no model DLs
 
 # Re-runs are idempotent (each step skips when its sentinel is satisfied).
 ```
@@ -100,7 +100,7 @@ redirect) into `UniDAC/checkpoints/`. Or `scp` it from another machine.
 
 ## Getting data
 
-A fresh clone has no data. The `weights` step of `setup_envs.sh`
+A fresh clone has no data. The `assets` step of `setup_envs.sh`
 fetches these public datasets in addition to model weights:
 
 | HF dataset | Local path | Contents |
@@ -203,7 +203,7 @@ reuse it across episodes, avoiding the ~2 min/ep model-load tax the
 single-episode CLI would otherwise pay.
 
 The 4B and 26B Unsloth QLoRA adapters are pulled by
-`setup_envs.sh --weights` from
+`setup_envs.sh --assets` from
 <https://huggingface.co/Gayagaya/gem4_4B_adapter> and
 <https://huggingface.co/Gayagaya/gem4_26B_adapter>; manual fetch:
 
@@ -333,13 +333,13 @@ This pipeline uses **MediaPipe Solutions** for hand detection. MediaPipe process
 
 ### Offline / air-gapped deployment
 
-For environments without internet access, pre-fetch the MediaPipe model on a machine with connectivity. The `weights` step of `setup_envs.sh` handles it:
+For environments without internet access, pre-fetch the MediaPipe model on a machine with connectivity. The `assets` step of `setup_envs.sh` handles it:
 
 ```bash
-bash scripts/setup_envs.sh --weights
+bash scripts/setup_envs.sh --assets
 # or, to control the destination:
 MIMICANNO_HAND_LANDMARKER_PATH=/path/to/deployment/models/hand_landmarker.task \
-    bash scripts/setup_envs.sh --weights
+    bash scripts/setup_envs.sh --assets
 ```
 
 Then set `MIMICANNO_HAND_LANDMARKER_PATH=...` in the production environment. The runner's `_resolve_model_path()` resolves the asset in this order:
