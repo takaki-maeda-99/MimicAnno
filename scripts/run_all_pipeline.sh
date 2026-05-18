@@ -240,6 +240,7 @@ phase_b() {
             --video "$(resolve_video "$name")" \
             --depth "$DEPTH_DIR/$name" \
             --out   "$out" \
+            --full-signals \
             $overwrite_flag \
         >> "$logf" 2>&1
     log "Phase B $name done"
