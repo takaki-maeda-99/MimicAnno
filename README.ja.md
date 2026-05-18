@@ -155,52 +155,52 @@ mimicanno export \
 
 冪等: 同一引数での再実行は短絡 (no-op)。
 
-### 3. GEM4 タスクを 26B QLoRA アダプタで一括アノテーション
+### 3. GEM4 データセットの一括アノテーション
 
-`scripts/batch_annotate.py` の thin wrapper。26B VLM を **1 回だけ**
-ロードして全 episode で使い回すので、CLI 直叩きと比べてモデルロード
-時間 (~2 分/ep) を ep 回数分節約できる。`unsloth_env` conda 環境と
-`models/gem4_26B_adapter/` が必要。
+ここでの "GEM4" は Gemma-4-VLA 学習用に収集されたデータセット族
+(`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`)。下記
+wrapper はいずれも VLM (Gemma 4 系) をプロセス内 **1 回だけ**
+ロードして全 episode で使い回すので、エピソード単位 CLI と比べて
+モデルロード時間 (~2 分/ep) を ep 回数分節約できる。
 
-4B / 26B アダプタは Hugging Face で公開済:
+4B / 26B Unsloth QLoRA アダプタは `setup_envs.sh --weights` が
+<https://huggingface.co/Gayagaya/gem4_4B_adapter> と
+<https://huggingface.co/Gayagaya/gem4_26B_adapter> から自動 DL。
+手動取得:
 
 ```bash
 hf download Gayagaya/gem4_4B_adapter  --local-dir models/gem4_4B_adapter
 hf download Gayagaya/gem4_26B_adapter --local-dir models/gem4_26B_adapter
 ```
 
-リポ: <https://huggingface.co/Gayagaya/gem4_4B_adapter>,
-<https://huggingface.co/Gayagaya/gem4_26B_adapter>。
-
-タスクごとに 1 本 — `run_26B_gem4_<task>.sh`
-(`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`):
+**26B QLoRA アダプタ** (`unsloth_env` conda 環境必須):
 
 ```bash
 # GPU 1 枚で 1 タスクの全 episode を流す
-GPU=0 bash scripts/run_26B_gem4_open_the_jar.sh
+GPU=0 bash scripts/run_26B_gem4.sh open_the_jar
 
 # 2 GPU で episode 範囲を分割して並列実行
-GPU=0 START=0   END=151 bash scripts/run_26B_gem4_pick_up_bottle.sh &
-GPU=1 START=152 END=303 bash scripts/run_26B_gem4_pick_up_bottle.sh
+GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
+GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 ```
 
-出力先デフォルトは `runs/gem4_<task>_26B/`。SO101 等 wrapper が無い
-データセットは `batch_annotate.py` を直接呼ぶ:
+出力先は `runs/gem4_<task>_26B/`。
+
+**4B QLoRA アダプタ** (同じ `unsloth_env`、26B より軽量で高速):
+
+```bash
+GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
+GPU=0 START=0 END=103 bash scripts/run_4B_gem4.sh replace_the_cookie &
+ADAPTER=/other/path GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
+```
+
+出力先は `runs/gem4_<task>_4B/`。両 wrapper とも実体は
+`scripts/batch_annotate.py` の薄いラッパ。SO101 等 wrapper が無い
+データセットは直叩き:
 
 ```bash
 python scripts/batch_annotate.py --dataset so101 --gpu 0
 ```
-
-**4B ベースライン** (素の Gemma 4 E4B-it を transformers で直接ロード、
-QLoRA なし) は `scripts/batch_annotate_4B.py` を直接呼ぶ。26B より高速
-だが精度寄りではない。リポジトリの `.venv` (uv) で動く、`unsloth_env` 不要:
-
-```bash
-uv run python scripts/batch_annotate_4B.py --dataset gem4_open_the_jar --gpu 0
-uv run python scripts/batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 0 --start 0 --end 103
-```
-
-出力先は `runs/gem4_<task>_4B/` (26B 版と同じ CLI shape)。
 
 ### 4. プログラマティック API
 

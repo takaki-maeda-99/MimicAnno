@@ -157,49 +157,51 @@ Other modes:
 
 Idempotent: re-running with identical args short-circuits to a no-op.
 
-### 3. Batch-annotate a GEM4 task with the 26B QLoRA adapter
+### 3. Batch-annotate a GEM4 dataset
 
-Thin wrapper around `scripts/batch_annotate.py` that loads the 26B VLM
-**once** and reuses it across episodes — avoids the ~2 min/ep model
-load the CLI would otherwise pay. Requires the `unsloth_env` conda env
-and `models/gem4_26B_adapter/`.
+"GEM4" here is the dataset family — `open_the_jar`, `pick_up_bottle`,
+`replace_the_cookie` — collected for Gemma-4-VLA training. Both
+wrappers below load the VLM (Gemma 4 family) **once per process** and
+reuse it across episodes, avoiding the ~2 min/ep model-load tax the
+single-episode CLI would otherwise pay.
 
-The 4B and 26B adapters are published on Hugging Face. Pull them with:
+The 4B and 26B Unsloth QLoRA adapters are pulled by
+`setup_envs.sh --weights` from
+<https://huggingface.co/Gayagaya/gem4_4B_adapter> and
+<https://huggingface.co/Gayagaya/gem4_26B_adapter>; manual fetch:
 
 ```bash
 hf download Gayagaya/gem4_4B_adapter  --local-dir models/gem4_4B_adapter
 hf download Gayagaya/gem4_26B_adapter --local-dir models/gem4_26B_adapter
 ```
 
-Repos: <https://huggingface.co/Gayagaya/gem4_4B_adapter>,
-<https://huggingface.co/Gayagaya/gem4_26B_adapter>.
-
-One script per task — `run_26B_gem4_<task>.sh` for
-`open_the_jar` / `pick_up_bottle` / `replace_the_cookie`:
+**26B QLoRA adapter** (requires the `unsloth_env` conda env):
 
 ```bash
 # All episodes of one task, one GPU
-GPU=0 bash scripts/run_26B_gem4_open_the_jar.sh
+GPU=0 bash scripts/run_26B_gem4.sh open_the_jar
 
 # Split episode range across two GPUs in parallel
-GPU=0 START=0   END=151 bash scripts/run_26B_gem4_pick_up_bottle.sh &
-GPU=1 START=152 END=303 bash scripts/run_26B_gem4_pick_up_bottle.sh
+GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
+GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 ```
 
-Outputs land at `runs/gem4_<task>_26B/`. For SO101 or anything else not
-wrapped, run `scripts/batch_annotate.py` directly:
+Outputs land at `runs/gem4_<task>_26B/`.
+
+**4B QLoRA adapter** (same `unsloth_env`, faster, lighter footprint):
+
+```bash
+GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
+GPU=0 START=0 END=103 bash scripts/run_4B_gem4.sh replace_the_cookie &
+ADAPTER=/other/path GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
+```
+
+Outputs land at `runs/gem4_<task>_4B/`. Both wrappers are thin shells
+over `scripts/batch_annotate.py`; for SO101 or anything else not
+wrapped, run that directly:
 
 ```bash
 python scripts/batch_annotate.py --dataset so101 --gpu 0
-```
-
-For the **4B baseline** (Gemma 4 E4B-it via transformers, no QLoRA), call
-`scripts/batch_annotate_4B.py` directly. Faster than 26B but lower
-quality. Runs in the repo's `.venv` (uv), no `unsloth_env` needed:
-
-```bash
-uv run python scripts/batch_annotate_4B.py --dataset gem4_open_the_jar --gpu 0
-uv run python scripts/batch_annotate_4B.py --dataset gem4_pick_up_bottle --gpu 0 --start 0 --end 103
 ```
 
 Outputs land at `runs/gem4_<task>_4B/` (same CLI shape as the 26B version).
