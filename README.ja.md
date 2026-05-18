@@ -300,7 +300,7 @@ GoPro Hero 11 Max Lens Mod の魚眼動画 (2704×1520, 29.97 fps, OPENCV_FISHEY
 ```bash
 # Phase A — 深度前計算
 conda activate unidac
-python scripts/precompute_depth.py --video data/video/<NAME>.MP4
+python scripts/precompute_depth.py --input data/video/<NAME>.MP4
 
 # Phase B — 手姿勢推定
 python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4

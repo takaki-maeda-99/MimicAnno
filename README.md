@@ -302,7 +302,7 @@ It fuses **MediaPipe Hand Landmarker** (2D keypoints + palm-axis-derived wrist r
 ```bash
 # Phase A — depth precomputation
 conda activate unidac
-python scripts/precompute_depth.py --video data/video/<NAME>.MP4
+python scripts/precompute_depth.py --input data/video/<NAME>.MP4
 
 # Phase B — hand pose estimation
 python scripts/run_hand_estimation.py --video data/video/<NAME>.MP4
