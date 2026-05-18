@@ -139,8 +139,8 @@ def test_target_phase_3_dispatches_to_phase3_orchestrator(
     ]
     with (
         mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
-        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
-        mock.patch("mimicanno.cli.annotate_episode") as mock_p1,
+        mock.patch("mimicanno.pipeline.annotate_episode_phase3") as mock_p3,
+        mock.patch("mimicanno.pipeline.annotate_episode") as mock_p1,
     ):
         result = runner.invoke(app, args, catch_exceptions=False)
 
@@ -169,7 +169,7 @@ def test_track_stride_frames_flag_resolved_into_tracking_config(
     ]
     with (
         mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
-        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+        mock.patch("mimicanno.pipeline.annotate_episode_phase3") as mock_p3,
     ):
         result = runner.invoke(app, args, catch_exceptions=False)
 
@@ -198,7 +198,7 @@ def test_sam3_offload_default_is_true(
     ]
     with (
         mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
-        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+        mock.patch("mimicanno.pipeline.annotate_episode_phase3") as mock_p3,
     ):
         result = runner.invoke(app, args, catch_exceptions=False)
 
@@ -222,7 +222,7 @@ def test_sam3_offload_disable_flag_propagates(
     ]
     with (
         mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
-        mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+        mock.patch("mimicanno.pipeline.annotate_episode_phase3") as mock_p3,
     ):
         result = runner.invoke(app, args, catch_exceptions=False)
 
@@ -254,7 +254,7 @@ def test_sam3_offload_included_in_config_hash(
         ]
         with (
             mock.patch(_SAM3_IMPORT_CHECK, return_value=None),
-            mock.patch("mimicanno.cli.annotate_episode_phase3") as mock_p3,
+            mock.patch("mimicanno.pipeline.annotate_episode_phase3") as mock_p3,
         ):
             result = runner.invoke(app, args, catch_exceptions=False)
         assert result.exit_code == 0

@@ -45,15 +45,6 @@ from mimicanno.errors import (  # noqa: E402
     VLMModelRequired,
     write_error_json,
 )
-from mimicanno.exports.bulk import bulk_export  # noqa: E402
-from mimicanno.exports.profile import ExportProfile  # noqa: E402
-from mimicanno.pipeline import (  # noqa: E402
-    AnnotateRequest,
-    annotate_episode,
-    annotate_episode_phase3,
-    annotate_episode_phase4,
-)
-from mimicanno.preflight import resolve_sam3_checkpoint, resolve_vlm_model  # noqa: E402
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -171,6 +162,13 @@ def annotate(
     ),
 ) -> None:
     """Annotate a single LeRobot episode and publish a Phase-1 run directory."""
+    from mimicanno.pipeline import (
+        AnnotateRequest,
+        annotate_episode,
+        annotate_episode_phase3,
+        annotate_episode_phase4,
+    )
+    from mimicanno.preflight import resolve_sam3_checkpoint, resolve_vlm_model
     try:
         boundary = (
             load_boundary_config_yaml(boundary_config)
@@ -404,6 +402,8 @@ def export_cmd(
     ),
 ) -> None:
     """Export annotated episodes to a SARM-trainable LeRobot v3 dataset."""
+    from mimicanno.exports.bulk import bulk_export
+    from mimicanno.exports.profile import ExportProfile
     # Validate output-mode mutex (spec §6).
     mode_flags = sum([symlink_data, copy_data, in_place])
     if mode_flags > 1:

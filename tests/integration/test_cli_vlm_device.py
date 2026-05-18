@@ -67,8 +67,8 @@ def _run_with_captured_config(
     )
 
     with (
-        patch("mimicanno.cli.resolve_vlm_model", return_value=fake_resolution),
-        patch("mimicanno.cli.annotate_episode", fake_pipeline),
+        patch("mimicanno.preflight.resolve_vlm_model", return_value=fake_resolution),
+        patch("mimicanno.pipeline.annotate_episode", fake_pipeline),
     ):
         result = runner.invoke(
             app,
