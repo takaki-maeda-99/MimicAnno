@@ -77,7 +77,7 @@ script 化していません。初回のみ:
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
 uv pip install unsloth
-uv pip install -e .   # MimicAnno 本体 (wrapper が `import mimicanno` できるように)
+uv pip install -e .
 ```
 
 `uv pip` で unsloth の CUDA 制約に弾かれた場合は plain pip にフォールバック

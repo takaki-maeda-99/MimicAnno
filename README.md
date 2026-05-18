@@ -78,7 +78,7 @@ fragile to script. Create the env once:
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
 uv pip install unsloth
-uv pip install -e .   # MimicAnno itself, so the wrappers can `import mimicanno`
+uv pip install -e .
 ```
 
 If `uv pip` rejects unsloth's CUDA constraints, fall back to plain
