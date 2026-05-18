@@ -5,6 +5,3 @@
 [submodule "UniDAC"]
 	path = UniDAC
 	url = git@github.com:gayagayataiga/UniDAC.git
-[submodule "hamer"]
-	path = hamer
-	url = git@github.com:gayagayataiga/hamer.git
