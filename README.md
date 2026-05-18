@@ -78,7 +78,7 @@ fragile to script. Create the env once:
 conda create -n unsloth_env python=3.11 -y
 conda activate unsloth_env
 uv pip install unsloth
-uv pip install -e .
+uv pip install -e '.[sam3]'   # [sam3] extra so batch_annotate.py can import the vendored sam3 submodule
 ```
 
 If `uv pip` rejects unsloth's CUDA constraints, fall back to plain
