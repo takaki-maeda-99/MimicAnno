@@ -1,7 +1,7 @@
 """Tests for pipeline._back_warp_depth (Phase 2c).
 
 Run inside the unidac env: ``/home/gayagaya/anaconda3/envs/unidac/bin/python``.
-HaMeR is not exercised here (that's a different env).
+The hand landmarker backend is not exercised here (that's a different env).
 """
 from __future__ import annotations
 

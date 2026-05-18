@@ -23,7 +23,7 @@ function extractSeries(
 }
 
 function robustRange(pts: DataPoint[]): { minVal: number; maxVal: number } {
-  // Use only depth_ok=true values to avoid outliers from HaMeR pseudo-metric frames.
+  // Use only depth_ok=true values to avoid outliers from the depth-fallback frames.
   const vals: number[] = [];
   for (const pt of pts) {
     if (!pt || !pt.depth_ok) continue;

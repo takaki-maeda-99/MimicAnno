@@ -19,7 +19,7 @@ from scripts.run_hand_estimation import _generate_signals
 
 
 # ---------------------------------------------------------------------------
-# Minimal HandEstimate stub (avoids importing HaMeR deps in CI)
+# Minimal HandEstimate stub (avoids importing heavy deps in CI)
 
 @dataclass
 class _FakeHandEstimate:

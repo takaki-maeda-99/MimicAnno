@@ -21,18 +21,18 @@ SARM-trainable LeRobot v3 dataset (subtask_index + sidecar)
 - **SAM3 物体追跡** — task text からプロンプト自動生成、サンプリングフレーム追跡、統合境界スコア。
 - **時系列スムージング** — 同一ラベル merge / min-duration 吸収 / Viterbi relabel (オプション)。
 - **SARM 即学習可能な export** — フレームごとの `subtask_index`、エピソードごとのサブタスクリスト、ロスレス `mimicanno_segments.parquet` サイドカー、atomic publish、冪等な reuse。
-- **読み取り専用 React/Vite ビューア** — タイムライン + 波形 + 境界マーカー (`frontend/`)。
+- **React/Vite レビュー UI** — タイムライン + 波形 + 境界マーカー、HTTP バックエンド経由で phase / boundary / reviewed / label の編集に対応。
 - **プラガブルなロボットアダプタ** — SO100 / Koch / Aloha 同梱、SO101 や任意の LeRobot v3 レイアウトは YAML で設定可能。
 
 ## インストール
 
-Linux + `uv`, `conda`, `python3.10`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
+Linux + `uv`, `conda`, `python3.11+`, `node` (>=20), `pnpm`, `ffmpeg`, `git`, `curl`, `lsof` が必要。
 
 ```bash
 git clone --recurse-submodules git@github.com:takaki-maeda-99/MimicAnno.git
 cd MimicAnno
 
-# 一発セットアップ (submodules / core / unidac / hamer / frontend / gated weights)。
+# 一発セットアップ (submodules / core / unidac / frontend / gated weights)。
 # SAM3 と Gemma 4 のために事前に `HF_TOKEN` を export するか `hf auth login` を実行。
 bash scripts/setup_envs.sh
 
@@ -42,9 +42,6 @@ bash scripts/setup_envs.sh --all --skip-weights  # モデル DL を skip
 
 # 再実行は idempotent (各 step は sentinel 一致で skip)。
 ```
-
-手動ステップ: https://mano.is.tue.mpg.de に登録し `MANO_RIGHT.pkl` を
-`hamer/_DATA/data/mano/MANO_RIGHT.pkl` に配置 (license gate、script 化不可)。
 
 レビュー UI を起動:
 
@@ -75,13 +72,7 @@ mimicanno annotate \
 
 Phase は累積的: `--target-phase 1` (境界検出のみ、VLM/SAM3 不要)、`--target-phase 2` (+ VLM)、`--target-phase 3` (+ SAM3、checkpoint 必須)、`--target-phase 4` (+ smoothing)。
 
-CPU のみ・driver 不一致の環境では:
-
-```bash
---vlm-device cpu --vlm-timeout-sec 600
-```
-
-(8 セグメントのエピソードで GPU 1 分 ≒ CPU 1 時間が目安。)
+CPU のみ・driver 不一致の環境では `--vlm-device cpu --vlm-timeout-sec 600` を追加 (8 セグメントのエピソードで GPU 1 分 ≒ CPU 1 時間が目安)。
 
 ### 2. SARM 学習可能なデータセットへ export
 
@@ -102,31 +93,41 @@ mimicanno export \
 
 冪等: 同一引数での再実行は短絡 (no-op)。
 
-### 3. 出力を確認
+### 3. GEM4 タスクを 26B QLoRA アダプタで一括アノテーション
+
+`scripts/batch_annotate.py` の thin wrapper。26B VLM を **1 回だけ**
+ロードして全 episode で使い回すので、CLI 直叩きと比べてモデルロード
+時間 (~2 分/ep) を ep 回数分節約できる。`unsloth_env` conda 環境と
+`models/gem4_26B_adapter/` が必要。
 
 ```bash
-uv run python -c "
-import pyarrow.parquet as pq
-sub = pq.read_table('dataset_annotated/meta/subtasks.parquet')
-print('使用された phase:', sub.to_pylist())
+# GPU 1 枚で 1 タスクの全 episode を流す
+GPU=0 bash scripts/run_26B_gem4.sh open_the_jar
 
-ep0 = pq.read_table('dataset_annotated/data/chunk-000/episode_000000.parquet')
-print('per-frame subtask_index 分布:')
-sti = ep0.column('subtask_index').to_pylist()
-for v in sorted(set(sti)):
-    print(f'  index={v} ({sub.to_pylist()[v][\"subtask\"]}): {sti.count(v)} frames')
-"
+# 2 GPU で episode 範囲を分割して並列実行
+GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
+GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 ```
 
-SO101 ep0 ("Put the tape into the bottle") の出力例:
+タスク: `open_the_jar` | `pick_up_bottle` | `replace_the_cookie`。
+出力先デフォルトは `runs/gem4_<task>_26B/`。SO101 等 wrapper が無い
+データセットは `batch_annotate.py` を直接呼ぶ:
 
+```bash
+python scripts/batch_annotate.py --dataset so101 --gpu 0
 ```
-使用された phase: [{'subtask': 'approach_object', 'subtask_index': 0, 'description': ''},
-                   {'subtask': 'grasp_object',    'subtask_index': 1, 'description': ''}]
-per-frame subtask_index 分布:
-  index=0 (approach_object): 121 frames
-  index=1 (grasp_object):     30 frames
+
+**4B ベースライン** (素の Gemma 4 E4B-it を transformers で直接ロード、
+QLoRA なし) は parallel な wrapper を使う。26B より高速だが精度寄りでは
+ない。リポジトリの `.venv` (uv) で動く、`unsloth_env` 不要:
+
+```bash
+GPU=0 bash scripts/run_4B_gem4.sh open_the_jar
+GPU=0 START=0 END=103 bash scripts/run_4B_gem4.sh pick_up_bottle &
 ```
+
+出力先は `runs/gem4_<task>_4B/`。実体は `scripts/batch_annotate_4B.py`
+(26B 版と同じ CLI shape)。
 
 ### 4. プログラマティック API
 
@@ -143,6 +144,8 @@ result = export(
 )
 print(result.episode_count, result.subtask_count, result.reused)
 ```
+
+タスク・ロボット特化のバッチランナーは [`scripts/`](scripts/README.md) を参照。
 
 ## 対応ロボット
 
@@ -178,152 +181,54 @@ eef_quat_column:       null
 
 profile YAML が export の挙動全部 (source adapter / action 表現の delta_basis (`body_frame_t` / `world` / `base`) / per-frame extra columns / sidecar 配置 / gates (`require_reviewed`, `forbid_unlabeled_segments`, `forbid_degraded_pipeline`)) を制御します。`mimicanno/jsonschemas/export_profile.schema.json` でバリデート。
 
-## Hand Pipeline 環境構築
+## Hand pipeline
 
-Hand Pipeline は MimicAnno 本体とは独立した 2 つの実行環境を使います。
+GoPro Hero 11 Max Lens Mod の魚眼動画 (2704×1520, 29.97 fps, OPENCV_FISHEYE) から、フレームごとの 3D 手姿勢を抽出するオプションのサブパイプライン。
 
-### 一括セットアップ
-
-```bash
-bash scripts/setup_envs.sh          # 3 環境すべて
-bash scripts/setup_envs.sh --unidac # UniDAC のみ
-bash scripts/setup_envs.sh --hamer  # HaMeR のみ
-bash scripts/setup_envs.sh --core   # MimicAnno core のみ
-```
-
-既存の環境はスキップされます（冪等）。
-
-### 3 つの実行環境
-
-| 環境 | 用途 | Python |
-|------|------|--------|
-| `conda env: unidac` | Phase A 深度前計算 (UniDAC) | 3.10 |
-| `hamer/.hamer` venv | Phase B 手姿勢推定 (HaMeR) | 3.10 |
-| `.venv` (uv) | MimicAnno 本体・アノテーション | 3.11+ |
-
-### 手動で取得が必要なファイル
-
-#### MANO モデル (HaMeR 必須)
-
-1. [https://mano.is.tue.mpg.de](https://mano.is.tue.mpg.de) でアカウント登録してダウンロード
-2. 以下のパスに配置:
-
-```
-hamer/_DATA/data/mano/MANO_RIGHT.pkl
-```
-
-#### UniDAC モデルウェイト
-
-```
-UniDAC/checkpoints/unidac.pt
-UniDAC/checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
-```
-
-HaMeR のデモデータ（`hamer/_DATA/hamer_ckpts/` など）は `setup_envs.sh` が `fetch_demo_data.sh` 経由で自動ダウンロードします（gdown + Google Drive、インターネット接続必須）。
-
-## Hand Pipeline (Phase A / B)
-
-GoPro Hero 11 Max Lens Mod で撮影した魚眼動画から、フレームごとの手の 3D 姿勢と指間距離を算出するサブパイプライン。
-
-### 入力仕様
-
-| 項目 | 値 |
-|------|-----|
-| 動画解像度 | **2704 × 1520** (fisheye のみ対応) |
-| フレームレート | 29.97 fps |
-| カメラモデル | OPENCV_FISHEYE (equidistant, k1..k4 = 0) |
-| 焦点距離 (参照解像度) | fl_x = 1820 px、fl_y = 1275 px (5312px幅基準) |
-
-fisheye 以外の解像度 (例: 1920×1080) は `run_all_pipeline.sh` の自動検出でスキップされます。
-
-### Phase A — 深度前計算 (`scripts/precompute_depth.py`)
-
-UniDAC (Preset A) で魚眼フレームの距離マップを ERP 空間に出力します。
-
-| 項目 | 値 |
-|------|-----|
-| 実行環境 | `conda activate unidac` |
-| 入力 | `data/video/new/<NAME>.MP4` |
-| 出力 `.npy` shape | `(512, 704)` float32 — ERP パッチの euclid 距離 [m] |
-| 出力先 | `data/depth/<NAME>/frames/frame_NNNNNN.npy` |
-| メタ | `data/depth/<NAME>/meta.json` |
-
-> UniDAC の出力は **Z深度ではなく ray 距離 (euclid distance)** です。  
-> バックプロジェクション: `cam_t = depth × unit_ray`
-
-### Phase B — 手姿勢推定 (`scripts/run_hand_estimation.py`)
-
-HaMeR (MANO) + Phase A 深度を融合してメトリック手姿勢を出力します。
-
-| 項目 | 値 |
-|------|-----|
-| 実行環境 | `hamer/.hamer/bin/python` + `CUDA_VISIBLE_DEVICES=N` |
-| 入力動画 | `data/video/new/<NAME>.MP4` |
-| 入力深度 | `data/depth/<NAME>/` (Phase A 出力) |
-| per-frame 出力 | `data/hands/<NAME>/frames/frame_NNNNNN.pkl` — `list[HandEstimate]` |
-| 時系列出力 | `data/hands/<NAME>/signals.json` |
-| メタ | `data/hands/<NAME>/meta.json` |
-
-### `HandEstimate` フィールド
-
-| フィールド | shape / 型 | 内容 |
-|-----------|-----------|------|
-| `is_right` | `bool` | 右手かどうか |
-| `cam_t` | `(3,)` float32 | 手首の metric カメラ座標 [m] (x, y, z) |
-| `global_orient` | `(3, 3)` float32 | 手首の回転行列 |
-| `hand_pose` | `(15, 3, 3)` float32 | 指関節の回転行列 × 15 関節 |
-| `betas` | `(10,)` float32 | MANO 形状パラメータ |
-| `joints_3d` | `(21, 3)` float32 | 全関節の 3D 座標 [m]（カメラ座標系） |
-| `joints_2d` | `(21, 2)` float32 | 全関節の 2D 投影（pinhole 近似） |
-| `bbox` | `(4,)` float32 | 検出 bbox [x1, y1, x2, y2] (px) |
-| `wrist_depth_m` | `float \| None` | UniDAC 手首深度 [m]。`None` = 深度取得不可 |
-| `depth_interpolated` | `bool` | `True` = 補間で埋めたフレーム |
-| `pinch_distance_m` | `float \| None` | 親指先端–人差し指先端 間距離 [m]。手が検出されれば常に有効 |
-
-MANO joint index: wrist=0, thumb_tip=4, index_tip=8（標準 21 点）。
-
-### `signals.json` スキーマ
-
-```json
-{
-  "schema_version": 1,
-  "frame_000060": {
-    "right": {"value": 0.0811, "depth_ok": true},
-    "left": null
-  }
-}
-```
-
-- `value`: Gaussian smoothing 済み (σ=2 frames) の `pinch_distance_m` [m]
-- `depth_ok`: `wrist_depth_m` が非 `None`（UniDAC 深度補正済み）かどうか
-- 手が検出されなかったフレームはキーごと省略
-- `depth_ok=false` でも `value` は MANO メトリックスケールで有効
-
-### 一括実行
+**MediaPipe Hand Landmarker** (2D キーポイント + palm-axis 由来の手首回転、Apache 2.0) と **UniDAC** monocular depth (MIT) を融合して、カメラ座標系での metric な手首位置と指間距離を出力します。
 
 ```bash
-# 全 fisheye 動画を GPU 2/3 で並列処理
+# Phase A — 深度前計算
+conda activate unidac
+python scripts/precompute_depth.py --video data/video/new/<NAME>.MP4
+
+# Phase B — 手姿勢推定
+python scripts/run_hand_estimation.py --video data/video/new/<NAME>.MP4
+
+# 両 phase をすべての動画について GPU 並列で実行
 bash scripts/run_all_pipeline.sh
-
-# 特定動画のみ
-bash scripts/run_all_pipeline.sh GX010175 GX010176
-
-# Phase A スキップ (深度計算済みの場合)
-bash scripts/run_all_pipeline.sh --skip-phase-a
-
-# GPU 指定
-bash scripts/run_all_pipeline.sh --gpus 0 1
 ```
 
-## ビューア
+出力は `data/depth/<NAME>/` と `data/hands/<NAME>/` 配下。スキーマ・フィールド定義・バッチオプションは [`docs/hand-pipeline.md`](docs/hand-pipeline.md) を参照。
+
+## サーバ
+
+静的な `runs/` ツリーと同じ JSON 形状を返し、optimistic locking 付きでセグメント編集を受け付ける HTTP バックエンド。`[server]` optional dependency group で遅延インストール。
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev          # http://localhost:5173/?run=<canonical_name>
+uv sync --extra server
+MIMICANNO_REVIEWER=takaki uv run --extra server mimicanno serve \
+    --runs-root runs/ \
+    --host 127.0.0.1 --port 8000 \
+    --cors-origin http://localhost:5173
 ```
 
-run ディレクトリ用の読み取り専用タイムライン + 波形ビューア。編集機能は Phase 5B に予定 (未着手)。
+`MIMICANNO_REVIEWER` は起動時にキャプチャされ、各編集の `reviewer_id` として保存されます。未設定・空文字なら `reviewer_id=null`。
+
+エンドポイント (read):
+- `GET /healthz` — liveness probe
+- `GET /api/runs/index.json`, `GET /api/runs/<name>/<artifact>` — 静的ツリーと同形状 (`manifest`, `annotation`, `boundaries`, `signals`, `tracks`)
+- `GET /api/labelset` — `{labels, labels_yaml_sha256}`
+
+エンドポイント (編集、`If-Match: "<run_hash>"` 必須):
+- `PATCH /api/runs/<name>/segments/<id>` — `phase` を変更
+- `PATCH /api/runs/<name>/segments/<id>/labels` — segment ごとの label リストを更新
+- `PATCH /api/runs/<name>/segments/<id>/reviewed` — reviewed フラグを更新
+- `PATCH /api/runs/<name>/boundaries/<id>` — 境界を移動
+
+PATCH 成功時は `runs/index.json.lock` の file lock 下で annotation → manifest → index を atomic に書き換え、新しい `ETag` を返します。内部レイアウト・契約・テスト階層は [`mimicanno/server/README.md`](mimicanno/server/README.md) を参照。
+
+フロントエンド: ビューアを `?api=1` 付きで開くと `/api/runs/` 経由でフェッチし、編集 UI が有効になります。
 
 ## 開発
 
@@ -335,7 +240,7 @@ env -u PYTHONPATH uv run ruff check mimicanno/        # lint
 
 `PYTHONPATH=` は ROS2 humble がパス汚染してくる環境向けの対策。ROS2 を入れてなければ無害。
 
-設計の経緯と理由は `docs/superpowers/specs/` 配下、TDD タスクリスト形式の実装プランは `docs/superpowers/plans/` 配下。親設計ドキュメントは `docs/superpowers/specs/2026-04-25-mimicanno-design-brushup.md`。
+設計の経緯と理由は `docs/superpowers/specs/` 配下、TDD タスクリスト形式の実装プランは `docs/superpowers/plans/` 配下。
 
 ## ライセンス
 

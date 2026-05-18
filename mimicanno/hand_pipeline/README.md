@@ -1,6 +1,6 @@
 # mimicanno/hand_pipeline
 
-HaMeR + UniDAC depth fusion for metric hand pose estimation from fisheye video (GoPro Hero 11 Max Lens Mod, 2704x1520, OPENCV_FISHEYE equidistant model).
+MediaPipe Hand Landmarker + UniDAC depth fusion for metric hand pose estimation from fisheye video (GoPro Hero 11 Max Lens Mod, 2704x1520, OPENCV_FISHEYE equidistant model).
 
 The module provides a single top-level function, `estimate_hand()`, that takes a raw fisheye frame and a precomputed UniDAC depth map and returns per-hand metric pose estimates.
 
@@ -14,28 +14,24 @@ See also: [Hand Pipeline section in README.ja.md](../../README.ja.md#hand-pipeli
 @dataclass
 class HandEstimate:
     is_right: bool                       # True = right hand
-    betas: np.ndarray                    # (10,)      float32  MANO shape params
-    global_orient: np.ndarray            # (3, 3)     float32  wrist rotation matrix
-    hand_pose: np.ndarray                # (15, 3, 3) float32  finger joint rotation matrices
-    cam_t: np.ndarray                    # (3,)       float32  wrist position in camera frame [m]
-    vertices: np.ndarray                 # (778, 3)   float32  MANO mesh in camera frame [m]
+    global_orient: np.ndarray            # (3, 3)     float32  wrist rotation matrix (palm-axis derived)
     joints_3d: np.ndarray                # (21, 3)    float32  joint positions in camera frame [m]
-    joints_2d: np.ndarray                # (21, 2)    float32  joint projections in image pixels (pinhole approx.)
+    joints_2d: np.ndarray                # (21, 2)    float32  joint projections in image pixels
+    cam_t: np.ndarray                    # (3,)       float32  wrist position in camera frame [m]
     bbox: np.ndarray                     # (4,)       float32  xyxy detection bbox [px]
     wrist_depth_m: Optional[float]       # UniDAC euclid distance at wrist [m]; None if unavailable
     depth_interpolated: bool             # True when wrist_depth_m was gap-filled temporally
-    pinch_distance_m: Optional[float]    # |thumb_tip - index_tip| in MANO local frame [m]
-    scale_factor: Optional[float]        # deprecated; always None
-    n_valid_samples: int                 # deprecated; always 0
+    depth_ok: bool                       # True when wrist_depth_m is from UniDAC (not fallback)
+    pinch_distance_m: Optional[float]    # |thumb_tip - index_tip| in local frame [m]
 ```
 
-All 3-D coordinates are in HaMeR's camera frame (X right, Y down, Z forward).
+All 3-D coordinates are in the camera frame (X right, Y down, Z forward).
 
-`cam_t` is the metric translation of the wrist (MANO joint 0). When `wrist_depth_m` is not None it is derived from UniDAC; otherwise it falls back to HaMeR's pseudo-metric estimate.
+`cam_t` is the metric translation of the wrist (joint 0). When `wrist_depth_m` is not None it is derived from UniDAC fisheye back-projection; otherwise it falls back to a pseudo-metric estimate.
 
-`pinch_distance_m` is computed in MANO local frame (camera-translation-independent) and is therefore always valid when a hand is detected, even without depth.
+`pinch_distance_m` is computed in the local frame (camera-translation-independent) and is therefore always valid when a hand is detected, even without depth.
 
-### MANO joint indices
+### Hand joint indices
 
 | Index | Joint |
 |-------|-------|
@@ -62,8 +58,7 @@ estimates = estimate_hand(image, depth)
 |-----|------|-------------|
 | `image` | `np.ndarray (H, W, 3)` uint8 BGR | Fisheye frame (`cv2.imread` convention) |
 | `depth` | `np.ndarray (H_erp, W_erp)` float32 | UniDAC Preset A output — shape `(512, 704)`, euclid distance in metres |
-| `refine` | `bool` (default `True`) | Apply UniDAC wrist-depth back-projection. Set `False` for debugging HaMeR output alone. |
-| `return_intermediate` | `bool` (default `False`) | If `True`, return `(list[HandEstimate], list[HamerRaw])` |
+| `refine` | `bool` (default `True`) | Apply UniDAC wrist-depth back-projection. Set `False` for debugging raw landmark output alone. |
 
 **Returns** `list[HandEstimate]` — one entry per detected hand. Empty if no hands found. Hands with no depth coverage are included with `wrist_depth_m=None`.
 
@@ -85,11 +80,10 @@ for h in estimate_hand(image, depth):
 
 **Environment requirement**
 
-Must run under the HaMeR venv with PYTHONPATH set to the repo and UniDAC roots:
+Hand estimation runs in the main uv-managed environment:
 
 ```bash
-PYTHONPATH=/home/gayagaya/MimicAnno:/home/gayagaya/MimicAnno/UniDAC \
-    hamer/.hamer/bin/python your_script.py
+uv run python scripts/run_hand_estimation.py ...
 ```
 
 ---
@@ -98,15 +92,15 @@ PYTHONPATH=/home/gayagaya/MimicAnno:/home/gayagaya/MimicAnno/UniDAC \
 
 ### Wrist back-projection instead of scale fusion
 
-Earlier approach (`_fuse`, now deprecated): compute one scale factor per image as `median(UniDAC_z) / median(HaMeR_z)` across all joints of all detected hands, then multiply `cam_t` by that scalar. This fails when the hand occupies a small fraction of the depth map and the image-level median is dominated by background.
+Earlier approach (`_fuse`, now deprecated): compute one scale factor per image as `median(UniDAC_z) / median(backend_z)` across all joints of all detected hands, then multiply `cam_t` by that scalar. This fails when the hand occupies a small fraction of the depth map and the image-level median is dominated by background.
 
-Current approach (`_apply_metric_depth`): sample UniDAC euclid depth at the wrist pixel (MANO joint 0) and its 3x3 neighbourhood, take the median, then back-project directly:
+Current approach (`_apply_metric_depth`): sample UniDAC euclid depth at the wrist pixel (joint 0) and its 3x3 neighbourhood, take the median, then back-project directly:
 
 ```
 cam_t = depth_euclid * unit_ray(wrist_pixel)
 ```
 
-This gives a metric wrist position that is independent of HaMeR's scale heuristic. Shape and pose parameters from HaMeR are kept unchanged.
+This gives a metric wrist position that is independent of the backend's scale heuristic. Pose parameters from the landmark backend are kept unchanged.
 
 ### Euclid distance, not Z-depth
 
@@ -124,8 +118,8 @@ not `cam_t.z = depth`. Using Z-depth for a fisheye lens would underestimate the 
 
 | Symbol | Role |
 |--------|------|
-| `HamerRaw` | Per-hand HaMeR output before depth correction |
-| `_run_hamer()` | Runs HaMeR on a single BGR image, returns `list[HamerRaw]` |
+| `HandRaw` | Per-hand landmark output before depth correction |
+| `_run_mediapipe()` | Runs MediaPipe Hand Landmarker on a single BGR image, returns `list[HandRaw]` |
 | `_apply_metric_depth()` | Applies wrist back-projection, returns `list[HandEstimate]` |
 | `_back_warp_depth()` | Inverse-projects ERP depth onto the fisheye pixel grid (used by viz scripts) |
 | `_sample_depth_at_pixels()` | Fast forward-projection of N pixels into ERP depth without full grid warp |
