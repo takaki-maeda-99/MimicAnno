@@ -97,14 +97,6 @@ redirect) into `UniDAC/checkpoints/`. Or `scp` it from another machine.
 > `bash scripts/setup_envs.sh --core` to restore the full extras set
 > (`dev`, `vlm`, `sam3`, `server`).
 
-Launch the review UI:
-
-```bash
-bash scripts/start_ui.sh
-API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
-bash scripts/start_ui.sh --runs-root /path/to/runs
-```
-
 ## Getting data
 
 A fresh clone has no data. The `weights` step of `setup_envs.sh`

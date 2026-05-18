@@ -96,14 +96,6 @@ uv pip install -e .
 > `bash scripts/setup_envs.sh --core` を再実行して full extras
 > (`dev`, `vlm`, `sam3`, `server`) を入れ直してください。
 
-レビュー UI を起動:
-
-```bash
-bash scripts/start_ui.sh
-API_PORT=8001 VITE_PORT=5174 bash scripts/start_ui.sh
-bash scripts/start_ui.sh --runs-root /path/to/runs
-```
-
 ## データ取得
 
 clone 直後はデータが手元にありません。`setup_envs.sh` の `weights`
