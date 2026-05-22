@@ -224,7 +224,13 @@ GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 出力先は `runs/gem4_<task>_26B/`。SO101 で 26B アダプタを動かした
 **実サンプル出力 (20 エピソード)** を
 <https://huggingface.co/datasets/Gayagaya/MimicAnno-so101-26B-runs>
-に公開しています。
+に公開しています。`runs/so101_26B/` 配下に展開する場合:
+
+```bash
+hf download Gayagaya/MimicAnno-so101-26B-runs \
+  --repo-type dataset \
+  --local-dir runs/so101_26B
+```
 
 **4B QLoRA アダプタ** (同じ `unsloth_env`、26B より軽量で高速):
 

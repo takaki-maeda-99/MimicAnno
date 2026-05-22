@@ -226,6 +226,13 @@ GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 Outputs land at `runs/gem4_<task>_26B/`. **Sample outputs** from running
 the 26B adapter on SO101 (20 episodes) are published at
 <https://huggingface.co/datasets/Gayagaya/MimicAnno-so101-26B-runs>.
+Fetch them into `runs/so101_26B/` with:
+
+```bash
+hf download Gayagaya/MimicAnno-so101-26B-runs \
+  --repo-type dataset \
+  --local-dir runs/so101_26B
+```
 
 **4B QLoRA adapter** (same `unsloth_env`, faster, lighter footprint):
 
