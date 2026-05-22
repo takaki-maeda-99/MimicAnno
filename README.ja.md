@@ -221,7 +221,10 @@ GPU=0 START=0   END=151 bash scripts/run_26B_gem4.sh pick_up_bottle &
 GPU=1 START=152 END=303 bash scripts/run_26B_gem4.sh pick_up_bottle
 ```
 
-出力先は `runs/gem4_<task>_26B/`。
+出力先は `runs/gem4_<task>_26B/`。SO101 で 26B アダプタを動かした
+**実サンプル出力 (20 エピソード)** を
+<https://huggingface.co/datasets/Gayagaya/MimicAnno-so101-26B-runs>
+に公開しています。
 
 **4B QLoRA アダプタ** (同じ `unsloth_env`、26B より軽量で高速):
 
