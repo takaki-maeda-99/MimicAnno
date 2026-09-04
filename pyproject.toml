@@ -19,6 +19,8 @@ dependencies = [
   # Upper bound: MediaPipe Solutions is in Preview; minor versions may break
   # the Tasks API. Bump explicitly after verifying on a new minor.
   "mediapipe>=0.10,<0.11",
+  "torchmetrics<1.7",
+  "scikit-image>=0.26.0",
 ]
 
 [project.scripts]
@@ -70,7 +72,19 @@ sam3 = [
   "ftfy>=6.1",
   # numpy<2 enforced by sam3 (timm + sam3.train.data internals).
   "numpy>=1.26,<2",
+  # sam3.model_builder imports pkg_resources directly; Python 3.11 no longer
+  # bundles it, and nothing else in the dep graph pulls setuptools in as a
+  # runtime (non-build) dependency.
+  "setuptools",
 ]
+
+[[tool.uv.index]]
+# PyPI's default torch/torchvision wheels track a CUDA runtime newer than
+# this host's driver (560.35.05 -> CUDA 12.6 max). Pin torch/torchvision to
+# the official cu124 build so torch.cuda.is_available() actually works here.
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.uv.sources]
 # Local sam3 git submodule (gayagayataiga/sam3 personal fork). Editable so that
@@ -78,6 +92,8 @@ sam3 = [
 # unrelated `sam3` package — without this source override, `uv sync --extra sam3`
 # would pull that one and break import paths.
 sam3 = { path = "sam3", editable = true }
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["mimicanno"]
